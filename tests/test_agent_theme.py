@@ -418,6 +418,9 @@ check("设完高度再量一次：竖向滚动条占了宽度，行会重新折�
 check("横向滚动条占的那几像素高度要补回去，否则最后一行被它盖住",
       "f.offsetHeight - f.clientHeight" in js)
 check("明细局部换页后重算框高", "refold();" in ah[ah.index("function render"):ah.index("/* ---- 面板内联滚动")])
+check("翻页不再把页面滚到明细顶部：整套 scrollIntoView 定位都删了",
+      "scrollIntoView" not in ah and "scrollToDetail" not in ah
+      and "scroll-margin-top" not in css)
 check("窗口变窄重算（折行变了会露半行），且做防抖",
       "resize" in js and "clearTimeout(foldT)" in js and "setTimeout(refold, 200)" in js)
 

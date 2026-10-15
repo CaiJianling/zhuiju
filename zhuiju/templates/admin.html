@@ -395,7 +395,8 @@
     if (inp) inp.max = pages;
     if (window.history && history.replaceState) history.replaceState(null, '', url);
     refold();                       // 明细换了内容，滚动框的高度要按新行重算
-    scrollToDetail();
+    // 页面本身一步都不滚：明细现在是个固定高度的滚动框，换进来的是全新的框元素，
+    // scrollTop 天生就是 0，新页自然从第一行开始，外面停在哪儿就还停在哪儿。
   }
 
   /* ---- 面板内联滚动：框高固定几行，其余在框内用滚动条看 ---- */
@@ -423,19 +424,6 @@
   function refold() {
     folds = Array.prototype.slice.call(document.querySelectorAll('[data-fold]'));
     folds.forEach(measure);
-  }
-
-  function scrollToDetail() {
-    // 页面不可见时（后台标签、内嵌视图未显示）浏览器根本不执行 smooth 滚动动画，
-    // 表现是"翻页后停在原地或页顶"。所以隐藏态直接瞬时滚动，可见态才用平滑滚动。
-    var instant = document.hidden;
-    detail.scrollIntoView({ behavior: instant ? 'auto' : 'smooth', block: 'start' });
-    if (instant) return;
-    // 平滑滚动是异步的：万一没真的滚动（被别的行为打断、或环境不支持），兜一次瞬时定位
-    setTimeout(function () {
-      var top = detail.getBoundingClientRect().top;
-      if (top > 120 || top < -120) detail.scrollIntoView({ behavior: 'auto', block: 'start' });
-    }, 600);
   }
 
   function go(url) {

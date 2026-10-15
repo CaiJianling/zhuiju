@@ -1001,8 +1001,9 @@ code {
 .geotbl td:first-child { max-width: 320px; overflow-wrap: anywhere; }
 .code { font-size: 11px; color: var(--dim); margin-left: 4px; }
 
-/* 明细翻页：跳转控件跟在上一页/下一页后面，同一行排开 */
-#detail { scroll-margin-top: 14px; }
+/* 明细翻页：跳转控件跟在上一页/下一页后面，同一行排开。
+   #detail 不再需要滚动避让：那是给"翻页后把明细滚进视野"用的，而现在明细自己就是个
+   固定高度的滚动框，翻页根本不动页面的滚动位置，避让也就没意义了。 */
 .jumpform { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .jumplbl { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 5px; }
 .jumpin {

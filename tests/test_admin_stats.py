@@ -597,10 +597,14 @@ check("页码输入框初值是当前页", re.search(r'name="page"[^>]*?value="(
 check("局部刷新脚本只在登录后出现", "DOMParser" in dash)
 fresh = app_mod.create_app().test_client().get("/admin").get_data(as_text=True)
 check("未登录页面里没有这套脚本", "DOMParser" not in fresh and "jumpform" not in fresh)
-check("滚动定位留了避让空间", "#detail { scroll-margin-top" in
+check("翻页不滚页面：明细自己就是滚动框，原来停在哪儿就还停在哪儿",
+      "scrollIntoView" not in dash and "scrollToDetail" not in dash
+      and "window.scrollTo" not in dash)
+check("也就不需要给 #detail 留滚动避让了",
+      "#detail { scroll-margin-top" not in
       (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8"))
-check("隐藏态瞬时滚动（否则 smooth 不执行，翻页后停在原地）",
-      "document.hidden" in dash and "'auto'" in dash)
+check("换页后重算框高；整块换 innerHTML 等于换个新滚动框，自然从第一行起",
+      "detail.innerHTML = next.innerHTML" in dash and "refold();" in dash)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
