@@ -63,6 +63,8 @@
       <input type="text" name="geo" value="{{ flt.geo }}" placeholder="CN / US / --（内网）" size="14"></label>
     <label class="admfield"><span>浏览器</span>
       <input type="text" name="browser" value="{{ flt.browser }}" placeholder="Chrome 124.0" size="14"></label>
+    <label class="admfield"><span>系统</span>
+      <input type="text" name="os" value="{{ flt.os }}" placeholder="Windows 10/11" size="14"></label>
     <label class="admfield"><span>来源</span>
       <select name="ref_kind">
         <option value="">全部</option>
@@ -132,6 +134,7 @@
     <section class="asect">
       <h2>热门关键词</h2>
       {% if agg.top_kw %}
+      <div class="fold" data-fold data-rows="5">
       <table class="table">
         <thead><tr><th>关键词</th><th>次数</th><th>IP</th><th>平均结果</th></tr></thead>
         <tbody>
@@ -142,12 +145,14 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
       {% else %}<p class="empty">无</p>{% endif %}
     </section>
 
     <section class="asect">
       <h2>活跃 IP</h2>
       {% if agg.top_ip %}
+      <div class="fold" data-fold data-rows="5">
       <table class="table">
         <thead><tr><th>IP</th><th>次数</th><th>关键词</th><th>首 / 末次</th></tr></thead>
         <tbody>
@@ -158,6 +163,7 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
       {% else %}<p class="empty">无</p>{% endif %}
       <p class="atip">默认只监听 127.0.0.1，所以 IP 全会是 127.0.0.1。要按设备区分得
         <code>--host 0.0.0.0</code>，或挂 nginx 反代——反代下会读 X-Forwarded-For，
@@ -169,6 +175,7 @@
     <section class="asect">
       <h2>浏览器 / 设备</h2>
       {% if agg.by_browser %}
+      <div class="fold" data-fold data-rows="5">
       <table class="table">
         <thead><tr><th>浏览器</th><th>系统</th><th>设备</th><th>次数</th><th>IP</th></tr></thead>
         <tbody>
@@ -183,6 +190,7 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
       <p class="atip">浏览器是从 User-Agent 认出来的，那个头由客户端自己写，
         可以随便伪造；国产壳浏览器（360/搜狗/双核）也常常不自报身份，
         所以这一列当"大致构成"看，别当精确计数。</p>
@@ -192,6 +200,7 @@
     <section class="asect">
       <h2>来源页（对方从哪来）</h2>
       {% if agg.by_ref_src %}
+      <div class="fold" data-fold data-rows="5">
       <table class="table">
         <thead><tr><th>来源</th><th>类型</th><th>次数</th><th>IP</th><th>最近</th></tr></thead>
         <tbody>
@@ -205,6 +214,7 @@
         {% endfor %}
         </tbody>
       </table>
+      </div>
       {% else %}<p class="empty">无</p>{% endif %}
       <p class="atip">来源取自 Referer 头，能给多少由浏览器的 Referrer-Policy 决定，
         不是我们能控制的：<b>站内跳转</b>给完整地址，所以上一页是哪一部剧（<code>/s/×</code>）看得见；
@@ -219,8 +229,9 @@
   <section class="asect" id="detail" data-pages="{{ rows.pages }}">
     <h2>明细 <span class="asub">第 {{ rows.page }} / {{ rows.pages }} 页 · 共 {{ rows.total }} 条</span></h2>
     {% if rows['items'] %}
-    <table class="table">
-      <thead><tr><th>时间</th><th>IP</th><th>归属地</th><th>浏览器</th><th>来源页</th>
+    <div class="fold" data-fold data-rows="10">
+      <table class="table">
+      <thead><tr><th>时间</th><th>IP</th><th>归属地</th><th>浏览器</th><th>系统</th><th>来源页</th>
         <th>关键词</th><th>入口</th>
         <th>结果</th><th>原始命中</th><th>可用源</th><th>耗时 ms</th></tr></thead>
       <tbody>
@@ -238,8 +249,13 @@
           <td>
             {%- if r.browser %}
               <a href="{{ url_for('admin', browser=r.browser) }}">{{ r.browser }}</a>
-              {%- if r.device %}<span class="dim">{{ r.device }}</span>{% endif -%}
             {%- else %}<span class="dim">未知</span>{% endif -%}
+          </td>
+          <td>
+            {%- if r.os %}
+              <a href="{{ url_for('admin', os=r.os) }}">{{ r.os }}</a>
+            {%- else %}<span class="dim">未知</span>{% endif -%}
+            {%- if r.device %}<span class="dim">{{ r.device }}</span>{% endif -%}
           </td>
           <td>
             {%- if r.ref_label and r.ref_kind != 'direct' %}
@@ -258,6 +274,7 @@
       {% endfor %}
       </tbody>
     </table>
+      </div>
     <div class="pager">
       {% if rows.page > 1 %}<a href="{{ url_for('admin', **args_prev) }}" data-page>‹ 上一页</a>{% endif %}
       <span class="dim">第 {{ rows.page }} / {{ rows.pages }} 页</span>
@@ -315,14 +332,16 @@
     {% endif %}
 
     {% if agg.by_geo %}
-    <table class="table geotbl">
-      <thead><tr><th>归属地</th><th>次数</th><th>IP</th><th>关键词</th><th>最近</th></tr></thead>
+    <div class="fold" data-fold data-rows="5">
+      <table class="table geotbl">
+      <thead><tr><th>国家 / 地区</th><th>次数</th><th>IP</th><th>关键词</th><th>最近</th></tr></thead>
       <tbody>
       {% for g in agg.by_geo %}
         <tr>
           <td>
             {%- if g.iso | length == 2 %}
-              <a href="{{ url_for('admin', geo=g.iso) }}">{{ g.geo or g.iso }}</a>
+              {# 这一列只要国家名：geo 里掺了省市区和运营商，放这儿就变成了"某个地区" #}
+              <a href="{{ url_for('admin', geo=g.iso) }}">{{ g.country or g.iso }}</a>
               <span class="dim">{{ g.iso }}</span>
             {%- else %}
               {# 这一桶混了内网/本机/保留/非法，桶名用统称；明细行仍显示各自准确的说法 #}
@@ -335,6 +354,7 @@
       {% endfor %}
       </tbody>
     </table>
+      </div>
     {% endif %}
   </section>
 
@@ -374,7 +394,35 @@
     var inp = detail.querySelector('input[name=page]');
     if (inp) inp.max = pages;
     if (window.history && history.replaceState) history.replaceState(null, '', url);
+    refold();                       // 明细换了内容，滚动框的高度要按新行重算
     scrollToDetail();
+  }
+
+  /* ---- 面板内联滚动：框高固定几行，其余在框内用滚动条看 ---- */
+  var folds = [];
+
+  function foldH(f, n) {
+    var rows = f.querySelectorAll('tbody tr');
+    if (rows.length <= n) return null;      // 不足 N 行就别设高度，否则下面留一截空白
+    return rows[n].offsetTop;               // 第 N+1 行的顶边就是该截断的地方
+  }
+
+  function measure(f) {
+    // 行高不固定（浏览器格、来源格会折行），所以量第 N+1 行的位置，而不是写死一个像素值。
+    var n = parseInt(f.dataset.rows || '5', 10);
+    var h = foldH(f, n);
+    if (h === null) { f.style.maxHeight = ''; return; }
+    f.style.maxHeight = h + 'px';
+    // 设了高度才可能冒出滚动条：竖着那条占宽度（行会因此重新折行变高），
+    // 横着那条占高度（会把最后一行压在下面）。两种都得按"已经有滚动条"的布局
+    // 再量一次，不然底部要么露半行，要么正好被横条盖掉一截。
+    var h2 = foldH(f, n);
+    if (h2 !== null) f.style.maxHeight = (h2 + f.offsetHeight - f.clientHeight) + 'px';
+  }
+
+  function refold() {
+    folds = Array.prototype.slice.call(document.querySelectorAll('[data-fold]'));
+    folds.forEach(measure);
   }
 
   function scrollToDetail() {
@@ -419,6 +467,15 @@
     if (n > pages) n = pages;
     q.set('page', String(n));
     go('{{ url_for("admin") }}?' + q.toString());
+  });
+
+  refold();                       // 表格在文档流里，脚本放末尾时布局已完成，能直接量到
+  var foldT = null;
+  // 窗口变窄会改变折行高度（来源格、浏览器格会换行），重算一次才不会露出半行。
+  // 里面对着滚动不改变行的布局偏移，所以用户滚到哪儿了都不用特殊处理，重设高度即可。
+  window.addEventListener('resize', function () {
+    clearTimeout(foldT);
+    foldT = setTimeout(refold, 200);
   });
 })();
 </script>

@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS queries (
   sources_total INTEGER,
   ms            REAL,               -- 本次搜索实际等了多久
   iso           TEXT,               -- 归属地国家码；内网/保留为 ''
-  geo           TEXT,               -- 归属地文案，直接存下来免得每次渲染再算
+  country       TEXT,               -- 国家名（归属地列表用这个，不带省市运营商）
+  geo           TEXT,               -- 完整归属地文案，明细行显示
   browser       TEXT,               -- 解析出的浏览器名+版本，如 "Edge 124.0"
   os            TEXT,               -- 系统，如 "Windows 10/11"
   device        TEXT,               -- 手机 / 平板 / 桌面 / 程序
@@ -70,7 +71,10 @@ CREATE INDEX IF NOT EXISTS idx_queries_kw  ON queries(kw);
 """
 
 # 老库没有这两列，加列要在建表之后单独补一次（CREATE TABLE IF NOT EXISTS 不会改已有表）
-GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"))
+GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"),
+               # 国家名单独一列：geo 是给人看的整行文案（会掺进省市与运营商），
+               # 归属地列表要的是"哪个国家"，两者不能共用一个字段
+               ("country", "TEXT"))
 # 浏览器与来源页。这几列只用于分组，不单独建索引：表本来就小，
 # 多一个索引就多一个"升级时列还不存在"的失败点（iso 索引就踩过这个坑）
 AGENT_COLUMNS = (("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"),
@@ -132,15 +136,17 @@ def backfill_geo(limit: int = 20000) -> int:
         return 0
     con = connect()
     try:
-        rows = con.execute("SELECT DISTINCT ip FROM queries WHERE iso IS NULL LIMIT ?",
+        rows = con.execute("SELECT DISTINCT ip FROM queries WHERE country IS NULL LIMIT ?",
                            (limit,)).fetchall()
         if not rows:
             return 0
         n = 0
         for (ip,) in rows:
             r = geoip.locate(ip)
-            con.execute("UPDATE queries SET iso = ?, geo = ? WHERE ip = ? AND iso IS NULL",
-                        (r["iso"] if r["kind"] == "public" else "", r["label"], ip))
+            con.execute("UPDATE queries SET iso = ?, country = ?, geo = ?"
+                        " WHERE ip = ? AND country IS NULL",
+                        (r["iso"] if r["kind"] == "public" else "",
+                         r["country"] if r["kind"] == "public" else "", r["label"], ip))
             n += 1
         con.commit()
         return n
@@ -185,6 +191,11 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
             r = geoip.locate(clean_ip(ip) or "")
             iso = r["iso"] if r["kind"] == "public" else ""
             geo = r["label"]
+            country = r["country"] if r["kind"] == "public" else ""
+        else:
+            country = "" if not iso else None      # 调用方给了 iso/geo 但没给 country 时补一次
+            if country is None:
+                country = (geoip.locate(clean_ip(ip) or "") or {}).get("country", "")
         a = agent.parse_ua(ua)
         f = agent.parse_ref(referrer, own_hosts)
         now = datetime.now()
@@ -192,13 +203,13 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
         try:
             con.execute(
                 "INSERT INTO queries (ts, day, ip, kw, via, results, hits,"
-                " sources_ok, sources_total, ms, iso, geo,"
+                " sources_ok, sources_total, ms, iso, country, geo,"
                 " browser, os, device, bot, ua, ref, ref_kind, ref_label)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (now.strftime("%Y-%m-%d %H:%M:%S"), now.date().isoformat(),
                  clean_ip(ip) or "unknown", kw, via if via in VIA else "api",
                  results, hits, sources_ok, sources_total,
-                 round(float(ms), 1) if ms is not None else None, iso, geo,
+                 round(float(ms), 1) if ms is not None else None, iso, country, geo,
                  a["browser"] or "未知", a["os"], a["device"], 1 if a["bot"] else 0,
                  a["ua"][:200], f["origin"] or f["path"] or "", f["kind"], f["label"]))
             con.commit()
@@ -214,7 +225,8 @@ _COLUMNS = {
     "kw": "kw LIKE ?",
     "via": "via = ?",
     "geo": "iso = ?",
-    "browser": "browser = ?",
+    "browser": "browser LIKE ?",
+    "os": "os LIKE ?",
     "device": "device = ?",
     "ref_kind": "ref_kind = ?",
     "day_from": "day >= ?",
@@ -236,6 +248,11 @@ def _where(f: dict) -> tuple[str, list]:
         if val in (None, ""):
             continue
         if key == "kw":
+            conds.append(sql)
+            params.append(f"%{val}%")
+        elif key in ("browser", "os"):
+            # 这两个是自由文本框：输 "Windows" 该能命中 "Windows 10/11"，
+            # 所以用模糊匹配；表格里的胶囊传的是精确值，同样命中
             conds.append(sql)
             params.append(f"%{val}%")
         elif key in ("day_from", "day_to"):
@@ -348,7 +365,8 @@ def summary(f: dict, top: int = 15) -> dict:
             params)]
         # 按归属地聚合：内网/保留的 iso 是空串，合到一行显示成"内网/保留地址"
         by_geo = [dict(r) for r in con.execute(
-            f"SELECT COALESCE(iso,'') AS iso, MAX(geo) AS geo, COUNT(*) AS n,"
+            f"SELECT COALESCE(iso,'') AS iso, MAX(country) AS country, MAX(geo) AS geo,"
+            f" COUNT(*) AS n,"
             f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT kw) AS kws,"
             f" MAX(day) AS last_day"
             f" FROM queries WHERE {where} GROUP BY COALESCE(iso,'')"

@@ -284,8 +284,8 @@ for label, blk in (("亮色", root), ("暗色", dark)):
         if fg not in pal or bg not in pal:
             check(f"{label} {fg}/{bg} 两色都在调色板里", False, sorted({fg, bg} - set(pal)))
             continue
-        c = contrast(pal[fg], pal[bg])
-        check(f"{label} {fg} on {bg} 对比度 {c} ≥ 4.5", c >= 4.5, c)
+        c_val = contrast(pal[fg], pal[bg])
+        check(f"{label} {fg} on {bg} 对比度 {c_val} ≥ 4.5", c_val >= 4.5, c_val)
 
 gobtn = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
                         re.search(r"\.gobtn \{([^}]*)\}", css).group(1)))
@@ -302,6 +302,124 @@ check("theme.js 切换时才加 theme-anim 并定时摘掉",
       'classList.add("theme-anim")' in tj and "classList.remove" in tj and "setTimeout" in tj)
 check("首屏预置不走 apply，所以不会一进页面就闪一遍渐变",
       "apply(" not in th.split("<script>")[0] and "apply(\"auto\", true)" not in tj.split("sync();")[0])
+
+print("\n9) 宽度、系统列、归属地只到国家")
+# 这一节自带数据：不依赖前面留下的记录，否则改到别的节就会莫名其妙红
+for ip, ua_ in (("223.5.5.5", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+                ("1.1.1.1", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+                            "(KHTML, like Gecko) Version/16.5 Safari/605.1.15"),
+                ("91.108.4.11", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")):
+    stats_mod.record("宽度用例", ip, via="api", results=4, ua=ua_,
+                     referrer="http://127.0.0.1:5000/", own_hosts=OWN)
+d2 = c.get("/admin").get_data(as_text=True)
+wrap = re.search(r"\.wrap \{([^}]*)\}", css).group(1)
+check("内容宽度随屏走而不是固定 1000px", "min(1680px" in wrap and "100% - 48px" in wrap, wrap.strip())
+check("超宽屏有上限，不把表格拉到没边", "1680px" in wrap)
+check("边框算在宽度内（不会溢出横向滚动）", "box-sizing: border-box" in wrap)
+ladder = [(int(m.group(2)), m.group(1), int(m.group(3))) for m in
+          re.finditer(r"@media \((min|max)-width: (\d+)px\)[^{]*\{\s*\.hotgrid \{ --hot-cols: (\d+)", css)]
+check("宽屏补了列数，不会一行 6 张右边空一大片",
+      {c for _, _, c in ladder} >= {9, 7, 5}, ladder)
+wide = {c for _, kind, c in ladder if kind == "min"}
+check("两条 min-width 断点互不重叠且都大于基础 6 列", wide == {9, 7} and min(wide) > 6, wide)
+
+d2 = c.get("/admin").get_data(as_text=True)
+head = re.search(r"<thead><tr>(.*?)</tr>", d2[d2.index("<th>时间") - 40:], re.S).group(1)
+cols = re.findall(r"<th>([^<]+)</th>", head)
+check("明细有独立的系统列", "系统" in cols, cols)
+check("系统列排在浏览器之后", cols.index("系统") == cols.index("浏览器") + 1, cols)
+i_os = cols.index("系统")
+row0 = re.search(r"<tbody>\s*<tr>(.*?)</tr>", d2[d2.index("<th>时间"):], re.S).group(1)
+cells = [re.sub(r"<[^>]+>", " ", x).strip() for x in
+         re.findall(r"<td[^>]*>(.*?)</td>", row0, re.S)]
+check("系统格里有真实系统名或未知", any(k in cells[i_os] for k in
+      ("Windows", "macOS", "iOS", "Android", "Linux", "未知")), cells[i_os])
+check("系统格可点筛选", f'/admin?os=' in re.search(r"<td[^>]*>(.*?)</td>",
+      re.findall(r"<td[^>]*>.*?</td>", row0, re.S)[i_os], re.S).group(1))
+check("筛选栏有系统输入框", 'name="os"' in d2)
+check("按系统筛选能用", "macOS" in c.get("/admin?os=macOS").get_data(as_text=True))
+def detail_only(html):
+    """只取 #detail 到 #geo 之间的片段。
+    之前用 split("明细") 会被归属地那块注释里的"明细"两个字切到最后一段，取到的不是表格。"""
+    return html[html.index('id="detail"'):html.index('id="geo"')]
+
+check("按系统前缀也能筛（输 Win 命中 Windows 10/11）",
+      "Windows 10/11" in detail_only(c.get("/admin?os=Win").get_data(as_text=True)))
+bogus_html = c.get("/admin?os=" + "x' OR 1=1").get_data(as_text=True)
+check("填了不存在的系统值就给明确的空态，而不是假装没筛",
+      "这个条件下没有记录" in detail_only(bogus_html)
+      # Jinja 会把 ' 转义成 &#39;，所以按转义后的形态比，别比原始串
+      and 'name="os"' in bogus_html and "OR 1=1" in bogus_html)
+check("注入串被当普通字符串比对，表还在",
+      "这个条件下没有记录" in detail_only(bogus_html)
+      and stats_mod.list_queries({})["total"] > 0)
+
+geo = d2[d2.index("geotbl"):]
+pairs = re.findall(r'\?geo=([A-Z]{2})">([^<]+)<', geo)
+check("归属地列表只显示国家，不带省市运营商",
+      all(("省" not in v and "市" not in v and "·" not in v) for _, v in pairs), pairs)
+check("国家名取自库里那一列（中国 / Australia 原样）",
+      {"中国", "Australia", "Netherlands"} <= {v for _, v in pairs}, pairs)
+check("表头写的是国家 / 地区而不是含糊的归属地",
+      "<th>国家 / 地区</th>" in geo)
+check("明细那一列仍然是带省市的完整归属地", "浙江省杭州市" in
+      stats_mod.list_queries({"geo": "CN"})["items"][0]["geo"])
+
+print("\n10) 面板内联滚动：五行的五行，明细十行")
+ah = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
+# 认身份靠各表自己的第一个表头，不靠 <h2>：明细和归属地那两块的 h2 里带 <span>，
+# 用 h2 配对着正则会直接漏掉这两块
+folded = [(m.group(1), re.search(r"<th>([^<]+)</th>", m.group(2)).group(1))
+          for m in re.finditer(r'<div class="fold" data-fold data-rows="(\d+)">\s*<table[^>]*>'
+                               r'\s*<thead><tr>(.*?)</tr>', ah, re.S)]
+check("六块表都包了滚动容器（关键词/IP/浏览器/来源/明细/归属地）", len(folded) == 6, folded)
+check("每块包的都是预期那张表",
+      [t for _, t in folded] == ["关键词", "IP", "浏览器", "来源", "时间", "国家 / 地区"],
+      [t for _, t in folded])
+check("前四块与归属地列表都是 5 行，明细 10 行",
+      [n for n, _ in folded] == ["5", "5", "5", "5", "10", "5"], [n for n, _ in folded])
+# 说明文字必须在容器外：不然注意事项也跟着一起滚，第一眼看不到
+fold_spans = [(m.start(), ah.index("</table>", m.start())) for m in
+              re.finditer(r'<div class="fold" data-fold', ah)]
+check("说明文字在滚动容器外", all("atip" not in ah[s:e] for s, e in fold_spans),
+      [ah[s:e].count("atip") for s, e in fold_spans])
+check("没有残留的展开/收起按钮（要做的是内联滚动条，不是点击展开）",
+      "foldbtn" not in ah and "foldbtn" not in css and "is-open" not in ah,
+      (ah.count("foldbtn"), css.count("foldbtn"), ah.count("is-open")))
+
+fold = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
+                       re.search(r"\.fold \{([^}]*)\}", css).group(1)))
+check("容器自己就是滚动区，不在框内滚的写法（hidden）都算错",
+      fold.get("overflow", "").strip() == "auto", fold)
+check("框高不写死在 CSS 里：行高随折行变化，写死会露半行", "max-height" not in fold, fold)
+check("滚动条收成细条，不吃掉表格宽度", fold.get("scrollbar-width", "").strip() == "thin", fold)
+check("滚动条颜色跟着主题变量走，暗色下不会是一道白槽",
+      "var(--" in fold.get("scrollbar-color", ""), fold.get("scrollbar-color"))
+th = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
+                     re.search(r"\.fold thead th \{([^}]*)\}", css).group(1)))
+check("框内滚动时表头吸顶", th.get("position", "").strip() == "sticky" and th.get("top", "").strip() == "0", th)
+check("吸顶表头有不透明底色，否则行会从字底下透过去",
+      "var(--surface)" in th.get("background", ""), th.get("background"))
+check("吸顶表头的分隔线是 inset box-shadow 而不是 border-bottom",
+      th.get("box-shadow", "").strip() == "inset 0 -1px 0 var(--line)", th.get("box-shadow"))
+check("滚动条配色与表头配对用的都是同一套语义变量",
+      {k for k in (fold.get("scrollbar-color", "") + th.get("background", "")).split()
+       if k.startswith("var(")} <= {"var(--line)", "var(--surface)", "transparent"},
+      (fold.get("scrollbar-color"), th.get("background")))
+
+js = ah[ah.index("/* ---- 面板内联滚动"):]
+check("框高取第 N+1 行的 offsetTop（量出来的，不是猜的像素）",
+      "rows[n].offsetTop" in js and "rows.length <= n" in js)
+check("不足 N 行时不设高度，免得下面留一截空白", "f.style.maxHeight = ''" in js)
+check("设完高度再量一次：竖向滚动条占了宽度，行会重新折行",
+      js.count("= foldH(f, n)") == 2, js.count("= foldH(f, n)"))
+check("横向滚动条占的那几像素高度要补回去，否则最后一行被它盖住",
+      "f.offsetHeight - f.clientHeight" in js)
+check("明细局部换页后重算框高", "refold();" in ah[ah.index("function render"):ah.index("/* ---- 面板内联滚动")])
+check("窗口变窄重算（折行变了会露半行），且做防抖",
+      "resize" in js and "clearTimeout(foldT)" in js and "setTimeout(refold, 200)" in js)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

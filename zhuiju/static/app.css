@@ -63,7 +63,10 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-.wrap { max-width: 1000px; margin: 0 auto; padding: 0 20px; }
+/* 宽度按屏走：1000px 在 1920 的屏上只占一半，两边大片空白，就是你说的"太窄"。
+   72vw 让 1366/1600/1920 分别约 983/1152/1382px，再加 48px 边距与 1680 上限，
+   16:9 屏上是"铺满但留呼吸"，超宽双屏也不会把一行表格拉到没边。 */
+.wrap { width: min(1680px, 100% - 48px); margin: 0 auto; padding: 0 24px; box-sizing: border-box; }
 
 b { font-weight: 600; }
 
@@ -673,6 +676,9 @@ code {
   grid-template-columns: repeat(var(--hot-cols, 6), minmax(0, 1fr));
   gap: 10px;
 }
+/* 宽屏要多放几列，否则一行 6 张在 1680px 下右边空一大块 */
+@media (min-width: 1500px) { .hotgrid { --hot-cols: 9; } }
+@media (min-width: 1240px) and (max-width: 1499px) { .hotgrid { --hot-cols: 7; } }
 @media (max-width: 1180px) { .hotgrid { --hot-cols: 5; } }
 @media (max-width: 960px)  { .hotgrid { --hot-cols: 4; } }
 @media (max-width: 720px)  { .hotgrid { --hot-cols: 3; } }
@@ -1076,4 +1082,28 @@ code {
 }
 @media (prefers-reduced-motion: reduce) {
   .theme-anim *, .theme-anim *::before, .theme-anim *::after { transition: none !important; }
+}
+
+/* ---------------- 面板内联滚动 ----------------
+   每块面板固定只显示几行（关键词/IP/浏览器/来源/归属地 5 行，明细 10 行），
+   剩下的在框内用滚动条看，页面本身不再被这些表拉长。
+   高度不写死像素：行高会随折行变化（浏览器格、来源格经常换行），写死就会露半行，
+   所以收起态的高度由 JS 量第 N+1 行的位置来定。 */
+.fold {
+  overflow: auto;                  /* 两个方向都可能超：竖着超行、横着超宽列 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.fold::-webkit-scrollbar { width: 8px; height: 8px; }
+.fold::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.fold::-webkit-scrollbar-track { background: transparent; }
+/* 在里面滚动时表头吸顶，不然滚到第 20 行就不认识哪列是什么了。
+   分隔线用 inset box-shadow 而不是 border-bottom：表格是 border-collapse: collapse，
+   吸顶的 th 在 Chrome 里会把折叠掉的边框线画不出来，滚起来表头就和内容粘成一片。 */
+.fold thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: inset 0 -1px 0 var(--line);
 }

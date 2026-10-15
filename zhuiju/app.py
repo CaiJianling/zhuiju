@@ -425,7 +425,7 @@ def create_app() -> Flask:
         if admin_mod.is_temp_password():
             return redirect(url_for("admin_password", first=1))
         flt = {k: (request.args.get(k) or "").strip()[:80]
-               for k in ("ip", "kw", "via", "geo", "browser", "device", "ref_kind",
+               for k in ("ip", "kw", "via", "geo", "browser", "os", "device", "ref_kind",
                          "day_from", "day_to")}
         if flt["via"] not in stats_mod.VIA:
             flt["via"] = ""
