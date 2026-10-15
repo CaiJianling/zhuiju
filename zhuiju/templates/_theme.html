@@ -1,0 +1,11 @@
+{# 主题预置：必须在样式表之前、且内联（不能 defer），否则暗色用户每次刷新都会闪一下白。 #}
+<script>
+(function () {
+  var m = "auto";
+  try { m = localStorage.getItem("zhuiju_theme") || "auto"; } catch (e) {}
+  var d = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  var dark = m === "dark" || (m !== "light" && d);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.themeMode = m;
+})();
+</script>

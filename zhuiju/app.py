@@ -36,6 +36,8 @@ from .sources import load_sources
 MIN_KW = 2        # 单字符关键词会引发一轮无意义的并发抓取，直接拒掉
 MAX_KW = 60
 VIA_CN = {"api": "搜索", "seo": "落地页", "cloud": "网盘"}
+REF_KIND_CN = {"site": "站内上一页", "search": "搜索引擎", "out": "外部站点",
+               "direct": "直接访问/无来源", "other": "无法解析"}
 
 
 def refresh_info() -> dict:
@@ -219,9 +221,21 @@ def create_app() -> Flask:
                                temp=admin_mod.is_temp_password()), code
 
     def _record(kw: str, via: str, started: float, **num) -> None:
-        """把一次查询落到 SQLite。IP 只在可信来源下取，见 admin.client_ip。"""
+        """把一次查询落到 SQLite。IP 只在可信来源下取，见 admin.client_ip。
+
+        UA 与 Referer 是客户端自己写的，当"指示"存，不当身份用；
+        来源能拿到多少由浏览器的 Referrer-Policy 决定（见 zhuiju/agent.py）。
+        """
         stats_mod.record(kw, admin_mod.client_ip(request.environ), via=via,
-                         ms=(time.perf_counter() - started) * 1000, **num)
+                         ms=(time.perf_counter() - started) * 1000,
+                         ua=request.headers.get("User-Agent", ""),
+                         referrer=request.headers.get("Referer", ""),
+                         own_hosts=_own_hosts(), **num)
+
+    def _own_hosts() -> tuple:
+        """本站对外的主机名，判"站内跳转"要用；反代下 host 已被 TrustForwarded 修正过。"""
+        hosts = {request.host, request.host.split(":")[0], "127.0.0.1", "localhost"}
+        return tuple(h for h in hosts if h)
 
     @app.before_request
     def _touch():
@@ -411,7 +425,8 @@ def create_app() -> Flask:
         if admin_mod.is_temp_password():
             return redirect(url_for("admin_password", first=1))
         flt = {k: (request.args.get(k) or "").strip()[:80]
-               for k in ("ip", "kw", "via", "geo", "day_from", "day_to")}
+               for k in ("ip", "kw", "via", "geo", "browser", "device", "ref_kind",
+                         "day_from", "day_to")}
         if flt["via"] not in stats_mod.VIA:
             flt["via"] = ""
         per = request.args.get("per", 50, type=int) or 50
@@ -427,7 +442,8 @@ def create_app() -> Flask:
         keep["per"] = rows["per"]
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
-            asset_v=_asset_ver(), via_cn=VIA_CN, flt={**flt, "per": rows["per"]},
+            asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
+            flt={**flt, "per": rows["per"]},
             agg=agg, rows=rows, temp=False,
             geo=geo_info, map_paths=base["d"], map_active="".join(
                 base["by_iso"][i] for i in sorted(drawn)),

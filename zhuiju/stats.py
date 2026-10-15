@@ -54,7 +54,15 @@ CREATE TABLE IF NOT EXISTS queries (
   sources_total INTEGER,
   ms            REAL,               -- 本次搜索实际等了多久
   iso           TEXT,               -- 归属地国家码；内网/保留为 ''
-  geo           TEXT                -- 归属地文案，直接存下来免得每次渲染再算
+  geo           TEXT,               -- 归属地文案，直接存下来免得每次渲染再算
+  browser       TEXT,               -- 解析出的浏览器名+版本，如 "Edge 124.0"
+  os            TEXT,               -- 系统，如 "Windows 10/11"
+  device        TEXT,               -- 手机 / 平板 / 桌面 / 程序
+  bot           INTEGER,            -- 1=爬虫或脚本客户端，与真人的查询分开看
+  ua            TEXT,               -- 原始 UA（截断），排查识别错误时要用
+  ref           TEXT,               -- 来源：站内是完整路径，站外只有 origin（浏览器策略）
+  ref_kind      TEXT,               -- direct / site / search / out / other
+  ref_label     TEXT                -- 给人看的来源文案
 );
 CREATE INDEX IF NOT EXISTS idx_queries_day ON queries(day);
 CREATE INDEX IF NOT EXISTS idx_queries_ip  ON queries(ip);
@@ -63,6 +71,11 @@ CREATE INDEX IF NOT EXISTS idx_queries_kw  ON queries(kw);
 
 # 老库没有这两列，加列要在建表之后单独补一次（CREATE TABLE IF NOT EXISTS 不会改已有表）
 GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"))
+# 浏览器与来源页。这几列只用于分组，不单独建索引：表本来就小，
+# 多一个索引就多一个"升级时列还不存在"的失败点（iso 索引就踩过这个坑）
+AGENT_COLUMNS = (("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"),
+                 ("bot", "INTEGER"), ("ua", "TEXT"),
+                 ("ref", "TEXT"), ("ref_kind", "TEXT"), ("ref_label", "TEXT"))
 # 归属地的索引必须等列真的存在之后再建：把它写在 SCHEMA 里，
 # 对已有库就是"给还不存在的列建索引" -> no such column，整个 ensure_schema 失败
 # （而且 create_app 把异常吞了，症状是"新克隆正常、老库升级后归属地一直是空"）
@@ -87,7 +100,7 @@ def ensure_schema() -> None:
         try:
             con.executescript(SCHEMA)
             cols = {r["name"] for r in con.execute("PRAGMA table_info(queries)")}
-            for name, typ in GEO_COLUMNS:
+            for name, typ in GEO_COLUMNS + AGENT_COLUMNS:
                 if name not in cols:
                     con.execute(f"ALTER TABLE queries ADD COLUMN {name} {typ}")
             con.execute(GEO_INDEX)          # 列确定了存在之后才建它的索引
@@ -153,30 +166,41 @@ def clean_ip(raw) -> str:
 def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
            hits: int | None = None, sources_ok: int | None = None,
            sources_total: int | None = None, ms: float | None = None,
-           iso: str | None = None, geo: str | None = None) -> None:
-    """记一次查询。统计绝不能把搜索本身搞挂，所以任何异常都吞掉。"""
+           iso: str | None = None, geo: str | None = None,
+           ua: str | None = None, referrer: str | None = None,
+           own_hosts=()) -> None:
+    """记一次查询。统计绝不能把搜索本身搞挂，所以任何异常都吞掉。
+
+    ua / referrer 是原始请求头，浏览器与来源在这里就地解析并落成结构化列，
+    这样"按浏览器分组""按来源分组"就是普通的 SQL，不必每次渲染再猜。
+    """
     kw = (kw or "").strip()[:60]
     if len(kw) < 1:
         return
     try:
         if not _ready:
             ensure_schema()
+        from . import agent, geoip
         if iso is None or geo is None:
-            from . import geoip
             r = geoip.locate(clean_ip(ip) or "")
             iso = r["iso"] if r["kind"] == "public" else ""
             geo = r["label"]
+        a = agent.parse_ua(ua)
+        f = agent.parse_ref(referrer, own_hosts)
         now = datetime.now()
         con = connect()
         try:
             con.execute(
                 "INSERT INTO queries (ts, day, ip, kw, via, results, hits,"
-                " sources_ok, sources_total, ms, iso, geo)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " sources_ok, sources_total, ms, iso, geo,"
+                " browser, os, device, bot, ua, ref, ref_kind, ref_label)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (now.strftime("%Y-%m-%d %H:%M:%S"), now.date().isoformat(),
                  clean_ip(ip) or "unknown", kw, via if via in VIA else "api",
                  results, hits, sources_ok, sources_total,
-                 round(float(ms), 1) if ms is not None else None, iso, geo))
+                 round(float(ms), 1) if ms is not None else None, iso, geo,
+                 a["browser"] or "未知", a["os"], a["device"], 1 if a["bot"] else 0,
+                 a["ua"][:200], f["origin"] or f["path"] or "", f["kind"], f["label"]))
             con.commit()
         finally:
             con.close()
@@ -190,8 +214,18 @@ _COLUMNS = {
     "kw": "kw LIKE ?",
     "via": "via = ?",
     "geo": "iso = ?",
+    "browser": "browser = ?",
+    "device": "device = ?",
+    "ref_kind": "ref_kind = ?",
     "day_from": "day >= ?",
     "day_to": "day <= ?",
+}
+# 这几列的取值来自程序自己写入的集合，筛值不在白名单里就当没填
+# （和 geo 一样：静默命中零行比忽略更难查）
+_ENUMS = {
+    "via": VIA,
+    "device": ("手机", "平板", "桌面", "程序", "未知"),
+    "ref_kind": ("direct", "site", "search", "out", "other"),
 }
 
 
@@ -223,6 +257,14 @@ def _where(f: dict) -> tuple[str, list]:
                 continue
             conds.append(sql)
             params.append(val)
+        elif key in ("device", "ref_kind"):
+            if val not in _ENUMS[key]:
+                continue
+            conds.append(sql)
+            params.append(val)
+        elif key == "browser":
+            conds.append(sql)
+            params.append(str(val)[:60])
         elif key == "geo":
             # 国家码就两位大写字母；'--' 是页面上"内网/保留"那个桶的暗号
             g = str(val).strip().upper()
@@ -311,6 +353,26 @@ def summary(f: dict, top: int = 15) -> dict:
             f" MAX(day) AS last_day"
             f" FROM queries WHERE {where} GROUP BY COALESCE(iso,'')"
             f" ORDER BY n DESC LIMIT ?", params + [int(top) + 12])]
+        by_browser = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(browser,'未知') AS browser, COALESCE(os,'') AS os,"
+            f" COALESCE(device,'') AS device, COUNT(*) AS n, COUNT(DISTINCT ip) AS ips,"
+            f" SUM(bot) AS bots"
+            f" FROM queries WHERE {where} GROUP BY COALESCE(browser,'未知'),"
+            f" COALESCE(os,''), COALESCE(device,'') ORDER BY n DESC LIMIT ?",
+            params + [int(top)])]
+        by_ref = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(ref_kind,'direct') AS kind, COUNT(*) AS n,"
+            f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT ref) AS refs,"
+            f" MAX(ref_label) AS example"
+            f" FROM queries WHERE {where} GROUP BY COALESCE(ref_kind,'direct')"
+            f" ORDER BY n DESC", params)]
+        # 来源要能看到具体是哪一页/哪个站，光按 kind 分组信息量不够
+        by_ref_src = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(ref_label,'直接访问 / 无来源') AS label,"
+            f" COALESCE(ref_kind,'direct') AS kind, COUNT(*) AS n,"
+            f" COUNT(DISTINCT ip) AS ips, MAX(day) AS last_day"
+            f" FROM queries WHERE {where} GROUP BY COALESCE(ref_label,'direct')"
+            f" ORDER BY n DESC LIMIT ?", params + [int(top)])]
     finally:
         con.close()
     days = [d["day"] for d in by_day if d.get("day")]
@@ -323,4 +385,5 @@ def summary(f: dict, top: int = 15) -> dict:
         "span": [min(days), max(days)] if days else [],
         "by_day": list(reversed(by_day)),      # 画趋势时按时间正序好看
         "top_kw": top_kw, "top_ip": top_ip, "by_via": by_via, "by_geo": by_geo,
+        "by_browser": by_browser, "by_ref": by_ref, "by_ref_src": by_ref_src,
     }

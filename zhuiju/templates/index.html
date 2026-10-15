@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  {% include "_theme.html" %}
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ seo.title }}</title>
   <meta name="description" content="{{ seo.description }}">
@@ -32,7 +33,9 @@
 <body>
 <header class="topbar">
   <div class="wrap">
-    <h1>追剧资源搜索 <span class="ver">本地版</span></h1>
+    <h1>追剧资源搜索 <span class="ver">本地版</span>
+      <button class="themebtn" type="button" data-theme-toggle
+              title="点击在 跟随系统 / 亮色 / 暗色 之间切换"></button></h1>
     <p class="lede">输入电影、电视剧或动漫名称，一次查询多个影视采集接口，并汇总网盘、磁力和资源站的入口。</p>
     {# 五种状态各有各的颜色，别把"正在跑"和"快版没跑全"都染成红色 #}
     {% set tone = {'fresh': 'ok', 'running': 'run', 'partial': 'warn',
@@ -193,5 +196,6 @@
 }
 </script>
 <script src="{{ url_for('static', filename='app.js') }}?v={{ asset_v }}"></script>
+<script src="{{ url_for('static', filename='theme.js') }}?v={{ asset_v }}"></script>
 </body>
 </html>

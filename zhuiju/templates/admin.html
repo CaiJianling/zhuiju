@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  {% include "_theme.html" %}
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <title>后台统计 - 追剧资源搜索</title>
@@ -11,7 +12,9 @@
 <body>
 <header class="topbar">
   <div class="wrap">
-    <h1>后台统计 <span class="ver">需要口令</span></h1>
+    <h1>后台统计 <span class="ver">需要口令</span>
+      <button class="themebtn" type="button" data-theme-toggle
+              title="点击在 跟随系统 / 亮色 / 暗色 之间切换"></button></h1>
     <p class="lede">历次查询记录：可按 IP、关键词、日期范围过滤并翻页。
       数据存在 zhuiju/data/stats.db（SQLite），口令在 zhuiju/data/admin.json。</p>
     {% if authed %}
@@ -58,6 +61,23 @@
       <input type="text" name="ip" value="{{ flt.ip }}" placeholder="192.168.1.20"></label>
     <label class="admfield"><span>国家码</span>
       <input type="text" name="geo" value="{{ flt.geo }}" placeholder="CN / US / --（内网）" size="14"></label>
+    <label class="admfield"><span>浏览器</span>
+      <input type="text" name="browser" value="{{ flt.browser }}" placeholder="Chrome 124.0" size="14"></label>
+    <label class="admfield"><span>来源</span>
+      <select name="ref_kind">
+        <option value="">全部</option>
+        {% for k, label in (('site', '站内上一页'), ('search', '搜索引擎'),
+                            ('out', '外部站点'), ('direct', '直接访问/无来源')) %}
+        <option value="{{ k }}" {% if flt.ref_kind == k %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="admfield"><span>设备</span>
+      <select name="device">
+        <option value="">全部</option>
+        {% for k in ('桌面', '手机', '平板', '程序') %}
+        <option value="{{ k }}" {% if flt.device == k %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select></label>
     <label class="admfield"><span>关键词包含</span>
       <input type="text" name="kw" value="{{ flt.kw }}" placeholder="庆余年"></label>
     <label class="admfield"><span>入口</span>
@@ -88,66 +108,6 @@
   {% if agg.first_ts %}
   <p class="rangehint">条件内时间跨度：{{ agg.first_ts }} ～ {{ agg.last_ts }}</p>
   {% endif %}
-
-  <section class="asect">
-    <h2>IP 归属地地图
-      <span class="asub">{{ markers | length }} 个地点 · {{ agg.count }} 次查询</span></h2>
-    {% if not geo.ready %}
-    <p class="empty">还没下载归属地库，所以地图和归属地列都是空的。跑一次就有（约 14MB，走 gh-proxy 镜像）：
-      <code>.venv\Scripts\python.exe tools\fetch_geo.py</code></p>
-    {% elif not map_paths %}
-    <p class="empty">底图文件读不出来：{{ geo }}</p>
-    {% else %}
-    <div class="mapwrap">
-      <svg class="worldmap" viewBox="0 0 360 180" role="img"
-           aria-label="按国家标注的 IP 归属地世界地图" preserveAspectRatio="xMidYMid meet">
-        <rect x="0" y="0" width="360" height="180" class="sea"></rect>
-        <path d="{{ map_paths }}" class="land"></path>
-        {% if map_active %}<path d="{{ map_active }}" class="land-on"></path>{% endif %}
-        <g class="grat">
-          {% for gx in range(30, 360, 30) %}<line x1="{{ gx }}" y1="0" x2="{{ gx }}" y2="180"></line>{% endfor %}
-          {% for gy in range(30, 180, 30) %}<line x1="0" y1="{{ gy }}" x2="360" y2="{{ gy }}"></line>{% endfor %}
-        </g>
-        {% for m in markers %}
-        <a href="{{ url_for('admin', geo=m.iso) }}">
-          <title>{{ m.name }} · {{ m.n }} 次 · {{ m.ips }} 个 IP</title>
-          <circle cx="{{ m.x }}" cy="{{ m.y }}" r="{{ m.r }}" class="mk"></circle>
-        </a>
-        {% endfor %}
-      </svg>
-      {% if offmap %}
-      <p class="atip">底图（110m 简版）没有这些地方的轮廓，只在下面表格里计数：
-        {% for m in offmap %}{{ m.name }}{% if not loop.last %}、{% endif %}{% endfor %}。
-        点开表格行或图例可以按国家筛。</p>
-      {% endif %}
-      <p class="atip">点地图上的圆点 = 只看这个国家的查询。内网 / 保留地址（127.x、10.x、192.168.x、
-        169.254.x、100.64/10 等）没有地理归属，不会出现在图上，只能在下面的"归属地"表里看"内网/保留"那一行。</p>
-    </div>
-    {% endif %}
-
-    {% if agg.by_geo %}
-    <table class="table geotbl">
-      <thead><tr><th>归属地</th><th>次数</th><th>IP</th><th>关键词</th><th>最近</th></tr></thead>
-      <tbody>
-      {% for g in agg.by_geo %}
-        <tr>
-          <td>
-            {%- if g.iso | length == 2 %}
-              <a href="{{ url_for('admin', geo=g.iso) }}">{{ g.geo or g.iso }}</a>
-              <span class="dim">{{ g.iso }}</span>
-            {%- else %}
-              {# 这一桶混了内网/本机/保留/非法，桶名用统称；明细行仍显示各自准确的说法 #}
-              <a href="{{ url_for('admin', geo='--') }}">内网 / 保留地址</a>
-            {%- endif %}
-          </td>
-          <td class="num">{{ g.n }}</td><td class="num">{{ g.ips }}</td>
-          <td class="num">{{ g.kws }}</td><td class="dim">{{ g.last_day }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
-  </section>
 
   <section class="asect">
     <h2>按天</h2>
@@ -205,11 +165,63 @@
     </section>
   </div>
 
-  <section class="asect">
+  <div class="cols">
+    <section class="asect">
+      <h2>浏览器 / 设备</h2>
+      {% if agg.by_browser %}
+      <table class="table">
+        <thead><tr><th>浏览器</th><th>系统</th><th>设备</th><th>次数</th><th>IP</th></tr></thead>
+        <tbody>
+        {% for b in agg.by_browser %}
+          <tr>
+            <td><a href="{{ url_for('admin', browser=b.browser) }}">{{ b.browser }}</a>
+              {%- if b.bots %} <span class="dim">含程序 {{ b.bots }}</span>{% endif %}</td>
+            <td class="dim">{{ b.os or '—' }}</td>
+            <td><a class="dim" href="{{ url_for('admin', device=b.device) }}">{{ b.device or '—' }}</a></td>
+            <td class="num">{{ b.n }}</td><td class="num">{{ b.ips }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="atip">浏览器是从 User-Agent 认出来的，那个头由客户端自己写，
+        可以随便伪造；国产壳浏览器（360/搜狗/双核）也常常不自报身份，
+        所以这一列当"大致构成"看，别当精确计数。</p>
+      {% else %}<p class="empty">无</p>{% endif %}
+    </section>
+
+    <section class="asect">
+      <h2>来源页（对方从哪来）</h2>
+      {% if agg.by_ref_src %}
+      <table class="table">
+        <thead><tr><th>来源</th><th>类型</th><th>次数</th><th>IP</th><th>最近</th></tr></thead>
+        <tbody>
+        {% for f in agg.by_ref_src %}
+          <tr>
+            <td><a href="{{ url_for('admin', ref_kind=f.kind) }}">{{ f.label }}</a></td>
+            <td class="dim">{{ ref_kind_cn.get(f.kind, f.kind) }}</td>
+            <td class="num">{{ f.n }}</td><td class="num">{{ f.ips }}</td>
+            <td class="dim">{{ f.last_day }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty">无</p>{% endif %}
+      <p class="atip">来源取自 Referer 头，能给多少由浏览器的 Referrer-Policy 决定，
+        不是我们能控制的：<b>站内跳转</b>给完整地址，所以上一页是哪一部剧（<code>/s/×</code>）看得见；
+        <b>跨站跳转</b>只给到域名，路径被浏览器抹掉，拿不到就不编；
+        https 跳 http 干脆不发；直接输网址、书签、新标签页打开也都不发，
+        这些在统计里都归成"直接访问 / 无来源"，分不开。
+        {% if agg.by_ref %}（当前类型分布：
+        {% for r in agg.by_ref %}{{ ref_kind_cn.get(r.kind, r.kind) }} {{ r.n }}{% if not loop.last %}、{% endif %}{% endfor %}）{% endif %}</p>
+    </section>
+  </div>
+
+  <section class="asect" id="detail" data-pages="{{ rows.pages }}">
     <h2>明细 <span class="asub">第 {{ rows.page }} / {{ rows.pages }} 页 · 共 {{ rows.total }} 条</span></h2>
     {% if rows['items'] %}
     <table class="table">
-      <thead><tr><th>时间</th><th>IP</th><th>归属地</th><th>关键词</th><th>入口</th>
+      <thead><tr><th>时间</th><th>IP</th><th>归属地</th><th>浏览器</th><th>来源页</th>
+        <th>关键词</th><th>入口</th>
         <th>结果</th><th>原始命中</th><th>可用源</th><th>耗时 ms</th></tr></thead>
       <tbody>
       {% for r in rows['items'] %}
@@ -223,6 +235,19 @@
               <span class="dim">{{ r.geo or '未解析' }}</span>
             {%- endif -%}
           </td>
+          <td>
+            {%- if r.browser %}
+              <a href="{{ url_for('admin', browser=r.browser) }}">{{ r.browser }}</a>
+              {%- if r.device %}<span class="dim">{{ r.device }}</span>{% endif -%}
+            {%- else %}<span class="dim">未知</span>{% endif -%}
+          </td>
+          <td>
+            {%- if r.ref_label and r.ref_kind != 'direct' %}
+              <a href="{{ url_for('admin', ref_kind=r.ref_kind) }}">{{ r.ref_label }}</a>
+            {%- else %}
+              <span class="dim">{{ r.ref_label or '直接访问 / 无来源' }}</span>
+            {%- endif -%}
+          </td>
           <td><a href="{{ url_for('admin', kw=r.kw) }}">{{ r.kw }}</a></td>
           <td>{{ via_cn.get(r.via, r.via) }}</td>
           <td class="num {{ 'zero' if not r.results }}">{{ r.results if r.results is not none else '—' }}</td>
@@ -234,12 +259,82 @@
       </tbody>
     </table>
     <div class="pager">
-      {% if rows.page > 1 %}<a href="{{ url_for('admin', **args_prev) }}">‹ 上一页</a>{% endif %}
+      {% if rows.page > 1 %}<a href="{{ url_for('admin', **args_prev) }}" data-page>‹ 上一页</a>{% endif %}
       <span class="dim">第 {{ rows.page }} / {{ rows.pages }} 页</span>
-      {% if rows.page < rows.pages %}<a href="{{ url_for('admin', **args_next) }}">下一页 ›</a>{% endif %}
+      {% if rows.page < rows.pages %}<a href="{{ url_for('admin', **args_next) }}" data-page>下一页 ›</a>{% endif %}
+      {# 跳转表单把当前筛选当隐藏域带上：不然跳完页筛选就丢了，等于白筛 #}
+      <form class="jumpform" method="get" action="{{ url_for('admin') }}">
+        {% for k, v in flt.items() %}{% if v %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+        <label class="jumplbl">跳到
+          <input class="jumpin" type="number" name="page" min="1" max="{{ rows.pages }}"
+                 value="{{ rows.page }}" aria-label="页码"></label>
+        <button class="jumpbtn" type="submit">Go</button>
+        <span class="dim pages">共 {{ rows.pages }} 页</span>
+      </form>
     </div>
     {% else %}
     <p class="empty">这个条件下没有记录。换个日期范围或清空筛选试试。</p>
+    {% endif %}
+  </section>
+
+  {# 归属地与地图放最后：它是"看分布"的，日常翻明细用不上，垫在下面不占首屏 #}
+  <section class="asect" id="geo">
+    <h2>IP 归属地地图
+      <span class="asub">{{ markers | length }} 个地点 · {{ agg.count }} 次查询</span></h2>
+    {% if not geo.ready %}
+    <p class="empty">还没下载归属地库，所以地图和归属地列都是空的。跑一次就有（约 14MB，走 gh-proxy 镜像）：
+      <code>.venv\Scripts\python.exe tools\fetch_geo.py</code></p>
+    {% elif not map_paths %}
+    <p class="empty">底图文件读不出来：{{ geo }}</p>
+    {% else %}
+    <div class="mapwrap">
+      <svg class="worldmap" viewBox="0 0 360 180" role="img"
+           aria-label="按国家标注的 IP 归属地世界地图" preserveAspectRatio="xMidYMid meet">
+        <rect x="0" y="0" width="360" height="180" class="sea"></rect>
+        <path d="{{ map_paths }}" class="land"></path>
+        {% if map_active %}<path d="{{ map_active }}" class="land-on"></path>{% endif %}
+        <g class="grat">
+          {% for gx in range(30, 360, 30) %}<line x1="{{ gx }}" y1="0" x2="{{ gx }}" y2="180"></line>{% endfor %}
+          {% for gy in range(30, 180, 30) %}<line x1="0" y1="{{ gy }}" x2="360" y2="{{ gy }}"></line>{% endfor %}
+        </g>
+        {% for m in markers %}
+        <a href="{{ url_for('admin', geo=m.iso) }}">
+          <title>{{ m.name }} · {{ m.n }} 次 · {{ m.ips }} 个 IP</title>
+          <circle cx="{{ m.x }}" cy="{{ m.y }}" r="{{ m.r }}" class="mk"></circle>
+        </a>
+        {% endfor %}
+      </svg>
+      {% if offmap %}
+      <p class="atip">底图（110m 简版）没有这些地方的轮廓，只在下面表格里计数：
+        {% for m in offmap %}{{ m.name }}{% if not loop.last %}、{% endif %}{% endfor %}。</p>
+      {% endif %}
+      <p class="atip">点地图上的圆点 = 只看这个国家的查询。内网 / 保留地址（127.x、10.x、192.168.x、
+        169.254.x、100.64/10 等）没有地理归属，不会出现在图上，只能在下面的"归属地"表里看"内网/保留"那一行。</p>
+    </div>
+    {% endif %}
+
+    {% if agg.by_geo %}
+    <table class="table geotbl">
+      <thead><tr><th>归属地</th><th>次数</th><th>IP</th><th>关键词</th><th>最近</th></tr></thead>
+      <tbody>
+      {% for g in agg.by_geo %}
+        <tr>
+          <td>
+            {%- if g.iso | length == 2 %}
+              <a href="{{ url_for('admin', geo=g.iso) }}">{{ g.geo or g.iso }}</a>
+              <span class="dim">{{ g.iso }}</span>
+            {%- else %}
+              {# 这一桶混了内网/本机/保留/非法，桶名用统称；明细行仍显示各自准确的说法 #}
+              <a href="{{ url_for('admin', geo='--') }}">内网 / 保留地址</a>
+            {%- endif %}
+          </td>
+          <td class="num">{{ g.n }}</td><td class="num">{{ g.ips }}</td>
+          <td class="num">{{ g.kws }}</td><td class="dim">{{ g.last_day }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
     {% endif %}
   </section>
 
@@ -252,5 +347,82 @@
   </div>
 {% endif %}
 </main>
+{% if authed %}
+<script>
+/* 明细翻页：只换 #detail 这一块，不整页重载。
+   整页重载会把滚动位置弹回顶部——翻一页就得重新滚下来，很难用。
+   没有 JS 时链接与表单本身仍是普通的 GET 请求，功能不坏，只是会回到页顶。 */
+(function () {
+  var detail = document.getElementById('detail');
+  if (!detail) return;
+  var busy = false;
+
+  function render(html, url) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var next = doc.getElementById('detail');
+    if (!next) {                 // 会话过期/口令被引导去改：交回整页跳转，别把登录页塞进半截
+      window.location.href = url;
+      return;
+    }
+    detail.innerHTML = next.innerHTML;
+    // data-pages 之类挂在外层，换 innerHTML 不会更新，得跟着新内容同步，
+    // 否则跳到第 50 页的夹取上限还是旧页数
+    Array.prototype.forEach.call(next.attributes, function (a) {
+      detail.setAttribute(a.name, a.value);
+    });
+    var pages = parseInt(detail.dataset.pages || '1', 10) || 1;
+    var inp = detail.querySelector('input[name=page]');
+    if (inp) inp.max = pages;
+    if (window.history && history.replaceState) history.replaceState(null, '', url);
+    scrollToDetail();
+  }
+
+  function scrollToDetail() {
+    // 页面不可见时（后台标签、内嵌视图未显示）浏览器根本不执行 smooth 滚动动画，
+    // 表现是"翻页后停在原地或页顶"。所以隐藏态直接瞬时滚动，可见态才用平滑滚动。
+    var instant = document.hidden;
+    detail.scrollIntoView({ behavior: instant ? 'auto' : 'smooth', block: 'start' });
+    if (instant) return;
+    // 平滑滚动是异步的：万一没真的滚动（被别的行为打断、或环境不支持），兜一次瞬时定位
+    setTimeout(function () {
+      var top = detail.getBoundingClientRect().top;
+      if (top > 120 || top < -120) detail.scrollIntoView({ behavior: 'auto', block: 'start' });
+    }, 600);
+  }
+
+  function go(url) {
+    if (busy) return;
+    busy = true;
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (r) { return r.text(); })
+      .then(function (html) { render(html, url); })
+      .catch(function () { window.location.href = url; })   // 断网等：退回普通跳转
+      .then(function () { busy = false; });
+  }
+
+  detail.addEventListener('click', function (e) {
+    var a = e.target.closest('a[data-page]');
+    if (!a) return;
+    e.preventDefault();
+    go(a.getAttribute('href'));
+  });
+
+  // submit 会冒泡，所以换完内容后新表单仍受这个监听器管
+  detail.addEventListener('submit', function (e) {
+    var f = e.target.closest('.jumpform');
+    if (!f) return;
+    e.preventDefault();
+    var q = new URLSearchParams(new FormData(f));
+    var pages = parseInt(detail.dataset.pages || '1', 10) || 1;
+    var n = parseInt(q.get('page') || '1', 10);
+    if (!isFinite(n) || n < 1) n = 1;
+    if (n > pages) n = pages;
+    q.set('page', String(n));
+    go('{{ url_for("admin") }}?' + q.toString());
+  });
+})();
+</script>
+{% endif %}
+<script src="{{ url_for('static', filename='theme.js') }}?v={{ asset_v }}"></script>
 </body>
 </html>

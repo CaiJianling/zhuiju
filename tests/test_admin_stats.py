@@ -576,5 +576,31 @@ finally:
     stats_mod.MIGRATE_ERROR = ""
     stats_mod.ensure_schema()
 
+print("\n19) 区块顺序与明细翻页控件")
+dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)
+ids = [m for m in re.findall(r'<section class="asect" id="(\w+)"', dash)]
+check("明细在归属地之前（归属地垫底）", ids[-1] == "geo" and "detail" in ids, ids)
+check("归属地有独立 id 便于定位", ids == ["detail", "geo"], ids)
+pager = dash[dash.index('class="pager"'):dash.index("</div>", dash.index('class="pager"'))]
+check("翻页区有跳转表单", 'class="jumpform"' in pager)
+check("跳转框是 number 且带 min/max",
+      re.search(r'type="number" name="page" min="1" max="\d+"', pager) is not None,
+      re.findall(r'min="1" max="(\d+)"', pager))
+check("跳转表单带住了当前筛选", 'name="kw" value="繁花"' in pager,
+      re.findall(r'name="(\w+)" value="([^"]*)"', pager))
+check("翻页链接带 data-page（交给局部刷新）", pager.count("data-page") >= 1, pager.count("data-page"))
+check("翻页链接带住筛选条件",
+      all(("kw=" in u or "繁花" in u) for u in re.findall(r'href="([^"]+)"', pager)
+          if "page=" in u), re.findall(r'href="([^"]+)"', pager))
+check("页码输入框初值是当前页", re.search(r'name="page"[^>]*?value="(\d+)"', pager, re.S).group(1) == "2",
+      re.search(r'value="(\d+)"', pager).group(1))
+check("局部刷新脚本只在登录后出现", "DOMParser" in dash)
+fresh = app_mod.create_app().test_client().get("/admin").get_data(as_text=True)
+check("未登录页面里没有这套脚本", "DOMParser" not in fresh and "jumpform" not in fresh)
+check("滚动定位留了避让空间", "#detail { scroll-margin-top" in
+      (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8"))
+check("隐藏态瞬时滚动（否则 smooth 不执行，翻页后停在原地）",
+      "document.hidden" in dash and "'auto'" in dash)
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

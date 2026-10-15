@@ -1,6 +1,34 @@
 /* 追剧资源搜索 — 视觉样式 */
 
 :root {
+  --focus-ring: rgba(59, 110, 245, .12);
+  --on-accent-dim: rgba(255, 255, 255, .6);
+  --land-on-fill: rgba(59, 110, 245, .18);
+  /* 下面这些原本是写死在规则里的浅色值；抽成变量后才谈得上换主题 */
+  --on-accent: #fff;
+  --brand-dim: #b7c7f0;
+  --brand-2: #7aa2ff;
+  --tab-bg: #edf0f5;
+  --line-hover: #dbe2ee;
+  --faint: #c2cad6;
+  --star: #e0a12a;
+  --ok-bg: #f2fbf5;
+  --ok-line: #cfe8d8;
+  --hl-bg: #eaf7ef;
+  --bad-bg: #fdf6f5;
+  --bad-line: #f0d2ce;
+  --err-bg: #fdf3f1;
+  --warn-bg: #fffaf1;
+  --warn-line: #f3e0bd;
+  --shimmer-a: #eef1f6;
+  --shimmer-b: #e2e8f1;
+  --sea: #eaf1f8;
+  --land: #dfe5ec;
+  --land-line: #c8d1dc;
+  --map-grat: #ffffff;
+  --mk-stroke: #fff;
+  color-scheme: light;
+
   --bg: #f6f7f9;
   --surface: #ffffff;
   --surface-2: #f8fafc;
@@ -142,7 +170,7 @@ main { padding: 18px 0 44px; }
   outline: none;
   border-color: var(--brand);
   background: var(--surface);
-  box-shadow: 0 0 0 3px rgba(59, 110, 245, .12);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .field .go {
   flex: 0 0 auto;
@@ -150,7 +178,7 @@ main { padding: 18px 0 44px; }
   border: 0;
   border-radius: var(--r-m);
   background: var(--brand);
-  color: #fff;
+  color: var(--on-accent);
   font: inherit;
   font-size: 15px;
   font-weight: 600;
@@ -158,7 +186,7 @@ main { padding: 18px 0 44px; }
   transition: background .16s;
 }
 .field .go:hover { background: var(--brand-ink); }
-.field .go[disabled] { background: #b7c7f0; cursor: progress; }
+.field .go[disabled] { background: var(--brand-dim); cursor: progress; }
 
 .examples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
 .examples .hint { color: var(--dim); font-size: 12.5px; }
@@ -184,7 +212,7 @@ main { padding: 18px 0 44px; }
   justify-content: space-between;
   margin-bottom: 14px;
 }
-.tabs { display: flex; gap: 2px; background: #edf0f5; border-radius: 10px; padding: 3px; }
+.tabs { display: flex; gap: 2px; background: var(--tab-bg); border-radius: 10px; padding: 3px; }
 .tab {
   font: inherit;
   font-size: 13.5px;
@@ -229,7 +257,7 @@ main { padding: 18px 0 44px; }
 }
 .srcbadge.ok { color: var(--ink-2); }
 .srcbadge.ok::before { background: var(--ok); }
-.srcbadge.bad { color: var(--bad); border-color: #f0d2ce; background: #fdf6f5; }
+.srcbadge.bad { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
 .srcbadge.bad::before { background: var(--bad); }
 
 /* ---------------- 结果卡片 ---------------- */
@@ -247,7 +275,7 @@ main { padding: 18px 0 44px; }
   box-shadow: var(--shadow-s);
   transition: box-shadow .16s, border-color .16s;
 }
-.card:hover { box-shadow: var(--shadow-m); border-color: #dbe2ee; }
+.card:hover { box-shadow: var(--shadow-m); border-color: var(--line-hover); }
 
 /* 海报：宽度与比例固定，图片绝对定位脱离文档流。
    如果写成 height:100%，在高度不定的 flex 子项上会退化成图片的原始高度，
@@ -265,7 +293,7 @@ main { padding: 18px 0 44px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #c2cad6;
+  color: var(--faint);
   font-size: 20px;
   line-height: 1;
 }
@@ -312,7 +340,7 @@ main { padding: 18px 0 44px; }
   border-radius: 5px;
   padding: 1px 7px;
 }
-.tag.hl { color: var(--ok); background: #eaf7ef; }
+.tag.hl { color: var(--ok); background: var(--hl-bg); }
 .sub { margin: 0 0 9px; font-size: 12.5px; color: var(--dim); overflow-wrap: break-word; }
 
 .srcline { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
@@ -329,7 +357,7 @@ main { padding: 18px 0 44px; }
   transition: border-color .14s, color .14s, background .14s;
 }
 .srcbtn:hover { border-color: var(--brand); color: var(--brand-ink); background: var(--brand-soft); }
-.srcbtn.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.srcbtn.on { background: var(--brand); border-color: var(--brand); color: var(--on-accent); }
 a.openlink { font-size: 12px; color: var(--dim); text-decoration: none; padding-left: 2px; }
 a.openlink:hover { color: var(--brand-ink); }
 
@@ -503,9 +531,9 @@ a.openlink:hover { color: var(--brand-ink); }
   padding: 3px 12px;
   cursor: pointer;
 }
-.fbtn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.fbtn.on { background: var(--ink); color: var(--on-accent); border-color: var(--ink); }
 .fbtn .dim { color: var(--dim); }
-.fbtn.on .dim { color: rgba(255, 255, 255, .6); }
+.fbtn.on .dim { color: var(--on-accent-dim); }
 
 .row {
   display: flex;
@@ -518,7 +546,7 @@ a.openlink:hover { color: var(--brand-ink); }
   box-shadow: var(--shadow-s);
   font-size: 13.5px;
 }
-.row:hover { border-color: #dbe2ee; }
+.row:hover { border-color: var(--line-hover); }
 .row .nm { font-weight: 600; flex: 0 0 auto; max-width: 190px; }
 .row .ct {
   flex: 0 0 auto;
@@ -537,7 +565,7 @@ a.openlink:hover { color: var(--brand-ink); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.row .stars { color: #e0a12a; font-size: 11.5px; letter-spacing: 1px; }
+.row .stars { color: var(--star); font-size: 11.5px; letter-spacing: 1px; }
 .row .links { display: flex; gap: 10px; }
 .row a { font-size: 12px; color: var(--brand-ink); text-decoration: none; }
 .row a:hover { text-decoration: underline; }
@@ -583,7 +611,7 @@ a.openlink:hover { color: var(--brand-ink); }
   height: 7px;
   margin-top: 12px;
   border-radius: 4px;
-  background: linear-gradient(90deg, #eef1f6 25%, #e2e8f1 50%, #eef1f6 75%);
+  background: linear-gradient(90deg, var(--shimmer-a) 25%, var(--shimmer-b) 50%, var(--shimmer-a) 75%);
   background-size: 300% 100%;
   animation: shimmer 1.2s infinite;
 }
@@ -694,7 +722,7 @@ code {
   height: 100%;
   min-width: 4%;
   border-radius: 3px;
-  background: linear-gradient(90deg, var(--brand), #7aa2ff);
+  background: linear-gradient(90deg, var(--brand), var(--brand-2));
   transition: width .5s ease;
 }
 .progsteps {
@@ -711,8 +739,8 @@ code {
   border-radius: 99px;
   padding: 1px 8px;
 }
-.pstep.ok { color: var(--ok); border-color: #cfe8d8; background: #f2fbf5; }
-.pstep.fail { color: var(--bad); border-color: #f0d2ce; background: #fdf6f5; }
+.pstep.ok { color: var(--ok); border-color: var(--ok-line); background: var(--ok-bg); }
+.pstep.fail { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
 .pstep.cur { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); font-weight: 600; }
 .pstep.skipped { opacity: .55; text-decoration: line-through; }
 .banner a { color: var(--brand-ink); cursor: pointer; text-decoration: underline; }
@@ -809,8 +837,8 @@ code {
   margin: 0 0 12px;
   padding: 8px 11px;
   border-radius: 9px;
-  background: #fdf3f1;
-  border: 1px solid #f0d2ce;
+  background: var(--err-bg);
+  border: 1px solid var(--bad-line);
   color: var(--bad);
   font-size: 13px;
 }
@@ -845,7 +873,7 @@ code {
   font: inherit;
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
+  color: var(--bad);
   background: var(--brand);
   border: 0;
   border-radius: 9px;
@@ -927,8 +955,8 @@ code {
   margin: 0 0 14px;
   padding: 9px 12px;
   border-radius: 9px;
-  background: #fffaf1;
-  border: 1px solid #f3e0bd;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
   color: var(--warn);
   font-size: 12.5px;
   line-height: 1.6;
@@ -952,15 +980,15 @@ code {
   border: 1px solid var(--line);
   border-radius: 10px;
 }
-.worldmap .sea { fill: #eaf1f8; }
-.worldmap .land { fill: #dfe5ec; stroke: #c8d1dc; stroke-width: .35; }
-.worldmap .land-on { fill: rgba(59, 110, 245, .18); stroke: var(--brand); stroke-width: .35;
+.worldmap .sea { fill: var(--sea); }
+.worldmap .land { fill: var(--land); stroke: var(--land-line); stroke-width: .35; }
+.worldmap .land-on { fill: var(--land-on-fill); stroke: var(--brand); stroke-width: .35;
   pointer-events: none; }
-.worldmap .grat line { stroke: #fff; stroke-width: .3; opacity: .55; pointer-events: none; }
+.worldmap .grat line { stroke: var(--map-grat); stroke-width: .3; opacity: .55; pointer-events: none; }
 .worldmap .mk {
   fill: var(--brand);
   fill-opacity: .72;
-  stroke: #fff;
+  stroke: var(--mk-stroke);
   stroke-width: .7;
   cursor: pointer;
   transition: fill-opacity .12s;
@@ -968,3 +996,100 @@ code {
 .worldmap .mk:hover { fill-opacity: 1; fill: var(--brand-ink); }
 .geotbl td:first-child { max-width: 320px; overflow-wrap: anywhere; }
 .code { font-size: 11px; color: var(--dim); margin-left: 4px; }
+
+/* 明细翻页：跳转控件跟在上一页/下一页后面，同一行排开 */
+#detail { scroll-margin-top: 14px; }
+.jumpform { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.jumplbl { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 5px; }
+.jumpin {
+  font: inherit;
+  font-size: 12.5px;
+  width: 62px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.jumpin:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.jumpbtn {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.jumpbtn:hover { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
+.pager .pages { font-size: 11.5px; }
+
+/* ---------------- 暗色主题 ----------------
+   只改自定义属性，不动任何一条具体规则：亮暗两套共用同一批 var()，
+   所以加新组件时只要用变量写颜色，两套主题就自动都成立。 */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101319;
+  --surface: #171b22;
+  --surface-2: #1d222b;
+  --ink: #e9edf4;
+  --ink-2: #b7c0cf;
+  --dim: #8a94a5;
+  --line: #2a313d;
+  --line-2: #232a35;
+  --brand: #5b86ff;
+  --brand-ink: #9ab6ff;
+  --brand-soft: #1c2437;
+  --ok: #4fc781;
+  --warn: #e5a94f;
+  --bad: #f2857a;
+  --unknown: #6c7684;
+  --shadow-s: 0 1px 2px rgba(0, 0, 0, .5);
+  --shadow-m: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 18px rgba(0, 0, 0, .45);
+  --on-accent: #0d1016;
+  --on-accent-dim: rgba(13, 16, 22, .62);
+  --brand-dim: #2c3a5e;
+  --brand-2: #89aaff;
+  --tab-bg: #1d222b;
+  --line-hover: #3a4250;
+  --faint: #5d6675;
+  --star: #d9a441;
+  --ok-bg: #142e1e;
+  --ok-line: #24512f;
+  --hl-bg: #142e1e;
+  --bad-bg: #31191a;
+  --bad-line: #562a28;
+  --err-bg: #31191a;
+  --warn-bg: #2e2413;
+  --warn-line: #56401f;
+  --shimmer-a: #1d222b;
+  --shimmer-b: #262d38;
+  --sea: #0d1118;
+  --land: #232a36;
+  --land-line: #364050;
+  --map-grat: #2a313d;
+  --mk-stroke: #0f1319;
+  --focus-ring: rgba(91, 134, 255, .3);
+  --land-on-fill: rgba(91, 134, 255, .26);
+}
+
+
+/* 主题切换按钮：放在标题旁，文字由 theme.js 写（当前配色 + 当前模式） */
+.themebtn {
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--dim);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 2px 10px;
+  margin-left: 8px;
+  cursor: pointer;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+.themebtn:hover { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
+[data-theme="dark"] body { -webkit-font-smoothing: auto; }
+[data-theme="dark"] img, [data-theme="dark"] .hcover img { opacity: .94; }
