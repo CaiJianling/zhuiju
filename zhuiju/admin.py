@@ -18,6 +18,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import secrets
 import string
 import threading
@@ -34,7 +35,15 @@ SESSION_TTL = 8 * 3600               # 登录后 8 小时内免口令
 MAX_FAILS = 8
 WINDOW = 15 * 60
 
+MIN_LEN = 6                        # 新口令至少多长：太短等于没有，空口令会直接让
+#                                   load() 又生成一个随机的，反而更迷惑
+MAX_LEN = 200
+
 _ALPHABET = (string.ascii_lowercase + string.digits).replace("l", "").replace("o", "")
+# 随机生成的口令长这样：12 位、小写字母加数字、不含被排除掉的 l 和 o。
+# 老配置文件里没有 password_is_temp 这个键时，用它猜一次当时是不是自动生成的，
+# 猜完就写回文件，之后不再变来变去。
+TEMP_HINT = re.compile(r"^[0-9a-km-np-z]{12}$")
 
 
 def _gen_password(n: int = 12) -> str:
@@ -57,7 +66,11 @@ def load(create: bool = True) -> dict:
         changed = True
     if not str(cfg.get("password") or "").strip():
         cfg["password"] = _gen_password()
+        cfg["password_is_temp"] = True
         cfg["_generated"] = True
+        changed = True
+    if "password_is_temp" not in cfg:
+        cfg["password_is_temp"] = bool(TEMP_HINT.match(str(cfg.get("password") or "")))
         changed = True
     if create and changed:
         save(cfg)
@@ -81,6 +94,37 @@ def password_expected() -> str:
     if env:
         return env
     return str(load().get("password") or "")
+
+
+def using_env_password() -> bool:
+    """环境变量会盖掉配置文件，页面上得说清楚，否则改了文件却登不进去很迷惑。"""
+    return bool(os.environ.get("ZHUIJU_ADMIN_PASSWORD"))
+
+
+def is_temp_password() -> bool:
+    """当前口令还是首次启动自动生成的那个吗。"""
+    if using_env_password():
+        return False
+    return bool(load().get("password_is_temp"))
+
+
+def password_error(new: str) -> str | None:
+    """新口令能不能用；可以就返回 None。"""
+    if len(new) < MIN_LEN:
+        return f"新口令至少 {MIN_LEN} 个字符"
+    if len(new) > MAX_LEN:
+        return f"新口令最多 {MAX_LEN} 个字符"
+    if new != new.strip():
+        return "新口令开头结尾不要留空格"
+    return None
+
+
+def set_password(new: str) -> None:
+    """把新口令写回配置文件，不用重启：password_expected() 每次登录都重新读文件。"""
+    cfg = load()
+    cfg["password"] = new
+    cfg["password_is_temp"] = False
+    save(cfg)
 
 
 def password_ok(got: str) -> bool:

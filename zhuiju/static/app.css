@@ -922,3 +922,49 @@ code {
 }
 .pager a:hover { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
 .logout { margin: 4px 0 30px; }
+
+.loginnote {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: #fffaf1;
+  border: 1px solid #f3e0bd;
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+/* 改口令表单：三个字段竖排，输入框吃满卡片宽度，比横排不容易看漏 */
+.pwform { display: flex; flex-direction: column; gap: 11px; }
+.pwform .admfield input { width: 100%; box-sizing: border-box; padding: 7px 10px; }
+.pwrow { display: flex; align-items: center; gap: 12px; margin-top: 2px; }
+.inline { display: inline; }
+.logout { display: flex; align-items: center; gap: 14px; }
+
+/* 世界地图：内嵌 SVG，等距圆柱投影 viewBox 0 0 360 180
+   不引 Leaflet / 不接瓦片服务——那要连境外 CDN，这台机器上不可靠，
+   而且会把访客 IP 泄露给第三方瓦片服务 */
+.mapwrap { margin-bottom: 10px; }
+.worldmap {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.worldmap .sea { fill: #eaf1f8; }
+.worldmap .land { fill: #dfe5ec; stroke: #c8d1dc; stroke-width: .35; }
+.worldmap .land-on { fill: rgba(59, 110, 245, .18); stroke: var(--brand); stroke-width: .35;
+  pointer-events: none; }
+.worldmap .grat line { stroke: #fff; stroke-width: .3; opacity: .55; pointer-events: none; }
+.worldmap .mk {
+  fill: var(--brand);
+  fill-opacity: .72;
+  stroke: #fff;
+  stroke-width: .7;
+  cursor: pointer;
+  transition: fill-opacity .12s;
+}
+.worldmap .mk:hover { fill-opacity: 1; fill: var(--brand-ink); }
+.geotbl td:first-child { max-width: 320px; overflow-wrap: anywhere; }
+.code { font-size: 11px; color: var(--dim); margin-left: 4px; }

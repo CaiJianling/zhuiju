@@ -24,6 +24,7 @@ from . import admin as admin_mod
 from . import autoupdate
 from . import catalog as catalog_mod
 from . import cloudsearch
+from . import geoip
 from . import hot as hot_mod
 from . import imgproxy
 from . import seo as seo_mod
@@ -115,6 +116,28 @@ def _first_row(h: dict, per: int = 12) -> dict:
     return h
 
 
+def _markers(by_geo: list) -> list:
+    """把"按归属地聚合"的结果换成地图上的点。
+
+    半径按 sqrt(次数) 缩放：面积正比于半径平方，视觉上才和数量成比例，
+    直接按次数线性放大半径会让大国点糊满整张图。
+    """
+    pts = geoip.points()
+    out = []
+    for row in by_geo:
+        iso = (row.get("iso") or "").strip()
+        p = pts.get(iso) if len(iso) == 2 else None
+        if not p or p.get("lat") is None:
+            continue
+        x, y = geoip.project(p["lon"], p["lat"])
+        n = row["n"]
+        out.append({"iso": iso, "name": p.get("name") or row.get("geo") or iso,
+                    "n": n, "ips": row["ips"], "x": round(x, 2), "y": round(y, 2),
+                    "r": round(2.2 + (n ** 0.5) * 0.9, 2)})
+    out.sort(key=lambda m: -m["n"])       # 大点画在下层，小点才不会被盖住
+    return out
+
+
 def _asset_ver() -> str:
     """静态资源版本号取最后修改时间：本地改完 css/js 刷新即生效，不必手动清缓存。"""
     try:
@@ -192,7 +215,8 @@ def create_app() -> Flask:
 
     def _login_page(error: str | None, code: int):
         return render_template("admin.html", authed=False, error=error,
-                               csrf=_csrf_token(), asset_v=_asset_ver()), code
+                               csrf=_csrf_token(), asset_v=_asset_ver(),
+                               temp=admin_mod.is_temp_password()), code
 
     def _record(kw: str, via: str, started: float, **num) -> None:
         """把一次查询落到 SQLite。IP 只在可信来源下取，见 admin.client_ip。"""
@@ -382,24 +406,66 @@ def create_app() -> Flask:
         """后台统计：口令通过才给看，全部数据来自 SQLite。"""
         if not _authed():
             return _login_page(None, 401)
+        # 用的还是首次启动随机生成的口令 -> 先领着去改成自己定的
+        # （环境变量指定口令时不算，那种部署方式本来就不打算改文件）
+        if admin_mod.is_temp_password():
+            return redirect(url_for("admin_password", first=1))
         flt = {k: (request.args.get(k) or "").strip()[:80]
-               for k in ("ip", "kw", "via", "day_from", "day_to")}
+               for k in ("ip", "kw", "via", "geo", "day_from", "day_to")}
         if flt["via"] not in stats_mod.VIA:
             flt["via"] = ""
         per = request.args.get("per", 50, type=int) or 50
         page = request.args.get("page", 1, type=int) or 1
         rows = stats_mod.list_queries(flt, page=page, per=per)
         agg = stats_mod.summary(flt)
+        geo_info = geoip.available()
+        markers = _markers(agg["by_geo"]) if geo_info["points"] else []
+        base = geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}, "error": "没有底图文件"}
+        drawn = {m["iso"] for m in markers if m["iso"] in base["by_iso"]}
         # 翻页链接要把当前筛选条件一起带上，否则点了下一页筛选就丢了
         keep = {k: v for k, v in flt.items() if v}
         keep["per"] = rows["per"]
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             asset_v=_asset_ver(), via_cn=VIA_CN, flt={**flt, "per": rows["per"]},
-            agg=agg, rows=rows,
+            agg=agg, rows=rows, temp=False,
+            geo=geo_info, map_paths=base["d"], map_active="".join(
+                base["by_iso"][i] for i in sorted(drawn)),
+            geo_warn=stats_mod.MIGRATE_ERROR,
+            markers=markers, offmap=[m for m in markers if m["iso"] not in base["by_iso"]],
+            notice="口令已更新，下次登录请用新口令" if request.args.get("set") else None,
             pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
             args_next={**keep, "page": rows["page"] + 1},
             args_prev={**keep, "page": rows["page"] - 1})
+
+    @app.route("/admin/password", methods=("GET", "POST"))
+    def admin_password():
+        """改口令：写在配置文件里，不用重启服务。"""
+        if not _authed():
+            return _login_page(None, 401)
+        first = bool(request.args.get("first"))
+        ctx = dict(csrf=_csrf_token(), asset_v=_asset_ver(), first=first,
+                   min_len=admin_mod.MIN_LEN,
+                   env_lock=admin_mod.using_env_password(),
+                   temp=admin_mod.is_temp_password())
+        if request.method == "GET":
+            return render_template("admin_password.html", error=None, **ctx)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        new = (request.form.get("password") or "")[:admin_mod.MAX_LEN + 20]
+        again = (request.form.get("password2") or "")[:admin_mod.MAX_LEN + 20]
+        err = None
+        # 当前口令必须验一次：改了文件才生效这件事，不该让一个过期会话替你做
+        if not admin_mod.password_ok(request.form.get("current") or ""):
+            err = "当前口令不对"
+        elif new != again:
+            err = "两次输入的新口令不一样"
+        else:
+            err = admin_mod.password_error(new)
+        if err:
+            return render_template("admin_password.html", error=err, **ctx), 400
+        admin_mod.set_password(new)
+        return redirect(url_for("admin", set=1))
 
     @app.post("/admin/login")
     def admin_login():
@@ -414,6 +480,9 @@ def create_app() -> Flask:
             session[admin_mod.SESSION_KEY] = time.time()
             session.permanent = True
             session["csrf"] = secrets.token_hex(16)     # 登录后换一枚，旧表单不能再复用
+            # 还在用首次生成的随机口令 -> 直接领去改，别让人先撞一次统计页
+            if admin_mod.is_temp_password():
+                return redirect(url_for("admin_password", first=1))
             return redirect(url_for("admin"))
         left = admin_mod.throttle.fail(who)
         return _login_page(f"口令不正确（还可尝试 {left} 次）", 401)

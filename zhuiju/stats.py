@@ -36,6 +36,9 @@ VIA = ("api", "seo", "cloud")     # 一次查询是从哪个入口来的
 _init_lock = threading.Lock()
 _ready = False
 _last_prune = [0.0]
+# 建表/补列出过什么问题要能被看到：create_app 里那层 try 是为了"统计库坏了也不挡住搜索"，
+# 但因此失败就会静默——之前列索引顺序写错，症状只是"归属地永远是空"，很难归因
+MIGRATE_ERROR = ""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS queries (
@@ -49,12 +52,21 @@ CREATE TABLE IF NOT EXISTS queries (
   hits          INTEGER,            -- 各源原始命中数之和
   sources_ok    INTEGER,
   sources_total INTEGER,
-  ms            REAL                -- 本次搜索实际等了多久
+  ms            REAL,               -- 本次搜索实际等了多久
+  iso           TEXT,               -- 归属地国家码；内网/保留为 ''
+  geo           TEXT                -- 归属地文案，直接存下来免得每次渲染再算
 );
 CREATE INDEX IF NOT EXISTS idx_queries_day ON queries(day);
 CREATE INDEX IF NOT EXISTS idx_queries_ip  ON queries(ip);
 CREATE INDEX IF NOT EXISTS idx_queries_kw  ON queries(kw);
 """
+
+# 老库没有这两列，加列要在建表之后单独补一次（CREATE TABLE IF NOT EXISTS 不会改已有表）
+GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"))
+# 归属地的索引必须等列真的存在之后再建：把它写在 SCHEMA 里，
+# 对已有库就是"给还不存在的列建索引" -> no such column，整个 ensure_schema 失败
+# （而且 create_app 把异常吞了，症状是"新克隆正常、老库升级后归属地一直是空"）
+GEO_INDEX = "CREATE INDEX IF NOT EXISTS idx_queries_iso ON queries(iso)"
 
 
 def connect() -> sqlite3.Connection:
@@ -68,21 +80,59 @@ def connect() -> sqlite3.Connection:
 
 
 def ensure_schema() -> None:
-    """建表；顺带按 KEEP_DAYS 清一次老数据（每小时最多清一次）。"""
-    global _ready
+    """建表、补列、按 KEEP_DAYS 清一次老数据（每小时最多清一次）。"""
+    global _ready, MIGRATE_ERROR
     with _init_lock:
         con = connect()
         try:
             con.executescript(SCHEMA)
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(queries)")}
+            for name, typ in GEO_COLUMNS:
+                if name not in cols:
+                    con.execute(f"ALTER TABLE queries ADD COLUMN {name} {typ}")
+            con.execute(GEO_INDEX)          # 列确定了存在之后才建它的索引
             con.commit()
             _ready = True
+            MIGRATE_ERROR = ""
             if time.time() - _last_prune[0] > 3600:
                 _last_prune[0] = time.time()
                 cutoff = (date.today() - timedelta(days=KEEP_DAYS)).isoformat()
                 con.execute("DELETE FROM queries WHERE day < ?", (cutoff,))
                 con.commit()
+        except sqlite3.Error as exc:
+            # 记下来给后台页面显示，别让它只表现为"归属地一直是空的"
+            MIGRATE_ERROR = f"{type(exc).__name__}: {str(exc)[:140]}"
+            raise
         finally:
             con.close()
+    backfill_geo()
+
+
+def backfill_geo(limit: int = 20000) -> int:
+    """给历史上没有归属地的记录补一次解析。
+
+    补列之前的行 iso 是 NULL（不是 ''，'' 表示"查过、是内网"），所以只挑 NULL 的。
+    归属地库没下载时直接返回，不做无谓的循环。
+    """
+    from . import geoip
+    if not geoip.available()["xdb"]:
+        return 0
+    con = connect()
+    try:
+        rows = con.execute("SELECT DISTINCT ip FROM queries WHERE iso IS NULL LIMIT ?",
+                           (limit,)).fetchall()
+        if not rows:
+            return 0
+        n = 0
+        for (ip,) in rows:
+            r = geoip.locate(ip)
+            con.execute("UPDATE queries SET iso = ?, geo = ? WHERE ip = ? AND iso IS NULL",
+                        (r["iso"] if r["kind"] == "public" else "", r["label"], ip))
+            n += 1
+        con.commit()
+        return n
+    finally:
+        con.close()
 
 
 def clean_ip(raw) -> str:
@@ -102,7 +152,8 @@ def clean_ip(raw) -> str:
 
 def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
            hits: int | None = None, sources_ok: int | None = None,
-           sources_total: int | None = None, ms: float | None = None) -> None:
+           sources_total: int | None = None, ms: float | None = None,
+           iso: str | None = None, geo: str | None = None) -> None:
     """记一次查询。统计绝不能把搜索本身搞挂，所以任何异常都吞掉。"""
     kw = (kw or "").strip()[:60]
     if len(kw) < 1:
@@ -110,16 +161,22 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
     try:
         if not _ready:
             ensure_schema()
+        if iso is None or geo is None:
+            from . import geoip
+            r = geoip.locate(clean_ip(ip) or "")
+            iso = r["iso"] if r["kind"] == "public" else ""
+            geo = r["label"]
         now = datetime.now()
         con = connect()
         try:
             con.execute(
                 "INSERT INTO queries (ts, day, ip, kw, via, results, hits,"
-                " sources_ok, sources_total, ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                " sources_ok, sources_total, ms, iso, geo)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (now.strftime("%Y-%m-%d %H:%M:%S"), now.date().isoformat(),
                  clean_ip(ip) or "unknown", kw, via if via in VIA else "api",
                  results, hits, sources_ok, sources_total,
-                 round(float(ms), 1) if ms is not None else None))
+                 round(float(ms), 1) if ms is not None else None, iso, geo))
             con.commit()
         finally:
             con.close()
@@ -132,6 +189,7 @@ _COLUMNS = {
     "ip": "ip = ?",
     "kw": "kw LIKE ?",
     "via": "via = ?",
+    "geo": "iso = ?",
     "day_from": "day >= ?",
     "day_to": "day <= ?",
 }
@@ -165,6 +223,16 @@ def _where(f: dict) -> tuple[str, list]:
                 continue
             conds.append(sql)
             params.append(val)
+        elif key == "geo":
+            # 国家码就两位大写字母；'--' 是页面上"内网/保留"那个桶的暗号
+            g = str(val).strip().upper()
+            if g == "--":
+                conds.append("(iso IS NULL OR iso = '')")
+            elif len(g) == 2 and g.isalpha():
+                conds.append(sql)
+                params.append(g)
+            else:
+                continue
         else:
             conds.append(sql)
             params.append(val)
@@ -236,6 +304,13 @@ def summary(f: dict, top: int = 15) -> dict:
         by_via = [dict(r) for r in con.execute(
             f"SELECT via, COUNT(*) AS n FROM queries WHERE {where} GROUP BY via",
             params)]
+        # 按归属地聚合：内网/保留的 iso 是空串，合到一行显示成"内网/保留地址"
+        by_geo = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(iso,'') AS iso, MAX(geo) AS geo, COUNT(*) AS n,"
+            f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT kw) AS kws,"
+            f" MAX(day) AS last_day"
+            f" FROM queries WHERE {where} GROUP BY COALESCE(iso,'')"
+            f" ORDER BY n DESC LIMIT ?", params + [int(top) + 12])]
     finally:
         con.close()
     days = [d["day"] for d in by_day if d.get("day")]
@@ -247,5 +322,5 @@ def summary(f: dict, top: int = 15) -> dict:
         "first_ts": agg["first_ts"], "last_ts": agg["last_ts"],
         "span": [min(days), max(days)] if days else [],
         "by_day": list(reversed(by_day)),      # 画趋势时按时间正序好看
-        "top_kw": top_kw, "top_ip": top_ip, "by_via": by_via,
+        "top_kw": top_kw, "top_ip": top_ip, "by_via": by_via, "by_geo": by_geo,
     }

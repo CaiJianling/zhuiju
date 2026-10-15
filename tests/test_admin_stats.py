@@ -7,7 +7,9 @@
 zhuiju/data/stats.db 和 admin.json —— 之前 check_autoupdate 写真实状态文件，
 正在读的站点就把测试造的假状态显示到页头上了。
 """
+import json
 import re
+import sqlite3
 import sys
 import tempfile
 from datetime import date, timedelta
@@ -304,6 +306,275 @@ check("退出后再进 /admin 又要口令了", client.get("/admin").status_code
 print("\n12) robots 不进后台")
 rb = client.get("/robots.txt").get_data(as_text=True)
 check("robots 里 Disallow 了 /admin", "Disallow: /admin" in rb, rb)
+
+print("\n13) 首次登录引导改口令")
+# 用一个看起来就像自动生成的口令（12 位、小写字母+数字、不含 l/o）
+GEN = "zx9k3mp7q2a4"
+admin_mod.save({"password": GEN, "secret_key": cfg["secret_key"], "password_is_temp": True})
+check("标记为临时口令时 is_temp_password 为真", admin_mod.is_temp_password())
+c2 = app_mod.create_app().test_client()
+r = c2.get("/admin")
+check("没登录仍是 401", r.status_code == 401)
+check("登录页提示这是自动生成的口令", "首次启动自动生成" in r.get_data(as_text=True))
+tok2 = re.search(r'name="csrf" value="([0-9a-f]+)"', r.get_data(as_text=True)).group(1)
+r = c2.post("/admin/login", data={"csrf": tok2, "password": GEN})
+check("用临时口令登录成功", r.status_code == 302, r.status_code)
+check("登录后先领着去改口令，而不是直接进统计页",
+      "/admin/password" in r.headers["Location"] and "first=1" in r.headers["Location"],
+      r.headers.get("Location"))
+r = c2.get("/admin")
+check("绕不开：硬访问 /admin 也会被引到改口令页",
+      r.status_code == 302 and "/admin/password" in r.headers["Location"])
+r = c2.get("/admin/password")
+h = r.get_data(as_text=True)
+check("改口令页 200", r.status_code == 200, r.status_code)
+check("有当前口令与两次新口令输入",
+      all(n in h for n in ('name="current"', 'name="password"', 'name="password2"')))
+check("提示保存即生效不用重启", "不用重启服务" in h)
+check("minlength 和后端下限一致", f'minlength="{admin_mod.MIN_LEN}"' in h)
+tok3 = re.search(r'name="csrf" value="([0-9a-f]+)"', h).group(1)
+
+r = c2.post("/admin/password", data={"csrf": tok3, "current": "bu-dui-de",
+                                     "password": "xin-mi-ma-1", "password2": "xin-mi-ma-1"})
+check("当前口令不对时拒绝（400）", r.status_code == 400 and "当前口令不对" in r.get_data(as_text=True))
+r = c2.post("/admin/password", data={"csrf": tok3, "current": GEN,
+                                     "password": "xin-mi-ma-1", "password2": "bu-yiyang"})
+check("两次不一致时拒绝", r.status_code == 400 and "两次输入" in r.get_data(as_text=True))
+r = c2.post("/admin/password", data={"csrf": tok3, "current": GEN,
+                                     "password": "abc", "password2": "abc"})
+check("太短被拒", r.status_code == 400 and f"至少 {admin_mod.MIN_LEN}" in r.get_data(as_text=True))
+r = c2.post("/admin/password", data={"csrf": tok3, "current": GEN,
+                                     "password": "  kong-ge  ", "password2": "  kong-ge  "})
+check("首尾带空格被拒", r.status_code == 400 and "空格" in r.get_data(as_text=True))
+check("被拒的那些口令都没写进文件", admin_mod.password_ok(GEN))
+
+NEW = "wo-xuan-de-mi-ma"
+r = c2.post("/admin/password", data={"csrf": tok3, "current": GEN,
+                                     "password": NEW, "password2": NEW})
+check("改成功后 302 回统计页", r.status_code == 302 and "set=1" in r.headers["Location"],
+      r.headers.get("Location"))
+check("新口令可用", admin_mod.password_ok(NEW))
+check("旧随机口令失效", not admin_mod.password_ok(GEN))
+check("文件里落的是新口令", NEW in admin_mod.CONFIG.read_text(encoding="utf-8"))
+check("不再算临时口令", not admin_mod.is_temp_password())
+r = c2.get("/admin")
+check("这次能真正进统计页了", r.status_code == 200, r.status_code)
+# 提示是随跳转地址带过去的，要按浏览器实际会请求的那个地址来验
+r = c2.get("/admin?set=1")
+check("页面上有口令已更新的提示", "口令已更新" in r.get_data(as_text=True), r.status_code)
+check("统计页上有改口令入口", "改口令" in r.get_data(as_text=True))
+
+print("\n14) 临时口令判定与环境变量互锁")
+admin_mod.save({"password": "wo-xuan-de-mi-ma", "secret_key": cfg["secret_key"]})   # 没有标记
+check("手写的口令（带短横）不会被当成自动生成", not admin_mod.is_temp_password())
+check("判定结果已写回文件，避免每次再猜",
+      "password_is_temp" in admin_mod.CONFIG.read_text(encoding="utf-8"))
+admin_mod.save({"password": GEN, "secret_key": cfg["secret_key"]})                # 没标记但像生成的
+check("老文件没有标记时按样式判一次", admin_mod.is_temp_password())
+os.environ["ZHUIJU_ADMIN_PASSWORD"] = "from-env-mi-ma"
+check("环境变量指定口令时不再催你改", not admin_mod.is_temp_password())
+check("页面能知道口令被环境变量锁住", admin_mod.using_env_password())
+r = c2.get("/admin/password")
+check("被环境变量锁住时页面上说明清楚", "ZHUIJU_ADMIN_PASSWORD" in r.get_data(as_text=True))
+del os.environ["ZHUIJU_ADMIN_PASSWORD"]
+admin_mod.save({"password": NEW, "secret_key": cfg["secret_key"], "password_is_temp": False})
+
+print("\n15) 归属地：写入、回填、筛选、聚合、投影")
+from zhuiju import geoip  # noqa: E402
+
+check("归属地库在这台机器上是可用的（若失败说明是环境问题不是代码问题）",
+      geoip.available()["xdb"] and geoip.available()["points"], geoip.available())
+pub = geoip.locate("8.8.8.8")
+check("公网 IP 给出国家与 ISO", pub["kind"] == "public" and pub["iso"] == "US", pub)
+check("坐标算出来且在美国范围内", 25 < pub["lat"] < 50 and -125 < pub["lon"] < -66, pub)
+check("国家码能查到对应坐标", geoip.points()["US"]["lat"] == pub["lat"])
+for ip, kind in (("127.0.0.1", "loopback"), ("10.1.2.3", "private"), ("192.168.9.9", "private"),
+                 ("172.16.5.5", "private"), ("169.254.1.1", "reserved"), ("100.64.1.2", "reserved"),
+                 ("239.1.1.1", "reserved"), ("203.0.113.5", "reserved"), ("192.0.2.1", "reserved"),
+                 ("198.18.0.1", "reserved"), ("乱写的", "invalid")):
+    got = geoip.locate(ip)["kind"]
+    check(f"{ip} 判为 {kind}", got == kind, got)
+check("内网类都不进地图（没有坐标）",
+      all(geoip.locate(ip)["lat"] is None for ip in
+          ("127.0.0.1", "10.1.2.3", "192.168.9.9", "100.64.1.2", "239.1.1.1")))
+check("中文标签没有多余空格", "  " not in geoip.locate("223.5.5.5")["label"],
+      repr(geoip.locate("223.5.5.5")["label"]))
+check("省级信息只给国内", "杭州" in geoip.locate("223.5.5.5")["label"]
+      and "California" not in geoip.locate("8.8.8.8")["label"])
+
+# record() 要顺手把归属地写进去——之前占位符比列数多一个，异常被吞了，
+# 结果是一条都没插入而页面看起来正常，所以这条必须钉住
+n0 = stats_mod.list_queries({})["total"]
+stats_mod.record("归属地入库", "8.8.8.8", via="api", results=3)
+row = stats_mod.list_queries({"kw": "归属地入库"})["items"][0]
+check("record 确实落库了一条", stats_mod.list_queries({})["total"] == n0 + 1)
+check("record 自动补了 ISO 与归属地文案",
+      row["iso"] == "US" and "United States" in (row["geo"] or ""), dict(row))
+stats_mod.record("内网入库", "192.168.1.7", via="api", results=1)
+row2 = stats_mod.list_queries({"kw": "内网入库"})["items"][0]
+check("内网 IP 的 iso 是空串而不是瞎猜国家", row2["iso"] == "", row2)
+check("内网 IP 有可读文案", row2["geo"] == "内网", row2)
+
+# 老库里补列之前的行是 NULL，backfill 要能填上
+con = stats_mod.connect()
+con.execute("INSERT INTO queries (ts, day, ip, kw, via, results, iso, geo)"
+            " VALUES ('2026-10-15 09:00:00', '2026-10-15', '1.1.1.1', '回填测试', 'api', 2, NULL, NULL)")
+con.commit()
+con.close()
+done = stats_mod.backfill_geo()
+row3 = stats_mod.list_queries({"kw": "回填测试"})["items"][0]
+check("backfill 把 NULL 的行补上了归属地", row3["iso"] == "AU" and done >= 1, (done, row3))
+check("回填过的行不会被反复重算", stats_mod.backfill_geo() == 0)
+
+bygeo = stats_mod.summary({})["by_geo"]
+buckets = {g["iso"]: g for g in bygeo}
+check("聚合里有美国与澳洲两个桶", {"US", "AU"} <= {g["iso"] for g in bygeo},
+      [g["iso"] for g in bygeo])
+empty_bucket = [g for g in bygeo if not g["iso"]]
+check("内网/保留/非法合到一个空 ISO 桶", len(empty_bucket) == 1 and empty_bucket[0]["n"] >= 1,
+      empty_bucket)
+check("桶里的次数与 IP 数都聚合上了", all(g["n"] >= g["ips"] or g["ips"] == 0 for g in bygeo),
+      [(g["n"], g["ips"]) for g in bygeo][:4])
+check("聚合按次数倒序", [g["n"] for g in bygeo] == sorted([g["n"] for g in bygeo], reverse=True),
+      [g["n"] for g in bygeo])
+only_us = stats_mod.list_queries({"geo": "US"})
+check("按国家码筛选", all(r["iso"] == "US" for r in only_us["items"]) and only_us["total"] >= 1,
+      only_us["total"])
+only_in = stats_mod.list_queries({"geo": "--"})
+check("'--' 能筛内网/保留", only_in["total"] >= 1 and
+      all(not r["iso"] for r in only_in["items"]), only_in["total"])
+check("认不出的国家码不参与过滤", stats_mod.list_queries({"geo": "XXYY"})["total"]
+      == stats_mod.list_queries({})["total"])
+
+from zhuiju.app import _markers  # noqa: E402
+ms = _markers([{"iso": "CN", "geo": "中国", "n": 12, "ips": 3, "kws": 2, "last_day": "x"},
+               {"iso": "", "geo": "内网", "n": 99, "ips": 2, "kws": 1, "last_day": "x"},
+               {"iso": "US", "geo": "United States", "n": 3, "ips": 1, "kws": 1, "last_day": "x"}])
+check("地图点位跳过内网", [m["iso"] for m in ms] == ["CN", "US"], [m["iso"] for m in ms])
+cn = ms[0]
+check("投影用等距圆柱：x=经度+180, y=90-纬度",
+      abs(cn["x"] - (geoip.points()["CN"]["lon"] + 180)) < 0.02
+      and abs(cn["y"] - (90 - geoip.points()["CN"]["lat"])) < 0.02, cn)
+check("点的大小按 sqrt(次数) 缩放", ms[0]["r"] / ms[1]["r"] < (12 / 3), (ms[0]["r"], ms[1]["r"]))
+check("大点在前面（先画、不被小点盖住）", [m["n"] for m in ms] == sorted([m["n"] for m in ms], reverse=True))
+
+bm = geoip.basemap()
+check("底图有轮廓路径且不是空串", len(bm["d"]) > 10000, len(bm["d"]))
+check("底图按国家码索引了轮廓", "CN" in bm["by_iso"] and "US" in bm["by_iso"])
+check("底图路径坐标在 viewBox 内", all(-1 < v < 361 for v in
+      [float(x.split(",")[0]) for x in bm["by_iso"]["CN"][1:].split("Z")[0].split("L")[:200]]))
+check("底图大小适合内嵌（<400KB）", len(bm["d"]) < 400_000, len(bm["d"]) // 1024)
+
+print("\n16) 缺数据文件时的降级")
+_real_geo_paths = (geoip.XDB_V4, geoip.POINTS, geoip.BASEMAP, geoip.DATA)
+geoip.DATA = TMP
+geoip.XDB_V4 = TMP / "nope.xdb"
+geoip.POINTS = TMP / "nope.json"
+geoip.BASEMAP = TMP / "nope.geo.json"
+geoip.reset()
+try:
+    av = geoip.available()
+    check("缺库时 available 标出来", not av["xdb"] and not av["ready"], av)
+    r = geoip.locate("8.8.8.8")
+    check("缺库时不抛异常，标 nolib", r["kind"] == "nolib" and "未下载" in r["label"], r)
+    check("缺库时内网判定仍然照常（不依赖库）", geoip.locate("10.0.0.1")["kind"] == "private")
+    check("缺坐标表时 points() 返回空 dict", geoip.points() == {})
+    check("缺底图时 basemap 给出说明而不是崩", "error" in geoip.basemap(), geoip.basemap().get("error"))
+    n1 = stats_mod.list_queries({})["total"]
+    stats_mod.record("缺库时仍能记", "8.8.8.8", via="api", results=1)
+    check("归属地库缺失不影响统计写入", stats_mod.list_queries({})["total"] == n1 + 1)
+    rr = stats_mod.list_queries({"kw": "缺库时仍能记"})["items"][0]
+    check("缺库时 iso 留空而不是编造", rr["iso"] in ("", None), rr)
+finally:
+    (geoip.XDB_V4, geoip.POINTS, geoip.BASEMAP, geoip.DATA) = _real_geo_paths
+    geoip.reset()
+check("还原后归属地又可用了", geoip.available()["ready"])
+
+print("\n17) 登录后的统计页真的画出地图来（整条路径）")
+# 造几个公网来源：record 直接写，省掉 HTTP 层，但渲染走的仍是 app.py + 模板
+for ip, kw in (("223.5.5.5", "庆余年"), ("8.8.8.8", "流浪地球"), ("1.1.1.1", "繁花"),
+               ("91.108.4.11", "灌篮高手"), ("3.0.0.0", "奥本海默"), ("192.168.1.50", "庆余年"),
+               ("127.0.0.1", "繁花")):
+    stats_mod.record(kw, ip, via="api", results=5, hits=20, sources_ok=10,
+                     sources_total=10, ms=1000)
+c3 = app_mod.create_app().test_client()
+r = c3.get("/admin")
+tok3 = re.search(r'name="csrf" value="([0-9a-f]+)"', r.get_data(as_text=True)).group(1)
+r = c3.post("/admin/login", data={"csrf": tok3, "password": NEW})
+r = c3.get("/admin")
+dash = r.get_data(as_text=True)
+check("登录后 200", r.status_code == 200, r.status_code)
+check("有地图画布", 'class="worldmap"' in dash)
+svg = re.search(r'<svg class="worldmap" viewBox="0 0 360 180"[^>]*>(.*?)</svg>', dash, re.S)
+check("SVG 用 viewBox 0 0 360 180（投影一致才对得上）", bool(svg))
+circles = re.findall(r'<circle cx="([\d.\-]+)" cy="([\d.\-]+)" r="([\d.]+)"', dash or "")
+check("画出了 5 个公网点位（内网与本机不画）", len(circles) == 5, (len(circles), circles))
+if svg:
+    inside = all(0 <= float(cx) <= 360 and 0 <= float(cy) <= 180 for cx, cy, _ in circles)
+    check("所有点位都落在 viewBox 内", inside, circles)
+check("有归属地列", "<th>归属地</th>" in dash)
+check("明细里出现了具体归属地", "中国 北京市" in dash or "中国 浙江省杭州市" in dash
+      or "United States" in dash, re.findall(r"\?geo=([A-Z]{2})", dash)[:6])
+check("国家行可点筛选", len(re.findall(r'\?geo=[A-Z]{2}', dash)) >= 5,
+      re.findall(r'\?geo=([A-Z]{2})', dash))
+check("内网单独成一行而不是编造国家", "内网 / 保留地址" in dash)
+check("说明了内网不上图的原理", "没有地理归属" in dash)
+check("底图轮廓被描色的只有存在记录的国家",
+      'class="land-on"' in dash and dash.count('class="land-on"') == 1)
+r = c3.get("/admin?geo=CN")
+d2 = r.get_data(as_text=True)
+check("按国家筛选后只看得到该国的明细",
+      r.status_code == 200 and "223.5.5.5" in d2 and "8.8.8.8" not in d2.split("明细")[-1])
+r = c3.get("/admin?geo=--")
+d3 = r.get_data(as_text=True)
+check("筛内网能看到内网行", r.status_code == 200
+      and ("192.168.1.50" in d3 or "127.0.0.1" in d3))
+check("只看内网时地图上一个点都没有", len(re.findall(r"<circle", d3)) == 0,
+      len(re.findall(r"<circle", d3)))
+
+print("\n18) 老库升级：补列 + 建索引 + 回填，一步都不能静默失败")
+# 曾经的真实故障：idx_queries_iso 写在 SCHEMA 里，对已有库就是"给还不存在的列建索引"，
+# ensure_schema 抛错、create_app 的 try 把它吞掉，症状只是"归属地永远是空"。
+old = TMP / "old.db"
+oc = sqlite3.connect(str(old))
+oc.execute("CREATE TABLE queries (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,"
+           " day TEXT NOT NULL, ip TEXT NOT NULL, kw TEXT NOT NULL, via TEXT NOT NULL,"
+           " results INTEGER, hits INTEGER, sources_ok INTEGER, sources_total INTEGER, ms REAL)")
+oc.executemany("INSERT INTO queries (ts, day, ip, kw, via, results) VALUES (?,?,?,?,?,?)",
+               [("2026-10-15 08:00:0%d" % i, "2026-10-15", ip, f"老记录{i}", "api", 3)
+                for i, ip in enumerate(["223.5.5.5", "8.8.8.8", "192.168.1.9", "1.1.1.1"])])
+oc.commit()
+oc.close()
+_real_db2, stats_mod._ready = stats_mod.DB, False
+stats_mod.DB = old
+stats_mod.MIGRATE_ERROR = ""
+try:
+    cols_before = [r[1] for r in sqlite3.connect(str(old)).execute("PRAGMA table_info(queries)")]
+    check("老库确实没有 iso/geo 列", "iso" not in cols_before and "geo" not in cols_before, cols_before)
+    stats_mod.ensure_schema()
+    con = sqlite3.connect(str(old))
+    con.row_factory = sqlite3.Row
+    cols_after = [r[1] for r in con.execute("PRAGMA table_info(queries)")]
+    check("升级后补上了 iso/geo", "iso" in cols_after and "geo" in cols_after, cols_after)
+    check("升级没有报错", stats_mod.MIGRATE_ERROR == "", stats_mod.MIGRATE_ERROR)
+    idx = [r[1] for r in con.execute("PRAGMA index_list(queries)")]
+    check("iso 的索引也建上了", "idx_queries_iso" in idx, idx)
+    nulls = con.execute("SELECT COUNT(*) FROM queries WHERE iso IS NULL").fetchone()[0]
+    check("历史行被回填，没留 NULL", nulls == 0, nulls)
+    filled = {r["ip"]: (r["iso"], r["geo"]) for r in
+              con.execute("SELECT ip, iso, geo FROM queries ORDER BY id")}
+    con.close()
+    check("回填出来的归属地是对的", filled["223.5.5.5"][0] == "CN"
+          and filled["8.8.8.8"][0] == "US" and filled["1.1.1.1"][0] == "AU", filled)
+    check("内网那行回填成空 iso + 可读文案",
+          filled["192.168.1.9"][0] == "" and filled["192.168.1.9"][1] == "内网", filled)
+    check("升级后按国家筛选能查到历史数据",
+          stats_mod.list_queries({"geo": "CN"})["total"] == 1,
+          stats_mod.list_queries({"geo": "CN"})["total"])
+finally:
+    stats_mod.DB, stats_mod._ready = _real_db2, False
+    stats_mod.MIGRATE_ERROR = ""
+    stats_mod.ensure_schema()
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

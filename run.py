@@ -79,9 +79,10 @@ def main() -> int:
     if cfg.get("_generated"):
         # 口令是第一次启动时随机生成的，只在生成这一次打印（和 Flask 的调试 PIN 一个道理）
         print(f"    已在 {admin_mod.CONFIG} 生成口令文件，本次口令： {cfg['password']}")
-        print("    想换成自己知道的：编辑该文件的 password 字段，重启服务生效")
+        print("    用这个口令登录后会直接让你改成自己定的，改完立刻生效、不用重启")
     else:
-        print(f"    口令在 {admin_mod.CONFIG} 的 password 字段，改完重启生效")
+        print(f"    口令在 {admin_mod.CONFIG} 的 password 字段；"
+              "登录后也可以点页面右上角的「改口令」直接改，保存即生效")
     threading.Thread(target=_open, args=(url, args.host, args.port), daemon=True).start()
     app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
     return 0

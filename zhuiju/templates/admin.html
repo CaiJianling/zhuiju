@@ -27,6 +27,11 @@
   <section class="loginbox">
     <h2>输入口令</h2>
     {% if error %}<p class="loginerr">{{ error }}</p>{% endif %}
+    {% if temp %}
+    <p class="loginnote">当前口令是首次启动自动生成的随机串（就在
+      zhuiju/data/admin.json 里）。登录成功后会直接领你去改成自己定的，不用手动编辑文件、
+      也不用重启服务。</p>
+    {% endif %}
     <form method="post" action="{{ url_for('admin_login') }}" class="loginform">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <label class="admfield"><span>口令</span>
@@ -34,11 +39,16 @@
       <button class="gobtn" type="submit">进入</button>
     </form>
     <p class="atip">口令写在 <code>zhuiju/data/admin.json</code> 的 <code>password</code> 字段，
-      随时改成你自己知道的，改完重启服务生效；也可用环境变量
+      登录后也能在页面上直接改；也可用环境变量
       <code>ZHUIJU_ADMIN_PASSWORD</code> 覆盖，避免明文落盘。</p>
   </section>
 
 {% else %}
+  {% if notice %}<p class="loginnote">{{ notice }}</p>{% endif %}
+  {% if geo_warn %}
+  <p class="loginerr">统计库的结构没能升级，归属地暂时不会写入：{{ geo_warn }}
+    <br>搜索不受影响；重启服务会再试一次。</p>
+  {% endif %}
   <form class="admform" method="get" action="{{ url_for('admin') }}">
     <label class="admfield"><span>起始日期</span>
       <input type="date" name="day_from" value="{{ flt.day_from }}"></label>
@@ -46,6 +56,8 @@
       <input type="date" name="day_to" value="{{ flt.day_to }}"></label>
     <label class="admfield"><span>IP</span>
       <input type="text" name="ip" value="{{ flt.ip }}" placeholder="192.168.1.20"></label>
+    <label class="admfield"><span>国家码</span>
+      <input type="text" name="geo" value="{{ flt.geo }}" placeholder="CN / US / --（内网）" size="14"></label>
     <label class="admfield"><span>关键词包含</span>
       <input type="text" name="kw" value="{{ flt.kw }}" placeholder="庆余年"></label>
     <label class="admfield"><span>入口</span>
@@ -76,6 +88,66 @@
   {% if agg.first_ts %}
   <p class="rangehint">条件内时间跨度：{{ agg.first_ts }} ～ {{ agg.last_ts }}</p>
   {% endif %}
+
+  <section class="asect">
+    <h2>IP 归属地地图
+      <span class="asub">{{ markers | length }} 个地点 · {{ agg.count }} 次查询</span></h2>
+    {% if not geo.ready %}
+    <p class="empty">还没下载归属地库，所以地图和归属地列都是空的。跑一次就有（约 14MB，走 gh-proxy 镜像）：
+      <code>.venv\Scripts\python.exe tools\fetch_geo.py</code></p>
+    {% elif not map_paths %}
+    <p class="empty">底图文件读不出来：{{ geo }}</p>
+    {% else %}
+    <div class="mapwrap">
+      <svg class="worldmap" viewBox="0 0 360 180" role="img"
+           aria-label="按国家标注的 IP 归属地世界地图" preserveAspectRatio="xMidYMid meet">
+        <rect x="0" y="0" width="360" height="180" class="sea"></rect>
+        <path d="{{ map_paths }}" class="land"></path>
+        {% if map_active %}<path d="{{ map_active }}" class="land-on"></path>{% endif %}
+        <g class="grat">
+          {% for gx in range(30, 360, 30) %}<line x1="{{ gx }}" y1="0" x2="{{ gx }}" y2="180"></line>{% endfor %}
+          {% for gy in range(30, 180, 30) %}<line x1="0" y1="{{ gy }}" x2="360" y2="{{ gy }}"></line>{% endfor %}
+        </g>
+        {% for m in markers %}
+        <a href="{{ url_for('admin', geo=m.iso) }}">
+          <title>{{ m.name }} · {{ m.n }} 次 · {{ m.ips }} 个 IP</title>
+          <circle cx="{{ m.x }}" cy="{{ m.y }}" r="{{ m.r }}" class="mk"></circle>
+        </a>
+        {% endfor %}
+      </svg>
+      {% if offmap %}
+      <p class="atip">底图（110m 简版）没有这些地方的轮廓，只在下面表格里计数：
+        {% for m in offmap %}{{ m.name }}{% if not loop.last %}、{% endif %}{% endfor %}。
+        点开表格行或图例可以按国家筛。</p>
+      {% endif %}
+      <p class="atip">点地图上的圆点 = 只看这个国家的查询。内网 / 保留地址（127.x、10.x、192.168.x、
+        169.254.x、100.64/10 等）没有地理归属，不会出现在图上，只能在下面的"归属地"表里看"内网/保留"那一行。</p>
+    </div>
+    {% endif %}
+
+    {% if agg.by_geo %}
+    <table class="table geotbl">
+      <thead><tr><th>归属地</th><th>次数</th><th>IP</th><th>关键词</th><th>最近</th></tr></thead>
+      <tbody>
+      {% for g in agg.by_geo %}
+        <tr>
+          <td>
+            {%- if g.iso | length == 2 %}
+              <a href="{{ url_for('admin', geo=g.iso) }}">{{ g.geo or g.iso }}</a>
+              <span class="dim">{{ g.iso }}</span>
+            {%- else %}
+              {# 这一桶混了内网/本机/保留/非法，桶名用统称；明细行仍显示各自准确的说法 #}
+              <a href="{{ url_for('admin', geo='--') }}">内网 / 保留地址</a>
+            {%- endif %}
+          </td>
+          <td class="num">{{ g.n }}</td><td class="num">{{ g.ips }}</td>
+          <td class="num">{{ g.kws }}</td><td class="dim">{{ g.last_day }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
 
   <section class="asect">
     <h2>按天</h2>
@@ -137,13 +209,20 @@
     <h2>明细 <span class="asub">第 {{ rows.page }} / {{ rows.pages }} 页 · 共 {{ rows.total }} 条</span></h2>
     {% if rows['items'] %}
     <table class="table">
-      <thead><tr><th>时间</th><th>IP</th><th>关键词</th><th>入口</th>
+      <thead><tr><th>时间</th><th>IP</th><th>归属地</th><th>关键词</th><th>入口</th>
         <th>结果</th><th>原始命中</th><th>可用源</th><th>耗时 ms</th></tr></thead>
       <tbody>
       {% for r in rows['items'] %}
         <tr>
           <td class="dim">{{ r.ts }}</td>
           <td><a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a></td>
+          <td>
+            {%- if r.iso | default('') | length == 2 %}
+              <a href="{{ url_for('admin', geo=r.iso) }}">{{ r.geo }}</a>
+            {%- else %}
+              <span class="dim">{{ r.geo or '未解析' }}</span>
+            {%- endif -%}
+          </td>
           <td><a href="{{ url_for('admin', kw=r.kw) }}">{{ r.kw }}</a></td>
           <td>{{ via_cn.get(r.via, r.via) }}</td>
           <td class="num {{ 'zero' if not r.results }}">{{ r.results if r.results is not none else '—' }}</td>
@@ -164,10 +243,13 @@
     {% endif %}
   </section>
 
-  <form method="post" action="{{ url_for('admin_logout') }}" class="logout">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button type="submit" class="reset">退出登录</button>
-  </form>
+  <div class="logout">
+    <a class="reset" href="{{ url_for('admin_password') }}">改口令</a>
+    <form method="post" action="{{ url_for('admin_logout') }}" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="reset">退出登录</button>
+    </form>
+  </div>
 {% endif %}
 </main>
 </body>

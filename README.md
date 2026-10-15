@@ -18,8 +18,9 @@ python -m venv .venv
 
 打开 <http://127.0.0.1:5000/> 。想换端口：`set ZHUIJU_PORT=8000 && .venv\Scripts\python.exe run.py`。
 
-后台统计在 <http://127.0.0.1:5000/admin>，口令第一次启动时随机生成、打印在控制台，
-写在 `zhuiju/data/admin.json` 里，随时可以改成自己知道的（详见"后台统计"一节）。
+后台统计在 <http://127.0.0.1:5000/admin>。**第一次进去会直接领你把口令改成自己定的**
+（那时用的还是首次启动随机生成、只在控制台打印过一次的那个），保存即写回
+`zhuiju/data/admin.json` 并生效，不用重启。详见"后台统计"一节。
 
 ## 四个标签页
 
@@ -94,7 +95,8 @@ python -m venv .venv
 :: 离线：图片代理的防盗链映射与内网拦截边界
 .venv\Scripts\python.exe tests\test_imgproxy.py
 
-:: 离线：后台统计（SQLite 写入/过滤/分页/聚合）与口令登录、限流、注入边界
+:: 离线：后台统计（SQLite 写入/过滤/分页/聚合）、IP 归属地与地图点位、
+::         口令登录、首次改口令、限流、注入边界、老库升级回填
 .venv\Scripts\python.exe tests\test_admin_stats.py
 
 :: 活体：自己起一个临时端口的服务，验证路由 / 网盘查询 / 未回归，跑完自动关闭
@@ -108,7 +110,7 @@ python -m venv .venv
 
 ```
 zhuiju/
-  app.py            Flask 路由：/、/s/<关键词>、/admin、/api/search|catalog|deeplinks|cloud|detail|health|hot|refresh、/img、/robots.txt、/sitemap.xml
+  app.py            Flask 路由：/、/s/<关键词>、/admin、/admin/password、/api/search|catalog|deeplinks|cloud|detail|health|hot|refresh、/img、/robots.txt、/sitemap.xml
   search.py         并发检索、maccms 响应归一化、跨源片名合并与分层、播放线路解析
   catalog.py        目录检索与直达链接拼装（按文件 mtime 缓存，改数据不用重启）
   cloudsearch.py    网盘 / 磁力站结果页抓取与解析（只收同域、带逐站状态）
@@ -117,7 +119,8 @@ zhuiju/
   imgproxy.py       海报代理（补防盗链 Referer、忽略自签证书、拦内网）
   autoupdate.py     访问时触发的后台更新（STEPS 唯一清单、逻辑日、锁文件 + 子进程 PID 判活、进度）
   stats.py          查询统计落 SQLite（过滤/分页/聚合走参数化 SQL；写失败不影响搜索）
-  admin.py          后台口令配置读写、口令校验、登录失败限流、反代下取真实客户端 IP
+  geoip.py          离线 IP 归属地：纯标准库读 ip2region xdb + 国家轮廓转内嵌 SVG 路径
+  admin.py          后台口令配置读写、口令校验、首次登录判断、登录失败限流、反代下取真实客户端 IP
   sources.py        检索源配置读写
   data/
     sources.json    实测可用的检索接口（含站内搜索模板、首页是否可浏览）
@@ -126,9 +129,9 @@ zhuiju/
     refresh_state.json    最近一次自动更新的结果（页头新鲜度就来自这里）
     refresh_progress.json 后台更新的实时进度（页头进度条与步骤胶囊）
     stats.db        查询统计库（含 -wal/-shm 侧文件；本机隐私，不进版本库）
-    admin.json      后台口令与会话签名密钥（明文口令，不进版本库）
+    admin.json      后台口令、会话签名密钥、是否还是首次生成的随机口令（明文口令，不进版本库）
     cache/hot.json  猜你想搜缓存   cache/mirror_used.json  这次上游数据实际走的哪个镜像
-  templates/index.html, admin.html
+  templates/index.html, admin.html, admin_password.html
   static/app.css, app.js
 tools/                  重新采数据的维护脚本，日常使用不需要跑
   build_catalog.py      上游 resources.json -> 本地目录（requests 走 gh-proxy 镜像链，记下实际用的源）
@@ -143,6 +146,7 @@ tools/                  重新采数据的维护脚本，日常使用不需要�
   harvest_more_apis.py  从全部 TVBox 配置（含中文域名 IDN）补抽候选接口并实测
   add_sources.py        把实测通过的新接口并入 sources.json
   refresh.py            一次完整更新的总入口（本周期已完整跑过则跳过；--skip-deep 的快版不算跑完）
+  fetch_geo.py          下载 IP 归属地库与国家轮廓底图，算好 country_points.json（走 gh-proxy）
   restart.py            确定性地重启本地站点（先杀干净旧进程，再验证新路由已生效）
   check_autoupdate.py   验收访问触发的异步更新（用桩，不真跑几分钟；七个场景）
 tests/
@@ -225,18 +229,30 @@ refresh.bat         一键手动更新
 
 ### 口令在哪改
 
+**第一次登录会自动带你去改口令。** 文件不存在时首次启动会随机生成一个 12 位口令（打印在控制台一次），
+并在 `admin.json` 里标 `"password_is_temp": true`；用这个随机口令登录成功后，不会直接进统计页，
+而是跳到「先设置一个你自己知道的口令」，输入当前口令 + 新口令两遍，**保存即写回配置文件、立刻生效，
+不用重启服务**。改完标记变 `false`，以后登录就直奔统计页；页面上也留着「改口令」入口随时可以再改。
+
 `zhuiju/data/admin.json`：
 
 ```json
 {
-  "password": "你自己改成知道的口令",
-  "secret_key": "随机 64 位串，用来签登录 cookie"
+  "password": "你自己定的口令",
+  "secret_key": "随机 64 位串，用来签登录 cookie",
+  "password_is_temp": false
 }
 ```
 
-文件不存在时第一次启动会自动生成（`password` 随机），**并在启动控制台打印这一次**；
-之后想换，直接编辑 `password` 再重启服务即可，不影响已登录的会话。
-也可以用环境变量 `ZHUIJU_ADMIN_PASSWORD` 覆盖，让明文不落盘；`ZHUIJU_SECRET_KEY` 同理。
+想手动改也行：编辑 `password` 再重启（`secret_key` 那行别动，动了所有已登录会话都失效）。
+老配置文件里没有 `password_is_temp` 这个键时，会按口令长得像不像随机生成的判断一次并写回文件。
+
+新口令最少 6 个字符、不能首尾带空格；当前口令必须验对才能改（过期会话不能替你改），
+两次输入不一致、太短、为空都会被拒且不会写进文件——空口令会让 `load()` 又生成一个随机的，反而更迷惑。
+
+也可以用环境变量 `ZHUIJU_ADMIN_PASSWORD` 覆盖，让明文不落盘；这种方式下页面**不会**催你改口令
+（本来就打算靠环境变量部署的人，改文件不会生效），改口令页会明确提示当前口令由环境变量指定。
+`ZHUIJU_SECRET_KEY` 同理。
 
 这个文件和统计库一样进了 `.gitignore`——里面是明文口令，不该提交。
 
@@ -253,6 +269,54 @@ refresh.bat         一键手动更新
 | `results` / `hits` | 合并去重后的条数 / 各源原始命中之和 |
 | `sources_ok` / `sources_total` | 本次有多少源真的返回了 |
 | `ms` | 这次等了多久 |
+| `iso` / `geo` | 归属地国家码与文案；内网/保留地址的 `iso` 是空串 |
+
+### IP 归属地与世界地图
+
+**要先下数据**（约 14MB，走 gh-proxy 镜像，一次性的）：
+
+```bat
+.venv\Scripts\python.exe tools\fetch_geo.py
+```
+
+没下也不影响使用：归属地列会显示"未下载归属地库"，地图那一块给出上面这条命令。
+
+| 文件（都在 `data/geo/`，已 gitignore） | 大小 | 用途 |
+|---|---|---|
+| `ip2region_v4.xdb` | 10.6MB | IP → `国家\|省\|市\|ISP\|ISO`，55 万网段 |
+| `ne_110m.geo.json` | 0.8MB | 画地图的国家轮廓 |
+| `ne_50m.geo.json` | 2.9MB | 只用来算国家坐标（110m 缺新加坡、马耳他等小城邦） |
+| `country_points.json` | 几十 KB | 算好的 ISO → 经纬度，246 个国家 |
+
+解析完全**离线**、只用标准库：实测清华源上没有 `ip2region` 这个包，而 xdb 格式本身很简单，
+自己读（`zhuiju/geoip.py`）反而少一个依赖，也不用把访客 IP 交给任何第三方接口。
+查询算法对着 20 个已知 IP 验过（1.1.1.1→AU、223.5.5.5→中国浙江杭州、8.8.8.8→US 等）。
+`tools/fetch_geo.py` 每次跑完还会报告"库里的国家码有几个在坐标表里找不到"，当前是 0。
+
+地图是**内嵌 SVG**，不引 Leaflet、不接瓦片服务：那要连境外 CDN（这台机器上不可靠），
+而且等于把访客 IP 泄露给第三方。投影用等距圆柱（`viewBox="0 0 360 180"`，`x=经度+180`、
+`y=90-纬度`），轮廓路径来自 110m（约 115KB，精度取 0.1°，肉眼看不出但体积小一半），
+**有查询记录的国家会被单独描色**，圆点半径按 `sqrt(次数)` 缩放（面积才与数量成正比，
+线性放大半径会让大国糊满整张图）。点圆点或表格里的国家名 = 只看这个国家的查询。
+
+国家坐标按"最大那个多边形的面积加权形心"算，不是所有点取平均：俄罗斯、美国、澳大利亚
+这种带飞地/跨半球的国家，平均点会被拖到海上去。踩过的坑：澳属外部领地（Ashmore and Cartier
+Islands 之类）的 `ISO_A2_EH` 也是 `AU`，按写入顺序会让澳大利亚的点落到海里那块小岛上——
+所以同一个国家码只保留**面积最大**的那个要素，结果与遍历顺序无关。
+
+不属于公网的地址**不上图**，也不去查库，按语义分开标注：`本机`（127.x/::1）、
+`内网`（10.x、192.168.x、172.16-31.x）、`保留地址`（组播、链路本地、CGNAT 100.64/10、
+基准测试 198.18/15，以及 203.0.113.x 这类文档用例段）。这里有个容易忽略的细节：
+Python 3.13 把文档用例段也算进 `is_private`，若先判 private 就会把 TEST-NET 说成"内网"，
+所以判定顺序是先排除保留段、再判内网。
+
+统计页因此默认只会有"本机/内网"一行——服务只听 127.0.0.1 时本来就该如此，
+地图上有国家分布的前提是 `--host 0.0.0.0` 或挂 nginx 反代（后者才会认真读 X-Forwarded-For）。
+
+页面还会多一块「按归属地」表（国家 / 次数 / 独立 IP / 关键词数 / 最近日期），
+筛选表单多一个「国家码」输入框，填 `--` 就是筛内网与保留地址。
+老库升级时会自动补 `iso`/`geo` 两列并把历史记录回填一遍，之后不再重算。
+
 
 页面分六块：汇总卡片（查询次数、独立 IP、独立关键词、零结果及占比、平均可用源、平均耗时）、
 按天（点某天=把范围收到那天）、热门关键词、活跃 IP（点 IP=只看这个 IP）、明细表、分页。
@@ -278,6 +342,10 @@ refresh.bat         一键手动更新
 - **保留期**：默认只留 365 天，更早的记录在初始化时清掉（每小时最多清一次），
   环境变量 `ZHUIJU_STATS_KEEP_DAYS` 可改。
 - **不进搜索引擎**：`/robots.txt` 里 `Disallow: /admin`，页面本身也带 `noindex`。
+- **统计写入失败不影响搜索**：`record()` 整个包在 try 里。但这也意味着"库结构升级失败"
+  会表现为"归属地一直是空的"而没有任何提示，所以 `ensure_schema()` 的出错原因记在
+  `stats.MIGRATE_ERROR` 里，统计页顶部会直接显示出来。
+- **归属地不联网**：解析全在本地 xdb 里完成，不会把访客 IP 发给任何第三方接口或地图瓦片服务。
 - **公网暴露前请先想清楚**：这个口令是给"同事乱点"设的门槛，不是严格的多人账号体系。
   要放到能被公网访问的地址，至少得配合 HTTPS，并考虑在 nginx 上再加一层基本认证。
 
