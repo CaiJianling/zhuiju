@@ -1,0 +1,124 @@
+{
+  "sources": [
+    {
+      "id": "huya",
+      "name": "虎牙资源",
+      "kind": "maccms",
+      "api": "https://www.huyaapi.com/api.php/provide/vod/from/hym3u8",
+      "params": {},
+      "root": "https://www.huyaapi.com/",
+      "search_template": null,
+      "note": "TVBox 配置『老刘备』内实测可用",
+      "enabled": true,
+      "browsable": false
+    },
+    {
+      "id": "hhzy",
+      "name": "火狐资源",
+      "kind": "maccms",
+      "api": "https://hhzyapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://hhzyapi.com/",
+      "search_template": null,
+      "note": "TVBox 配置『老刘备』内实测可用",
+      "enabled": true,
+      "browsable": false
+    },
+    {
+      "id": "apibdzy",
+      "name": "百度资源",
+      "kind": "maccms",
+      "api": "https://api.apibdzy.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://api.apibdzy.com/",
+      "search_template": null,
+      "note": "TVBox 配置『老刘备』内实测可用",
+      "enabled": true,
+      "browsable": true
+    },
+    {
+      "id": "hongniu",
+      "name": "红牛资源",
+      "kind": "maccms",
+      "api": "https://www.hongniuzy2.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://www.hongniuzy2.com/",
+      "search_template": null,
+      "note": "常见公开采集接口，实测可用",
+      "enabled": true,
+      "browsable": true
+    },
+    {
+      "id": "jszy",
+      "name": "极速资源",
+      "kind": "maccms",
+      "api": "https://jszyapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://jszyapi.com/",
+      "search_template": null,
+      "note": "常见公开采集接口，实测可用",
+      "enabled": true,
+      "browsable": false
+    },
+    {
+      "id": "guangsu",
+      "name": "光速资源",
+      "kind": "maccms",
+      "api": "https://api.guangsuapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://api.guangsuapi.com/",
+      "search_template": null,
+      "note": "常见公开采集接口，实测可用",
+      "enabled": true,
+      "browsable": false
+    },
+    {
+      "id": "bfzy",
+      "name": "备番资源",
+      "kind": "maccms",
+      "api": "https://bfzyapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://bfzyapi.com/",
+      "search_template": null,
+      "note": "常见公开采集接口，实测可用，番剧较多",
+      "enabled": true,
+      "browsable": false
+    },
+    {
+      "id": "taopian",
+      "name": "淘片资源",
+      "kind": "maccms",
+      "api": "https://taopianapi.com/cjapi/mc/vod/json.html",
+      "params": {},
+      "root": "https://taopianapi.com/",
+      "search_template": null,
+      "note": "TVBox 配置『老刘备』内实测可用",
+      "enabled": true,
+      "browsable": true
+    },
+    {
+      "id": "cjffzy",
+      "name": "非凡｜资源",
+      "kind": "maccms",
+      "api": "http://cj.ffzyapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "http://cj.ffzyapi.com/",
+      "search_template": null,
+      "note": "harvest_more_apis 实测通过",
+      "enabled": true,
+      "browsable": true
+    },
+    {
+      "id": "cjlzi",
+      "name": "量子｜资源",
+      "kind": "maccms",
+      "api": "https://cj.lziapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://cj.lziapi.com/",
+      "search_template": null,
+      "note": "harvest_more_apis 实测通过",
+      "enabled": true,
+      "browsable": false
+    }
+  ]
+}

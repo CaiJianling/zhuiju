@@ -1,0 +1,8 @@
+{
+  "verified_with": "流浪地球",
+  "templates": {
+    "4k-yuanpan": "https://pomo.mom/?keyword={kw}",
+    "subhd": "https://subhd.tv/search/{kw}",
+    "assrt": "https://assrt.net/sub/?searchword={kw}"
+  }
+}

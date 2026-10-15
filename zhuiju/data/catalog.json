@@ -1,0 +1,3260 @@
+{
+  "generated_from": "laoma528/awesome-zhuiju-free",
+  "updated_at": "2026-10-12",
+  "items": [
+    {
+      "id": "kuakeso",
+      "name": "KK网盘搜",
+      "url": "https://kkso.net",
+      "category": "cloud_search",
+      "category_cn": "网盘搜索",
+      "tags": [
+        "网盘搜索",
+        "夸克网盘",
+        "百度网盘",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "kuake-so-1",
+      "name": "PanSou",
+      "url": "https://pansou.de",
+      "category": "cloud_search",
+      "category_cn": "网盘搜索",
+      "tags": [
+        "网盘搜索",
+        "夸克网盘",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "gugeso",
+      "name": "谷哥搜",
+      "url": "https://gugeso.com/",
+      "category": "cloud_search",
+      "category_cn": "网盘搜索",
+      "tags": [
+        "网盘搜索",
+        "多网盘",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "zhuiju-us",
+      "name": "追剧吧",
+      "url": "https://www.zhuiju.us/",
+      "category": "cloud_search",
+      "category_cn": "网盘搜索",
+      "tags": [
+        "网盘搜索",
+        "影视资源",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "juhebd",
+      "name": "BD影视聚合",
+      "url": "https://www.juhebd.com/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "电影",
+        "电视剧",
+        "高清"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "bdflixs",
+      "name": "BD电影首发",
+      "url": "https://www.bdflixs.com/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "电影",
+        "4K",
+        "蓝光"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "btshijiewang",
+      "name": "BT世界网",
+      "url": "https://www.btsj6.com",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "电影",
+        "美剧"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "bt-yingshi",
+      "name": "BT影视",
+      "url": "https://www.btbtla.com",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "4K",
+        "电影"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "4k-yuanpan",
+      "name": "POMO",
+      "url": "https://pomo.mom/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "4K",
+        "原盘"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "sidhub-cc-7",
+      "name": "SeedHub",
+      "url": "https://sidhub.cc/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力与 BT"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ldysg",
+      "name": "找电影时光",
+      "url": "https://www.ldysg.win/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "影视下载",
+        "高清",
+        "无水印"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "cilidi",
+      "name": "磁力帝",
+      "url": "https://www.cld123.com",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "发布页"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "cilixiong",
+      "name": "磁力熊",
+      "url": "https://www.cilixiong.org",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "高清"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "meijufen",
+      "name": "美剧粉",
+      "url": "https://www.mjf2020.com",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "美剧",
+        "高清"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "acg-rip-10",
+      "name": "ACG.RIP",
+      "url": "https://acg.rip/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力与 BT"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ainunu",
+      "name": "爱努努",
+      "url": "https://video.ainunu.com/",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "影视下载"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "dianyinggang",
+      "name": "电影港网",
+      "url": "https://www.dyg22.com",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "4K",
+        "电影"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "gaoqing-mp4",
+      "name": "高清MP4",
+      "url": "https://www.mp4ba.vip",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "1080P",
+        "4K"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ciligou",
+      "name": "磁力狗",
+      "url": "https://ciligou.net",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "资源搜索"
+      ],
+      "scores": {
+        "more": 3,
+        "speed": 3,
+        "clean": 3,
+        "stable": 3,
+        "ease": 3
+      },
+      "recommended": 3,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "gaoqingzu",
+      "name": "高清族",
+      "url": "https://hdzu.org",
+      "category": "magnet_search",
+      "category_cn": "磁力 & BT",
+      "tags": [
+        "磁力",
+        "BT",
+        "1080P",
+        "4K"
+      ],
+      "scores": {
+        "more": 3,
+        "speed": 3,
+        "clean": 3,
+        "stable": 3,
+        "ease": 3
+      },
+      "recommended": 3,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "66-dapianwang",
+      "name": "66 大片网",
+      "url": "https://www.77dpw.vip/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "免费"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "duse91",
+      "name": "91毒舌",
+      "url": "https://www.duse0.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "Netflix",
+        "4K",
+        "高清影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "tv-937",
+      "name": "937影视",
+      "url": "https://www.937tv.vip",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "影视剧",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "appmovie",
+      "name": "APP影院",
+      "url": "https://www.appmovie.art",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "热播剧",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "auete-video",
+      "name": "Auete影视",
+      "url": "https://www.aeete.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "高清影视",
+        "发布页"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ifn",
+      "name": "IFN",
+      "url": "https://ifn.watch/register?code=8B1EF6",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "4K",
+        "部分免费"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": false,
+      "hints": [
+        "需登录",
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "ppnix",
+      "name": "PPnix",
+      "url": "https://www.ppnix.com/cn/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "sa-video",
+      "name": "SA视频",
+      "url": "https://www.lsjys11.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧",
+        "动漫",
+        "综艺"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "zip0",
+      "name": "ZIP0",
+      "url": "https://zip0.com/?r=KBDIG8",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "搜索",
+        "在线播放"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ys-cxkjg-cn-39",
+      "name": "创享影视",
+      "url": "https://ys.cxkjg.cn/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "juok",
+      "name": "剧OK",
+      "url": "https://juok3.top/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "juzong",
+      "name": "剧踪影院",
+      "url": "https://www.juzong01.me/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "海内外影视",
+        "SVIP"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "103-39-111-180-29",
+      "name": "可可影视",
+      "url": "https://www.kkys14.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "didahd",
+      "name": "嘀嗒影视",
+      "url": "https://www.didahd.xyz/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "超清",
+        "秒播"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "duonao-video",
+      "name": "多瑙影视",
+      "url": "https://www.duonaovod.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "海外华人",
+        "需梯子"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "netflixgc",
+      "name": "奈飞工厂",
+      "url": "https://www.netflixgc.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "美剧",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "haohaokan",
+      "name": "好好看",
+      "url": "https://www.hhkan2.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "Netflix",
+        "4K",
+        "高清影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "kxyy",
+      "name": "开心影院",
+      "url": "https://www.kxyy1.cc/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "yingshidaquan",
+      "name": "影视大全",
+      "url": "https://yingshidaquan.top/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "搜索",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "wbbb",
+      "name": "歪比巴卜",
+      "url": "https://wbbb1.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "高清",
+        "免费"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "nivod",
+      "name": "泥视频",
+      "url": "https://www.nivod.vip",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "国剧",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "gaze-red",
+      "name": "注视影视",
+      "url": "https://gaze.red/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "国内剧",
+        "海外剧",
+        "需梯子"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "tv-lxyy-club-36",
+      "name": "洛雪TV",
+      "url": "https://tv.lxyy.club/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ai-movie",
+      "name": "爱电影",
+      "url": "https://kuhh4jo.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "pianku",
+      "name": "片库",
+      "url": "https://4k01.pianku.online/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "无广告",
+        "1080P",
+        "秒播"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "dyrs",
+      "name": "电影人生",
+      "url": "https://dyrs.tv",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "高清影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "tdgo",
+      "name": "白嫖者联盟",
+      "url": "https://www.tdgo.shop",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "热播剧",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "jianyunys",
+      "name": "简云影视",
+      "url": "https://jianyunys.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "无广告",
+        "1080P",
+        "秒播"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "dandanqi",
+      "name": "蛋蛋奇",
+      "url": "https://www.dandanqi.cc/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "ddmf",
+      "name": "蛋蛋魔法",
+      "url": "https://ddmf.net",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "热播剧",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "kanmovie-com-34",
+      "name": "西瓜影视",
+      "url": "https://www.kanmovie.com/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "dhvideo",
+      "name": "豆花电影网",
+      "url": "https://dhvideo.cc/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "免费"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "zhuiying",
+      "name": "追影",
+      "url": "https://zhuiying3.cc/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "蓝光",
+        "高清",
+        "无广告",
+        "秒播"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "jpyy",
+      "name": "金牌影视",
+      "url": "https://www.vv3nwjk.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "VIP资源",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "sorani",
+      "name": "青空次元",
+      "url": "https://www.sorani.net",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "动漫",
+        "在线看"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "fdzys",
+      "name": "饭搭子影视",
+      "url": "https://fdzys.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧",
+        "动漫",
+        "综艺"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "libvio",
+      "name": "LIBVIO",
+      "url": "https://libviobd.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "海外影视",
+        "发布页"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "no-video",
+      "name": "No影视",
+      "url": "https://novipnoad.org/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "海外剧",
+        "中文"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "guangsu-yingshi",
+      "name": "光速影视",
+      "url": "https://www.yingshiso.link/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "备选",
+        "无广告"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "naifei-fyi-19",
+      "name": "奈飞工厂",
+      "url": "https://naifei.fyi/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "zndy",
+      "name": "宅男影视",
+      "url": "https://zndy.top/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "bubu-zhuiju",
+      "name": "布布追剧",
+      "url": "https://bubuzhuiju.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "追剧",
+        "有广告"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "yingmao-cangku",
+      "name": "影猫仓库",
+      "url": "https://www.ymck.pro",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "热门影视",
+        "有广告"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "sotvla",
+      "name": "搜TV啦",
+      "url": "https://www.sotvla.cc/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "高清影视",
+        "国内剧",
+        "海外剧"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "skr-skr1-cc-9",
+      "name": "樱之空",
+      "url": "https://skr.skr1.cc:666/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "iyf",
+      "name": "爱壹帆",
+      "url": "https://iyf.tv",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "海外华人",
+        "需梯子"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "aipan-me-25",
+      "name": "爱盼",
+      "url": "https://www.aipan.me/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "dbku",
+      "name": "独播库",
+      "url": "https://www.dbku.tv",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "纯净",
+        "无广告"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "xlys",
+      "name": "雪落影视",
+      "url": "https://xlys.me/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "国内剧",
+        "海外剧",
+        "中文"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": false,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "4kvm-cc-18",
+      "name": "4k影视",
+      "url": "https://www.4kvm.cc/",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "有广告",
+        "需梯子",
+        "VIP限制"
+      ],
+      "scores": {
+        "more": 3,
+        "speed": 3,
+        "clean": 3,
+        "stable": 3,
+        "ease": 3
+      },
+      "recommended": 3,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "czzymovie",
+      "name": "厂长资源",
+      "url": "https://www.czzymovie.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "高清影视",
+        "有广告"
+      ],
+      "scores": {
+        "more": 3,
+        "speed": 3,
+        "clean": 3,
+        "stable": 3,
+        "ease": 3
+      },
+      "recommended": 3,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "nfyingshi",
+      "name": "奈菲影视",
+      "url": "https://www.nfyingshi.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "美剧",
+        "无广告"
+      ],
+      "scores": {
+        "more": 3,
+        "speed": 3,
+        "clean": 3,
+        "stable": 3,
+        "ease": 3
+      },
+      "recommended": 3,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "aikanbot",
+      "name": "爱看机器人",
+      "url": "https://www1.aikanbot.com",
+      "category": "online_video",
+      "category_cn": "在线影视",
+      "tags": [
+        "在线影视",
+        "电影",
+        "电视剧",
+        "有广告",
+        "跳转广告"
+      ],
+      "scores": {
+        "more": 3,
+        "speed": 3,
+        "clean": 3,
+        "stable": 3,
+        "ease": 3
+      },
+      "recommended": 3,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "animeko",
+      "name": "Animeko",
+      "url": "https://github.com/open-ani/animeko",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "追番",
+        "弹幕"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "czy0729-bangumi",
+      "name": "Bangumi",
+      "url": "https://github.com/czy0729/Bangumi",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "ACG",
+        "追番",
+        "Android",
+        "iOS",
+        "React Native"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "cloudsaver",
+      "name": "CloudSaver",
+      "url": "https://github.com/jiangrui1994/CloudSaver",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "网盘搜索",
+        "转存"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "fongmi-tv",
+      "name": "FongMi TV",
+      "url": "https://github.com/FongMi/TV",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "Android",
+        "FongMi",
+        "CatVod",
+        "影音应用"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "predidit-kazumi",
+      "name": "Kazumi",
+      "url": "https://github.com/Predidit/Kazumi",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "番剧",
+        "在线观看",
+        "无广告"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "moontvplus",
+      "name": "MoonTVPlus",
+      "url": "https://github.com/mtvpls/MoonTVPlus",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "影视聚合",
+        "播放器"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "selenetv",
+      "name": "SeleneTV",
+      "url": "https://github.com/MoonTechLab/Selene",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "MoonTV",
+        "Helios",
+        "客户端"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "webhometv",
+      "name": "WebHomeTV",
+      "url": "https://github.com/fish2018/webhtv",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "Android",
+        "FongMi",
+        "CatVod",
+        "影音应用"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "webhometv2",
+      "name": "WebHomeTV2",
+      "url": "https://github.com/Silent1566/webhtv",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "Android",
+        "WebHomeTV",
+        "TMDB",
+        "影音应用"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "iptv-org-iptv",
+      "name": "iptv",
+      "url": "https://github.com/iptv-org/iptv",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "IPTV",
+        "直播源"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "iptv-api",
+      "name": "iptv-api",
+      "url": "https://github.com/Guovin/iptv-api",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "IPTV",
+        "直播源"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "pansou",
+      "name": "pansou",
+      "url": "https://github.com/fish2018/pansou",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "网盘搜索",
+        "API"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "quark-auto-save",
+      "name": "quark-auto-save",
+      "url": "https://github.com/Cp0204/quark-auto-save",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "夸克网盘",
+        "自动转存"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "zyfun",
+      "name": "zyfun",
+      "url": "https://github.com/Hiram-Wong/zyfun",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目",
+        "视频播放器",
+        "跨平台"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "github-com-12",
+      "name": "sky-tv",
+      "url": "https://github.com/sky22333/sky-tv",
+      "category": "open_source",
+      "category_cn": "开源项目",
+      "tags": [
+        "开源项目"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "未检测",
+      "status_key": "unchecked",
+      "checked_at": ""
+    },
+    {
+      "id": "fongmi-fengmi",
+      "name": "FongMi 蜂蜜",
+      "url": "https://b.zhuiju.me/archives/16/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "TVBox",
+        "影视仓",
+        "FongMi",
+        "CatVod",
+        "Android TV",
+        "Android"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ok-yingshi-player",
+      "name": "OK影视",
+      "url": "https://b.zhuiju.me/archives/17/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "TVBox",
+        "影视仓",
+        "FongMi",
+        "Android TV"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "webhometv-player",
+      "name": "WebHomeTV",
+      "url": "https://b.zhuiju.me/archives/18/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "TVBox",
+        "影视仓",
+        "FongMi",
+        "CatVod",
+        "Android TV"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "yingshicang-player",
+      "name": "影视仓",
+      "url": "https://b.zhuiju.me/archives/15/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "TVBox",
+        "影视仓",
+        "Android TV"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "yangke-peekpro",
+      "name": "羊壳 PeekPro",
+      "url": "https://b.zhuiju.me/archives/19/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "TVBox",
+        "影视仓",
+        "FongMi",
+        "Android TV"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "tv-xn-yhqu5zs87a-top-3",
+      "name": "FongMi 影视",
+      "url": "https://tv.xn--yhqu5zs87a.top/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "kodi",
+      "name": "Kodi",
+      "url": "https://kodi.tv/",
+      "category": "player",
+      "category_cn": "TVBox 空壳",
+      "tags": [
+        "开源",
+        "播放器",
+        "跨平台"
+      ],
+      "scores": {
+        "more": 4.5,
+        "speed": 4,
+        "clean": 5,
+        "stable": 4.8,
+        "ease": 3.8
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "iptv-cqshushu-com-31",
+      "name": "IPTV神器Pro",
+      "url": "https://iptv.cqshushu.com/",
+      "category": "subscription",
+      "category_cn": "直播源",
+      "tags": [
+        "IPTV 订阅源"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "iptv-org",
+      "name": "IPTV-org",
+      "url": "https://github.com/iptv-org/iptv",
+      "category": "subscription",
+      "category_cn": "直播源",
+      "tags": [
+        "IPTV",
+        "开源",
+        "订阅源"
+      ],
+      "scores": {
+        "more": 4.5,
+        "speed": 3.5,
+        "clean": 5,
+        "stable": 4,
+        "ease": 3
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "subhd",
+      "name": "SubHD",
+      "url": "https://subhd.tv",
+      "category": "subtitles",
+      "category_cn": "字幕资源",
+      "tags": [
+        "字幕",
+        "字幕下载",
+        "分享平台"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "zimuku",
+      "name": "字幕库",
+      "url": "https://zimuku.org",
+      "category": "subtitles",
+      "category_cn": "字幕资源",
+      "tags": [
+        "字幕",
+        "字幕下载",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "assrt",
+      "name": "射手网(伪)",
+      "url": "https://assrt.net",
+      "category": "subtitles",
+      "category_cn": "字幕资源",
+      "tags": [
+        "字幕",
+        "字幕下载",
+        "中文"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "xiao-he-zi-4k",
+      "name": "小盒子4K",
+      "url": "http://xhztv.top/4k.json",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "xiao-he-zi-multi",
+      "name": "小盒子多仓",
+      "url": "http://xhztv.top/dc",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "shi-guang-multi",
+      "name": "拾光多仓",
+      "url": "http://xmbjm.fh4u.org/dc.txt",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ting-hao-share-multi",
+      "name": "挺好分享多仓",
+      "url": "http://ztha.top/TVBox/GYCK.json",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "mo-yu-er",
+      "name": "摸鱼儿",
+      "url": "http://摸鱼儿.cc",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "wang-er-xiao",
+      "name": "王二小",
+      "url": "http://new.王二小放牛娃.top",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "fei-mao",
+      "name": "肥猫",
+      "url": "http://肥猫.net/",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "fan-tai-ying",
+      "name": "饭太硬",
+      "url": "http://www.饭太硬.net/tv",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 5,
+        "speed": 5,
+        "clean": 5,
+        "stable": 5,
+        "ease": 5
+      },
+      "recommended": 5,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "vox",
+      "name": "VOX",
+      "url": "http://rihou.cc:88/demo.php",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ao-wu",
+      "name": "嗷呜",
+      "url": "http://itv666.cc/aowu/config.webp",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "xiao-he-zi",
+      "name": "小盒子",
+      "url": "https://www.xhztv.pro/",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "TV工具箱",
+        "收集页"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "xiao-he-zi-single",
+      "name": "小盒子单仓",
+      "url": "http://xhztv.top/xhz",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "xiao-ma",
+      "name": "小马",
+      "url": "https://szyyds.cn/tv/x.json",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "无法访问",
+      "status_key": "unreachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "wu-ming",
+      "name": "无名",
+      "url": "https://6800.kstore.vip/fish.json",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "访问受限",
+      "status_key": "restricted",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "lao-liu-bei",
+      "name": "老刘备",
+      "url": "https://raw.liucn.cc/box/m.json",
+      "category": "tvbox_config",
+      "category_cn": "TVBox 配置",
+      "tags": [
+        "影视仓",
+        "配置地址",
+        "TVBox"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "animeko-app",
+      "name": "Animeko",
+      "url": "https://animeko.org/downloads/",
+      "category": "video_app",
+      "category_cn": "影视APP",
+      "tags": [
+        "影视APP",
+        "动漫",
+        "追番",
+        "弹幕",
+        "Android",
+        "Windows",
+        "macOS",
+        "Linux",
+        "iOS"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "kazumi",
+      "name": "Kazumi",
+      "url": "https://kazumi.app/download",
+      "category": "video_app",
+      "category_cn": "影视APP",
+      "tags": [
+        "影视APP",
+        "动漫",
+        "番剧",
+        "无广告",
+        "Android",
+        "iOS",
+        "Windows",
+        "macOS",
+        "HarmonyOS"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "selenetv-app",
+      "name": "SeleneTV",
+      "url": "https://b.zhuiju.me/archives/4/",
+      "category": "video_app",
+      "category_cn": "影视APP",
+      "tags": [
+        "影视APP",
+        "MoonTV",
+        "Helios",
+        "客户端",
+        "Android",
+        "iOS",
+        "macOS",
+        "Windows"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [
+        "GLOBAL"
+      ],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    },
+    {
+      "id": "ios-yingshi-app",
+      "name": "iOS影视APP",
+      "url": "https://b.zhuiju.me/archives/23/",
+      "category": "video_app",
+      "category_cn": "影视APP",
+      "tags": [
+        "影视APP",
+        "iOS",
+        "追剧",
+        "应用合集"
+      ],
+      "scores": {
+        "more": 4,
+        "speed": 4,
+        "clean": 4,
+        "stable": 4,
+        "ease": 4
+      },
+      "recommended": 4,
+      "featured": true,
+      "hints": [],
+      "status": "可访问",
+      "status_key": "reachable",
+      "checked_at": "2026-10-15"
+    }
+  ]
+}

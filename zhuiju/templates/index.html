@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}">
+  <link rel="canonical" href="{{ seo.canonical }}">
+  <meta property="og:type" content="{% if seo.kw %}video.movie{% else %}website{% endif %}">
+  <meta property="og:title" content="{{ seo.title }}">
+  <meta property="og:description" content="{{ seo.description }}">
+  <meta property="og:url" content="{{ seo.canonical }}">
+  <meta name="robots" content="index,follow">
+  <script type="application/ld+json">
+  {%- if seo.kw %}
+  {"@context":"https://schema.org","@type":"ItemList","name":"《{{ seo.kw }}》相关影视资源",
+   "numberOfItems": {{ seo.snapshot['count'] or 0 }},"itemListElement": [
+   {%- for it in seo.snapshot['items'][:12] %}
+   {"@type":"ListItem","position":{{ loop.index }},"name":{{ it.title | tojson }},
+    "url": "{{ seo.site }}/s/{{ it.title | urlencode }}"}{{ "," if not loop.last }}
+   {%- endfor %} ]}
+  {%- else %}
+  {"@context":"https://schema.org","@type":"WebSite","name":"追剧资源搜索",
+   "url":"{{ seo.site }}/",
+   "potentialAction":{"@type":"SearchAction","target":"{{ seo.site }}/s/{search_term_string}",
+     "query-input":"required name=search_term_string"}}
+  {%- endif %}
+  </script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔍</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_v }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <h1>追剧资源搜索 <span class="ver">本地版</span></h1>
+    <p class="lede">输入电影、电视剧或动漫名称，一次查询多个影视采集接口，并汇总网盘、磁力和资源站的入口。</p>
+    {# 五种状态各有各的颜色，别把"正在跑"和"快版没跑全"都染成红色 #}
+    {% set tone = {'fresh': 'ok', 'running': 'run', 'partial': 'warn',
+                   'stale': 'stale', 'failed': 'stale', 'never': 'stale'}[refresh.state] | default('stale') %}
+    <p class="fresh {{ tone }}" id="banner" data-state="{{ refresh.state }}">
+      <i class="dot s-{{ tone }}"></i>
+      <span id="banner-text">{{ refresh.text }}</span>
+      <span class="fresh-hint" id="banner-hint">{{ refresh.hint }}</span>
+    </p>
+    {% if refresh.state == 'running' %}
+    <div class="prog" id="prog">
+      <div class="progbar"><i style="width: {{ refresh.progress.pct }}%"></i></div>
+      <div class="progsteps" id="progsteps"></div>
+    </div>
+    {% endif %}
+  </div>
+</header>
+
+<main class="wrap">
+  <form class="searchbar" id="form" autocomplete="off">
+    <div class="field">
+      <button class="homebtn" type="button" id="home" aria-label="回主页" title="回主页 · 显示猜你想搜">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.6 12 3.4l9 7.2v9.4a1 1 0 0 1-1 1h-5v-6.2H9V21H4a1 1 0 0 1-1-1z"/></svg>
+      </button>
+      <input id="kw" name="kw" type="search" placeholder="例如：庆余年 / 流浪地球 / 繁花 / 灌篮高手"
+             aria-label="影视名称关键词" maxlength="60">
+      <button class="go" type="submit" id="go">搜索</button>
+    </div>
+    <div class="examples" id="examples">
+      <span class="hint">试试：</span>
+      <button type="button" class="chip">庆余年</button>
+      <button type="button" class="chip">流浪地球</button>
+      <button type="button" class="chip">繁花</button>
+      <button type="button" class="chip">甄嬛传</button>
+      <button type="button" class="chip">灌篮高手</button>
+      <button type="button" class="chip">科幻</button>
+    </div>
+  </form>
+
+  <section class="statline" id="statline" hidden>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="vod">影视资源</button>
+      <button class="tab" data-tab="cloud">网盘查询</button>
+      <button class="tab" data-tab="deep">网盘 · 磁力直达</button>
+      <button class="tab" data-tab="dir">资源站目录</button>
+    </div>
+    <div class="meta" id="meta"></div>
+  </section>
+
+  <section class="panel active" id="panel-vod">
+    <div class="sources" id="sources"></div>
+    <div class="pager" id="pager" hidden>
+      <button id="prev">上一页</button>
+      <span id="pagemark"></span>
+      <button id="next">下一页</button>
+    </div>
+    <div class="list" id="results"></div>
+  </section>
+
+  <section class="panel" id="panel-cloud">
+    <div class="cloudbar" id="cloudbar"></div>
+    <div class="list" id="cloudlist"></div>
+  </section>
+
+  <section class="panel" id="panel-deep">
+    <div class="list" id="deeplist"></div>
+  </section>
+
+  <section class="panel" id="panel-dir">
+    <div class="filters" id="filters"></div>
+    <div class="list" id="dirlist"></div>
+  </section>
+
+  {# ---------- 服务端渲染部分：爬虫不执行 JS 也能看到内容 ---------- #}
+  {% if seo.kw %}
+  <section class="ssr" id="ssr" aria-label="搜索结果摘要">
+    <h2>《{{ seo.kw }}》的检索结果</h2>
+    <p class="ssrnote">{{ seo.description }}</p>
+    {% if seo.snapshot['items'] %}
+    <ul class="ssrlist">
+      {% for it in seo.snapshot['items'] %}
+      <li><a href="{{ it.url }}">{{ it.title }}</a>
+        <span>{{ [it.year, it.type, it.remarks] | select | join(' · ') }}
+          {%- if it.n_sources %} · {{ it.n_sources }} 个源{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if not seo.kw and (seo.hot.movie or seo.hot.tv) %}
+  <section class="hot" id="hot" aria-label="猜你想搜">
+    <h2>猜你想搜 <span class="hotsub">最近半年 · 截至 {{ seo.hot.since }} 起算 · 共 {{ seo.hot.candidates }} 条候选</span></h2>
+    {% for sec, label in (('movie', '电影'), ('tv', '电视剧')) %}
+      {% set rows = seo.hot[sec] %}
+      {# rows 已经是首屏那一行，能不能翻页要看总数 total（由 _first_row 写入），不是 len(rows) #}
+      {% set total = seo.hot[sec ~ '_total'] | default(rows | length) %}
+      {% if rows %}
+      <div class="hotgroup">
+        <div class="grouptitle"><span>{{ label }}</span><i class="rule"></i>
+          <span class="pageof" id="pageof-{{ sec }}"></span>
+          <button class="pbtn prev" type="button" data-kind="{{ sec }}" data-dir="-1" disabled>‹ 上一页</button>
+          <button class="pbtn next" type="button" data-kind="{{ sec }}" data-dir="1"
+                  {% if total <= rows | length %}disabled{% endif %}>下一页 ›</button>
+        </div>
+        {# 首屏这一行是给爬虫/无 JS 的；有 JS 时按实际列数重新铺，保证一行铺满不横向滚动 #}
+        <div class="hotgrid" data-kind="{{ sec }}" data-total="{{ total }}" data-per="{{ rows | length }}">
+          {% for x in rows %}
+          <a class="hotcard" href="{{ x.url }}" data-title="{{ x.title }}">
+            <span class="hcover">
+              {%- if x.pic %}<img loading="lazy" decoding="async" src="{{ x.pic }}" alt=""
+                                     onload="this.closest('.hcover').classList.add('loaded')"
+                   onerror="this.remove()">{% endif %}
+            </span>
+            <b>{{ x.title }}</b>
+            <span class="hotmeta">{{ x.year or x.type }}
+              {%- if x.rate %} · 豆瓣 {{ x.rate }}{% endif %}
+              {%- if x.n_sources > 1 %} · {{ x.n_sources }} 源{% endif %}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+    {% if seo.hot.building %}
+    <p class="hotnote">近期榜单正在后台生成（约需 1–2 分钟，缓存 6 小时），稍后刷新即可看到。</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <div class="placeholder" id="placeholder">
+    <div class="ph-card">
+      <h2>怎么用</h2>
+      <ol>
+        <li>在上面输入剧名或片名，回车即可。结果来自 <b id="srcn">{{ sources|length }}</b> 个已实测可用的公开采集接口。</li>
+        <li>同一部片会合并多个来源，点来源名可展开该源的播放线路。</li>
+        <li>「网盘 · 磁力直达」把片名直接带到资源站搜索页；「资源站目录」按名称、标签、分类筛选 {{ categories|length }} 类收录站点。</li>
+      </ol>
+      <p class="note">目录与检索源由 Windows 定时任务每天自动刷新（页头会标明今天是否更新过）；接口为第三方公开源，随时可能失效，可用 <code>/api/health</code> 自检。</p>
+    </div>
+  </div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <p>本工具只做第三方公开接口的聚合查询，不存储、不转发任何影视内容；结果链接指向外部站点，请注意甄别广告、跳转与个人信息安全。</p>
+    <p class="dim">仅供个人技术学习与找片参考，请支持正版。 · 本地运行，数据不出这台电脑</p>
+  </div>
+</footer>
+
+<script id="boot-data" type="application/json">
+{
+  "sources": {{ sources|tojson }},
+  "categories": {{ categories|tojson }},
+  "kw": {{ seo.kw|tojson }},
+  "hot": {{ seo.hot|tojson }},
+  "progress": {{ (refresh.progress or {}) | tojson }}
+}
+</script>
+<script src="{{ url_for('static', filename='app.js') }}?v={{ asset_v }}"></script>
+</body>
+</html>

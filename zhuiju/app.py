@@ -1,0 +1,338 @@
+# -*- coding: utf-8 -*-
+"""追剧资源搜索 — 本地 Flask 站点。
+
+用法：
+    python run.py            # 启动并自动打开浏览器
+    python -m flask --app zhuiju.app run  # 等价方式
+"""
+from __future__ import annotations
+
+import json
+import re
+import urllib.parse
+from datetime import date
+from pathlib import Path
+
+from flask import (Flask, jsonify, make_response, redirect, render_template,
+                 request, url_for)
+from markupsafe import escape as xml_escape
+
+from . import autoupdate
+from . import catalog as catalog_mod
+from . import cloudsearch
+from . import hot as hot_mod
+from . import imgproxy
+from . import seo as seo_mod
+from .search import detail as fetch_detail
+from .search import fetch_one, search
+from .sources import load_sources
+
+MIN_KW = 2        # 单字符关键词会引发一轮无意义的并发抓取，直接拒掉
+MAX_KW = 60
+
+
+def refresh_info() -> dict:
+    """读取自动更新的结果与进度，用于页头横幅。
+
+    措辞要分清情况，别把"上次成功但已过周期"说成失败：
+      running 正在跑（带进度） / fresh 本周期已成功 / stale 上次成功但到了新周期
+      / failed 上次确有步骤失败 / never 从没跑过
+    """
+    try:
+        s = json.loads(autoupdate.STATE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        s = {}
+    prog = autoupdate.progress()
+    src = f"{s.get('sources_enabled', '?')}/{s.get('sources_total', '?')}"
+
+    if prog.get("running"):
+        done, total = prog.get("done", 0), prog.get("total") or len(autoupdate.STEPS)
+        cur = prog.get("step_label") or "准备中"
+        return {"fresh": False, "state": "running", "progress": prog,
+                "text": f"正在后台更新（第 {min(done + 1, total)}/{total} 步：{cur}）",
+                "hint": f"已完成 {done}/{total} 步 · 当前显示的是上一次的数据，跑完刷新即可"}
+    if not s:
+        return {"fresh": False, "state": "never", "progress": prog,
+                "text": "尚未自动更新过",
+                "hint": "打开页面就会自动开始更新，也可双击 refresh.bat 立即更新"}
+
+    ok = bool(s.get("ok"))
+    done_cycle = autoupdate._cycle_done(s)
+    fresh_today = s.get("date") == autoupdate.logical_day().isoformat()
+    if done_cycle and fresh_today:
+        return {"fresh": True, "state": "fresh", "progress": prog,
+                "text": f"数据 {str(s.get('finished_at', ''))[5:16]} 自动更新 · 检索源 {src}",
+                "hint": f"上游目录版本 {s.get('upstream_updated_at', '未知')}"}
+    if not ok:
+        bad = "、".join(s.get("failed_steps") or []) or "未知步骤"
+        return {"fresh": False, "state": "failed", "progress": prog,
+                "text": f"上次自动更新有步骤失败（{bad}）",
+                "hint": f"时间 {s.get('finished_at', '未知')} · 双击 refresh.bat 重试，"
+                        f"详情看 logs 下最新的 refresh-*.log"}
+    if autoupdate.is_partial(s):
+        # 手动跑过 --skip-deep 的快版：数据确实新，但这一周期的全量更新还没做
+        return {"fresh": False, "state": "partial", "progress": prog,
+                "text": f"上次只跑了快版（{str(s.get('finished_at', ''))[5:16]}，"
+                        f"跳过 {'、'.join(s.get('skipped_steps') or []) or '若干步骤'}）",
+                "hint": "访问时会自动补跑完整一轮；也可双击 refresh.bat 立即更新"}
+    return {"fresh": False, "state": "stale", "progress": prog,
+            "text": f"数据是 {s.get('date', '未知')} 更新的，已过当天周期",
+            "hint": "凌晨 2 点后访问会自动重来；也可双击 refresh.bat 立即更新"}
+
+
+def _proxied_hot(h: dict) -> dict:
+    """猜你想搜的海报改走本站代理，前端才能拿到被防盗链挡掉的图。"""
+    from urllib.parse import quote
+
+    def wrap(pic: str) -> str:
+        return f"/img?url={quote(pic, safe='')}" if pic.startswith("http") else ""
+
+    h = dict(h)
+    for sec in ("movie", "tv"):
+        rows = h.get(sec) or []
+        imgproxy.register_all(rows)          # 先登记，/img 才肯代理
+        h[sec] = [{**x, "pic": wrap(x.get("pic", ""))} for x in rows]
+    return h
+
+
+def _first_row(h: dict, per: int = 12) -> dict:
+    """首屏每组只给一屏的量，其余由「上一页 / 下一页」整行切换。
+
+    `*_total` 是缓存里的总条数：模板要拿它判断还有没有下一页，
+    不能拿截过的 `rows` 长度判断（那样永远只剩一行、按钮永远禁用）。
+    """
+    h = dict(h)
+    for sec in ("movie", "tv"):
+        rows = h.get(sec) or []
+        h[sec + "_total"] = len(rows)
+        h[sec] = rows[:per]
+    return h
+
+
+def _asset_ver() -> str:
+    """静态资源版本号取最后修改时间：本地改完 css/js 刷新即生效，不必手动清缓存。"""
+    try:
+        newest = max(p.stat().st_mtime for p in (Path(__file__).parent / "static").iterdir())
+        return str(int(newest))
+    except Exception:  # noqa: BLE001
+        return "1"
+
+
+class TrustForwarded:
+    """nginx 等反向代理下用 X-Forwarded-* 修正 scheme/host/前缀。
+
+    必须是 WSGI 中间件而不是 before_request：Werkzeug 在构造 Request 时就算好了
+    host_url，等 before_request 再改 environ 已经太晚（实测改了没效果）。
+    只信任来自回环地址的转发头，否则外部请求可以自己伪造 Host，污染 canonical 与 sitemap。
+    """
+
+    LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+    def __init__(self, wsgi):
+        self.wsgi = wsgi
+
+    def __call__(self, environ, start_response):
+        if environ.get("REMOTE_ADDR") in self.LOOPBACK:
+            get = lambda k: (environ.get("HTTP_" + k.upper().replace("-", "_")) or "").split(",")[0].strip()
+            proto = get("x-forwarded-proto")
+            host = get("x-forwarded-host")
+            prefix = get("x-forwarded-prefix")
+            if proto in ("http", "https"):
+                environ["wsgi.url_scheme"] = proto
+            if host:
+                environ["HTTP_HOST"] = host
+                name, _, port = host.partition(":")
+                environ["SERVER_NAME"] = name
+                environ["SERVER_PORT"] = port or ("443" if proto == "https" else "80")
+            if prefix:
+                environ["SCRIPT_NAME"] = prefix.rstrip("/")
+        return self.wsgi(environ, start_response)
+
+
+def create_app() -> Flask:
+    app = Flask(__name__)
+    app.config["JSON_AS_ASCII"] = False
+    app.json.ensure_ascii = False
+    app.wsgi_app = TrustForwarded(app.wsgi_app)
+
+    @app.before_request
+    def _touch():
+        # 访问即触发：今天没更新过就丢一个后台进程，本次请求照常返回旧数据
+        if request.path in ("/", "/sitemap.xml"):
+            autoupdate.maybe_trigger()
+
+    def _page(kw: str = "", snap: dict | None = None):
+        host = request.host_url.rstrip("/")
+        seo = {
+            "kw": kw,
+            "canonical": f"{host}/s/{urllib.parse.quote(kw)}" if kw else f"{host}/",
+            "title": (f"《{kw}》影视资源怎么找 - 追剧资源搜索" if kw
+                      else "追剧资源搜索 - 电影电视剧资源一站聚合"),
+            "description": (seo_mod.describe(kw, snap or {}) if kw else
+                            "输入电影、电视剧或动漫名称，一次查询多个影视资源站，"
+                            "并汇总网盘、磁力与资源站入口。"),
+            "snapshot": snap or {},
+            "hot": _first_row(_proxied_hot(hot_mod.get())),
+            "site": host,
+        }
+        return render_template(
+            "index.html",
+            categories=catalog_mod.categories(),
+            sources=[{"id": s.id, "name": s.name, "note": s.note, "root": s.root}
+                     for s in load_sources()],
+            updated=catalog_mod.catalog().get("updated_at", ""),
+            asset_v=_asset_ver(),
+            refresh=refresh_info(),
+            seo=seo,
+        )
+
+    @app.get("/")
+    def index():
+        return _page()
+
+    @app.get("/s/<path:kw>")
+    def seo_search(kw):
+        """每个关键词一个可被搜索引擎收录的固定地址，服务端渲染结果摘要。"""
+        kw = seo_mod.clean_kw(kw)
+        if len(kw) < MIN_KW:
+            return redirect(url_for("index"))
+        autoupdate.maybe_trigger()
+        seo_mod.log_query(kw)
+        return _page(kw, seo_mod.snapshot(kw))
+
+    @app.get("/img")
+    def api_img():
+        """海报代理：给防盗链的图床补 Referer，并绕开自签证书。"""
+        url = (request.args.get("url") or "").strip()
+        if not url:
+            return "missing url", 400
+        status, ctype, body, _note = imgproxy.resolve(url)
+        resp = make_response(body, status)
+        resp.headers["Content-Type"] = ctype
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        return resp
+
+    @app.get("/api/hot")
+    def api_hot():
+        kind = request.args.get("kind", "")
+        if kind in ("movie", "tv"):
+            return jsonify(hot_mod.page(kind,
+                                        request.args.get("offset", 0, type=int) or 0,
+                                        request.args.get("limit", 12, type=int) or 12))
+        # 与模板用同一份处理，海报都走 /img 代理，避免两条路径行为不一致
+        h = _proxied_hot(hot_mod.get())
+        for sec in ("movie", "tv"):
+            h[sec] = h.get(sec) or []
+            h[sec + "_total"] = len(h[sec])
+            h[sec] = h[sec][:12]          # 首屏只给一行，其余点箭头按需加载
+        return jsonify(h)
+
+    @app.post("/api/hot/rebuild")
+    def api_hot_rebuild():
+        data = hot_mod.rebuild()
+        return jsonify(data or {"error": "重建失败，沿用旧缓存"})
+
+    @app.get("/robots.txt")
+    def robots():
+        return seo_mod.robots_txt(request.host_url.rstrip("/")), 200, {
+            "Content-Type": "text/plain; charset=utf-8"}
+
+    @app.get("/sitemap.xml")
+    def sitemap():
+        host = request.host_url.rstrip("/")
+        rows = "\n".join(
+            f"  <url><loc>{xml_escape(e['loc'])}</loc>"
+            f"<lastmod>{e['lastmod']}</lastmod></url>"
+            for e in seo_mod.sitemap_entries(host))
+        return (f'<?xml version="1.0" encoding="UTF-8"?>\n'
+                f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+                f'{rows}\n</urlset>\n'), 200, {"Content-Type": "application/xml; charset=utf-8"}
+
+    @app.get("/api/refresh")
+    def api_refresh():
+        """前端轮询：后台更新是否在跑、什么时候结束的。"""
+        return jsonify(autoupdate.status())
+
+    @app.get("/api/search")
+    def api_search():
+        kw = _kw()
+        if kw is None:
+            return jsonify({"error": f"关键词至少需要 {MIN_KW} 个字符"}), 400
+        page = max(1, min(20, request.args.get("page", 1, type=int)))
+        seo_mod.log_query(kw)
+        out = search(kw, page=page)
+        imgproxy.register_all(out.get("results"))
+        return jsonify(out)
+
+    @app.get("/api/catalog")
+    def api_catalog():
+        kw = request.args.get("kw", "").strip()
+        if len(kw) > MAX_KW:
+            kw = kw[:MAX_KW]
+        cat = request.args.get("category") or None
+        rows = catalog_mod.search(kw, category=cat,
+                                  only_working=bool(request.args.get("only_working")))
+        # 目录本身按分类浏览，但行内的"搜此片"要用当前影片名拼链接
+        link_kw = (request.args.get("link_kw") or "").strip()[:MAX_KW]
+        if link_kw:
+            for r in rows:
+                r["deep"] = catalog_mod.link_for(r, link_kw)
+        return jsonify({"keyword": kw, "link_kw": link_kw, "total": len(rows),
+                        "items": rows, "categories": catalog_mod.categories()})
+
+    @app.get("/api/deeplinks")
+    def api_deeplinks():
+        # 不要求关键词：没有关键词时也给出各站入口，页面不至于空着
+        kw = (request.args.get("kw") or request.args.get("q") or "").strip()[:MAX_KW]
+        return jsonify({"keyword": kw, "items": catalog_mod.deeplinks(kw)})
+
+    @app.get("/api/cloud")
+    def api_cloud():
+        """网盘 / 磁力查询：服务端抓取各站搜索结果页并解析条目。"""
+        kw = _kw()
+        if kw is None:
+            return jsonify({"error": f"关键词至少需要 {MIN_KW} 个字符"}), 400
+        return jsonify(cloudsearch.search(kw))
+
+    @app.get("/api/detail")
+    def api_detail():
+        src_id = request.args.get("src", "")
+        vid = request.args.get("vid", "")
+        title = (request.args.get("t") or "")[:60]
+        src = next((s for s in load_sources() if s.id == src_id), None)
+        if src is None or not vid:
+            return jsonify({"ok": False, "error": "未知的来源或影片 ID"}), 400
+        return jsonify(fetch_detail(src, vid, title))
+
+    @app.get("/api/health")
+    def api_health():
+        """自检：用固定关键词逐个访问检索源，确认接口是否仍然可用。"""
+        kw = request.args.get("kw", "电影")
+        out = []
+        for s in load_sources():
+            r = fetch_one(s, kw)
+            out.append({"id": s.id, "name": s.name, "ok": r["ok"],
+                        "count": r["count"], "ms": r["ms"], "error": r["error"],
+                        "sample": [i["title"] for i in r["items"][:2]]})
+        return jsonify({"keyword": kw, "results": out})
+
+    @app.errorhandler(404)
+    def nf(_e):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "接口不存在"}), 404
+        return _page()
+
+    return app
+
+
+def _kw() -> str | None:
+    raw = (request.args.get("kw") or request.args.get("q") or "").strip()
+    raw = re.sub(r"\s+", " ", raw)[:MAX_KW]
+    return raw if len(raw) >= MIN_KW else None
+
+
+app = create_app()
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=False)
