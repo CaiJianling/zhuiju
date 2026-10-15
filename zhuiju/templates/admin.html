@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>后台统计 - 追剧资源搜索</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📊</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_v }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap">
+    <h1>后台统计 <span class="ver">需要口令</span></h1>
+    <p class="lede">历次查询记录：可按 IP、关键词、日期范围过滤并翻页。
+      数据存在 zhuiju/data/stats.db（SQLite），口令在 zhuiju/data/admin.json。</p>
+    {% if authed %}
+    <p class="fresh ok"><i class="dot s-ok"></i>已登录
+      <span class="fresh-hint">当前条件命中 {{ agg.count }} 条查询</span></p>
+    {% endif %}
+  </div>
+</header>
+
+<main class="wrap">
+
+{% if not authed %}
+  <section class="loginbox">
+    <h2>输入口令</h2>
+    {% if error %}<p class="loginerr">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ url_for('admin_login') }}" class="loginform">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="admfield"><span>口令</span>
+        <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+      <button class="gobtn" type="submit">进入</button>
+    </form>
+    <p class="atip">口令写在 <code>zhuiju/data/admin.json</code> 的 <code>password</code> 字段，
+      随时改成你自己知道的，改完重启服务生效；也可用环境变量
+      <code>ZHUIJU_ADMIN_PASSWORD</code> 覆盖，避免明文落盘。</p>
+  </section>
+
+{% else %}
+  <form class="admform" method="get" action="{{ url_for('admin') }}">
+    <label class="admfield"><span>起始日期</span>
+      <input type="date" name="day_from" value="{{ flt.day_from }}"></label>
+    <label class="admfield"><span>结束日期</span>
+      <input type="date" name="day_to" value="{{ flt.day_to }}"></label>
+    <label class="admfield"><span>IP</span>
+      <input type="text" name="ip" value="{{ flt.ip }}" placeholder="192.168.1.20"></label>
+    <label class="admfield"><span>关键词包含</span>
+      <input type="text" name="kw" value="{{ flt.kw }}" placeholder="庆余年"></label>
+    <label class="admfield"><span>入口</span>
+      <select name="via">
+        <option value="">全部</option>
+        {% for v, label in (('api', '交互搜索'), ('seo', '落地页快照'), ('cloud', '网盘查询')) %}
+        <option value="{{ v }}" {% if flt.via == v %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select></label>
+    <label class="admfield"><span>每页</span>
+      <select name="per">
+        {% for n in (25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if flt.per == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select></label>
+    <button class="gobtn" type="submit">筛选</button>
+    <a class="reset" href="{{ url_for('admin') }}">清空</a>
+  </form>
+
+  <div class="statgrid">
+    <div class="stat"><b>{{ agg.count }}</b><span>查询次数</span></div>
+    <div class="stat"><b>{{ agg.ips }}</b><span>独立 IP</span></div>
+    <div class="stat"><b>{{ agg.kws }}</b><span>独立关键词</span></div>
+    <div class="stat"><b>{{ agg.empty }}</b><span>零结果（{{ pct_empty }}%）</span></div>
+    <div class="stat"><b>{{ agg.avg_ok if agg.avg_ok is not none else '—' }}</b><span>平均可用源</span></div>
+    <div class="stat"><b>{{ agg.avg_ms if agg.avg_ms is not none else '—' }}</b><span>平均耗时 ms</span></div>
+  </div>
+  {% if agg.first_ts %}
+  <p class="rangehint">条件内时间跨度：{{ agg.first_ts }} ～ {{ agg.last_ts }}</p>
+  {% endif %}
+
+  <section class="asect">
+    <h2>按天</h2>
+    {% if agg.by_day %}
+    {% set maxn = agg.by_day | map(attribute='n') | max %}
+    <table class="table">
+      <thead><tr><th>日期</th><th>次数</th><th>独立 IP</th><th>零结果</th><th class="barcell"></th></tr></thead>
+      <tbody>
+      {% for d in agg.by_day %}
+        <tr>
+          <td><a href="{{ url_for('admin', day_from=d.day, day_to=d.day) }}">{{ d.day }}</a></td>
+          <td class="num">{{ d.n }}</td><td class="num">{{ d.ips }}</td><td class="num">{{ d.empty }}</td>
+          <td class="barcell"><i class="bar" style="width: {{ (d.n / maxn * 100) | round(1) }}%"></i></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="empty">还没有查询记录。去首页搜一部剧，这里就会有数据。</p>{% endif %}
+  </section>
+
+  <div class="cols">
+    <section class="asect">
+      <h2>热门关键词</h2>
+      {% if agg.top_kw %}
+      <table class="table">
+        <thead><tr><th>关键词</th><th>次数</th><th>IP</th><th>平均结果</th></tr></thead>
+        <tbody>
+        {% for k in agg.top_kw %}
+          <tr><td><a href="{{ url_for('admin', kw=k.kw) }}">{{ k.kw }}</a></td>
+            <td class="num">{{ k.n }}</td><td class="num">{{ k.ips }}</td>
+            <td class="num">{{ '%.1f'|format(k.avg_results or 0) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty">无</p>{% endif %}
+    </section>
+
+    <section class="asect">
+      <h2>活跃 IP</h2>
+      {% if agg.top_ip %}
+      <table class="table">
+        <thead><tr><th>IP</th><th>次数</th><th>关键词</th><th>首 / 末次</th></tr></thead>
+        <tbody>
+        {% for r in agg.top_ip %}
+          <tr><td><a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a></td>
+            <td class="num">{{ r.n }}</td><td class="num">{{ r.kws }}</td>
+            <td class="dim">{{ r.first_day }} ~ {{ r.last_day }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="empty">无</p>{% endif %}
+      <p class="atip">默认只监听 127.0.0.1，所以 IP 全会是 127.0.0.1。要按设备区分得
+        <code>--host 0.0.0.0</code>，或挂 nginx 反代——反代下会读 X-Forwarded-For，
+        但只有上一跳是回环地址时才采信，外部请求伪造不了这个字段。</p>
+    </section>
+  </div>
+
+  <section class="asect">
+    <h2>明细 <span class="asub">第 {{ rows.page }} / {{ rows.pages }} 页 · 共 {{ rows.total }} 条</span></h2>
+    {% if rows['items'] %}
+    <table class="table">
+      <thead><tr><th>时间</th><th>IP</th><th>关键词</th><th>入口</th>
+        <th>结果</th><th>原始命中</th><th>可用源</th><th>耗时 ms</th></tr></thead>
+      <tbody>
+      {% for r in rows['items'] %}
+        <tr>
+          <td class="dim">{{ r.ts }}</td>
+          <td><a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a></td>
+          <td><a href="{{ url_for('admin', kw=r.kw) }}">{{ r.kw }}</a></td>
+          <td>{{ via_cn.get(r.via, r.via) }}</td>
+          <td class="num {{ 'zero' if not r.results }}">{{ r.results if r.results is not none else '—' }}</td>
+          <td class="num">{{ r.hits if r.hits is not none else '—' }}</td>
+          <td class="num">{{ r.sources_ok if r.sources_ok is not none else '—' }}/{{ r.sources_total if r.sources_total is not none else '—' }}</td>
+          <td class="num">{{ r.ms if r.ms is not none else '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="pager">
+      {% if rows.page > 1 %}<a href="{{ url_for('admin', **args_prev) }}">‹ 上一页</a>{% endif %}
+      <span class="dim">第 {{ rows.page }} / {{ rows.pages }} 页</span>
+      {% if rows.page < rows.pages %}<a href="{{ url_for('admin', **args_next) }}">下一页 ›</a>{% endif %}
+    </div>
+    {% else %}
+    <p class="empty">这个条件下没有记录。换个日期范围或清空筛选试试。</p>
+    {% endif %}
+  </section>
+
+  <form method="post" action="{{ url_for('admin_logout') }}" class="logout">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button type="submit" class="reset">退出登录</button>
+  </form>
+{% endif %}
+</main>
+</body>
+</html>

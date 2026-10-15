@@ -18,6 +18,9 @@ python -m venv .venv
 
 打开 <http://127.0.0.1:5000/> 。想换端口：`set ZHUIJU_PORT=8000 && .venv\Scripts\python.exe run.py`。
 
+后台统计在 <http://127.0.0.1:5000/admin>，口令第一次启动时随机生成、打印在控制台，
+写在 `zhuiju/data/admin.json` 里，随时可以改成自己知道的（详见"后台统计"一节）。
+
 ## 四个标签页
 
 | 标签页 | 内容 |
@@ -91,6 +94,9 @@ python -m venv .venv
 :: 离线：图片代理的防盗链映射与内网拦截边界
 .venv\Scripts\python.exe tests\test_imgproxy.py
 
+:: 离线：后台统计（SQLite 写入/过滤/分页/聚合）与口令登录、限流、注入边界
+.venv\Scripts\python.exe tests\test_admin_stats.py
+
 :: 活体：自己起一个临时端口的服务，验证路由 / 网盘查询 / 未回归，跑完自动关闭
 .venv\Scripts\python.exe tests\test_cloud_live.py
 
@@ -102,7 +108,7 @@ python -m venv .venv
 
 ```
 zhuiju/
-  app.py            Flask 路由：/、/s/<关键词>、/api/search|catalog|deeplinks|cloud|detail|health|hot|refresh、/img、/robots.txt、/sitemap.xml
+  app.py            Flask 路由：/、/s/<关键词>、/admin、/api/search|catalog|deeplinks|cloud|detail|health|hot|refresh、/img、/robots.txt、/sitemap.xml
   search.py         并发检索、maccms 响应归一化、跨源片名合并与分层、播放线路解析
   catalog.py        目录检索与直达链接拼装（按文件 mtime 缓存，改数据不用重启）
   cloudsearch.py    网盘 / 磁力站结果页抓取与解析（只收同域、带逐站状态）
@@ -110,6 +116,8 @@ zhuiju/
   seo.py            /s/ 落地页快照、查询记录、robots 与 sitemap
   imgproxy.py       海报代理（补防盗链 Referer、忽略自签证书、拦内网）
   autoupdate.py     访问时触发的后台更新（STEPS 唯一清单、逻辑日、锁文件 + 子进程 PID 判活、进度）
+  stats.py          查询统计落 SQLite（过滤/分页/聚合走参数化 SQL；写失败不影响搜索）
+  admin.py          后台口令配置读写、口令校验、登录失败限流、反代下取真实客户端 IP
   sources.py        检索源配置读写
   data/
     sources.json    实测可用的检索接口（含站内搜索模板、首页是否可浏览）
@@ -117,8 +125,10 @@ zhuiju/
     templates.json  已复核通过的各站搜索 URL 模板
     refresh_state.json    最近一次自动更新的结果（页头新鲜度就来自这里）
     refresh_progress.json 后台更新的实时进度（页头进度条与步骤胶囊）
+    stats.db        查询统计库（含 -wal/-shm 侧文件；本机隐私，不进版本库）
+    admin.json      后台口令与会话签名密钥（明文口令，不进版本库）
     cache/hot.json  猜你想搜缓存   cache/mirror_used.json  这次上游数据实际走的哪个镜像
-  templates/index.html
+  templates/index.html, admin.html
   static/app.css, app.js
 tools/                  重新采数据的维护脚本，日常使用不需要跑
   build_catalog.py      上游 resources.json -> 本地目录（requests 走 gh-proxy 镜像链，记下实际用的源）
@@ -208,6 +218,73 @@ refresh.bat         一键手动更新
 七个场景：不该触发时不触发、该触发时启动、期间仍可搜索、重复访问只起一个、
 进程死了要识破、失败后要重试、横幅措辞对得上、进度以子进程存活为准）。
 测试的状态/进度/锁文件全在 `.probe/autoupdate_test/`，不会污染真实数据。
+
+## 后台统计（/admin）
+
+打开 http://127.0.0.1:5000/admin ，要口令。
+
+### 口令在哪改
+
+`zhuiju/data/admin.json`：
+
+```json
+{
+  "password": "你自己改成知道的口令",
+  "secret_key": "随机 64 位串，用来签登录 cookie"
+}
+```
+
+文件不存在时第一次启动会自动生成（`password` 随机），**并在启动控制台打印这一次**；
+之后想换，直接编辑 `password` 再重启服务即可，不影响已登录的会话。
+也可以用环境变量 `ZHUIJU_ADMIN_PASSWORD` 覆盖，让明文不落盘；`ZHUIJU_SECRET_KEY` 同理。
+
+这个文件和统计库一样进了 `.gitignore`——里面是明文口令，不该提交。
+
+### 统计了什么
+
+每次真正敲上游接口的查询记一条，存 SQLite（`zhuiju/data/stats.db`，标准库 `sqlite3`，无额外依赖）：
+
+| 字段 | 含义 |
+|---|---|
+| `ts` / `day` | 时间戳与日期（按日期范围筛就用 `day`，含两端） |
+| `ip` | 客户端 IP |
+| `kw` | 关键词 |
+| `via` | `api`=页面搜索 / `seo`=落地页快照 / `cloud`=网盘查询 |
+| `results` / `hits` | 合并去重后的条数 / 各源原始命中之和 |
+| `sources_ok` / `sources_total` | 本次有多少源真的返回了 |
+| `ms` | 这次等了多久 |
+
+页面分六块：汇总卡片（查询次数、独立 IP、独立关键词、零结果及占比、平均可用源、平均耗时）、
+按天（点某天=把范围收到那天）、热门关键词、活跃 IP（点 IP=只看这个 IP）、明细表、分页。
+筛选表单支持 起始/结束日期、IP、关键词包含、入口、每页 25/50/100/200；
+**所有条件都走参数化 SQL，翻页链接会带上当前条件**。
+
+`/s/` 落地页只在**真的建了快照**时才记一条，命中 6 小时缓存的重复打开不计数，
+否则同一部剧被反复点开会把"查询次数"灌水。
+
+### 几点设计上的取舍
+
+- **登录失败限流**：同一来源 15 分钟内最多错 8 次，之后返回 429 并提示还需等多久；纯内存，重启清零。
+- **CSRF**：登录与退出表单都带一次性 token，登录后立刻换一枚。
+- **会话**：`HttpOnly + SameSite=Lax` cookie，8 小时有效。
+- **IP 只能采信一次**：只有当直接连过来的那一跳是回环地址（也就是本机 nginx）时才读
+  `X-Forwarded-For` 的最左一项，规则与 `TrustForwarded` 完全一致。外部直连时这个头是自己写的，
+  采信就等于让访问者随便伪造统计里的来源。写入前还会用 `ipaddress` 解析一次，解析不出的一律丢弃，
+  所以这个字段里不会混进换行或任意文本。
+- **默认全是 127.0.0.1**：只监听回环时所有记录 IP 都是 127.0.0.1，按 IP 分组没意义；
+  要按设备区分得 `--host 0.0.0.0` 或挂反代。
+- **统计写不进去也不影响搜索**：`record()` 整个包在 try 里，磁盘满、库被别的过程锁住，
+  搜索照常返回。
+- **保留期**：默认只留 365 天，更早的记录在初始化时清掉（每小时最多清一次），
+  环境变量 `ZHUIJU_STATS_KEEP_DAYS` 可改。
+- **不进搜索引擎**：`/robots.txt` 里 `Disallow: /admin`，页面本身也带 `noindex`。
+- **公网暴露前请先想清楚**：这个口令是给"同事乱点"设的门槛，不是严格的多人账号体系。
+  要放到能被公网访问的地址，至少得配合 HTTPS，并考虑在 nginx 上再加一层基本认证。
+
+验收：`.venv\Scripts\python.exe tests\test_admin_stats.py`（离线，不联网）。统计库和口令文件
+都被指到临时目录，不会碰你正在用的那份数据；覆盖口令生成与修改、环境变量覆盖、
+写入/过滤/分页/聚合、脏输入与注入串、XFF 采信规则、限流、未登录不泄漏数据、
+登录全流程、三个入口的埋点、以及"统计库打不开时搜索仍 200"。
 
 ## 端口与反向代理
 
@@ -302,3 +379,9 @@ location / {
 - 结果标题带"同系列版本 / 近似名称 / 模糊匹配"标记的，是接口返回的续作、特别版或同名蹭名作品（例如各种"庆余年之××"短剧）；完全同名的正片排在最前。
 - 英文片名往往搜不到，这些接口收的是中文片名，请换中文译名（如 Oppenheimer → 奥本海默），无结果时页面也会提示。
 - 本工具只做第三方公开接口的聚合查询，不存储、不转发任何影视内容；外链安全性由使用者自行判断。仅供个人技术学习与找片参考，请支持正版。
+- **会存查询日志**：`zhuiju/data/stats.db` 里记着"哪个 IP 在什么时候搜了什么词"，另有
+  `zhuiju/data/queries.jsonl`（给 sitemap 用）与 `logs/`。这三个文件都只在你的机器上、
+  且都进了 `.gitignore`；不想留就把 `stats.db` 删掉，它会自动重建。想彻底不记，
+  把 `zhuiju/app.py` 里的 `_record()` 调用注掉即可（统计页会因此变空）。
+- 后台统计页 `/admin` 只有一层口令，够挡住乱点的同事，不够当多人账号体系用；
+  要挂到能被公网访问的地址，先配合 HTTPS，并考虑在 nginx 上再加一层基本认证（见"后台统计"一节）。

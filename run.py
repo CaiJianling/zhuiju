@@ -66,13 +66,22 @@ def main() -> int:
         os.environ["ZHUIJU_NO_BROWSER"] = "1"
 
     from zhuiju.app import app
+    from zhuiju import admin as admin_mod
 
     (BASE / "logs").mkdir(exist_ok=True)
     (BASE / "logs" / "server.pid").write_text(str(os.getpid()), encoding="utf-8")
 
+    cfg = admin_mod.load()
     print(f"追剧资源搜索已启动： {url}   （Ctrl+C 退出）")
     if args.host not in ("127.0.0.1", "localhost"):
         print(f"  监听在 {args.host}，局域网内其它设备可访问，请确认这是你想要的")
+    print(f"  后台统计： {url}admin")
+    if cfg.get("_generated"):
+        # 口令是第一次启动时随机生成的，只在生成这一次打印（和 Flask 的调试 PIN 一个道理）
+        print(f"    已在 {admin_mod.CONFIG} 生成口令文件，本次口令： {cfg['password']}")
+        print("    想换成自己知道的：编辑该文件的 password 字段，重启服务生效")
+    else:
+        print(f"    口令在 {admin_mod.CONFIG} 的 password 字段，改完重启生效")
     threading.Thread(target=_open, args=(url, args.host, args.port), daemon=True).start()
     app.run(host=args.host, port=args.port, debug=False, use_reloader=False)
     return 0

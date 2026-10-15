@@ -29,6 +29,15 @@ zhuiju/data/queries.jsonl
 # 有时效的缓存：猜你想搜结果、/s/ 落地页快照、图片代理已登记的 URL
 zhuiju/data/cache/
 
+# 后台统计的数据库（WAL 模式会带 -wal / -shm 两个侧文件）——
+# 里面是"哪个 IP 在什么时候搜了什么"，属于本机隐私
+zhuiju/data/stats.db
+zhuiju/data/stats.db-wal
+zhuiju/data/stats.db-shm
+
+# 后台口令配置文件：明文 password + 会话签名密钥，换台机器就该重新生成
+zhuiju/data/admin.json
+
 # 维护脚本的草稿与中间产物
 .probe/
 

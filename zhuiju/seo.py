@@ -162,6 +162,7 @@ def robots_txt(site: str = "") -> str:
             "Allow: /$\n"
             "Allow: /s/\n"
             "Disallow: /api/\n"
+            "Disallow: /admin\n"
             f"Sitemap: {site}/sitemap.xml\n")
 
 

@@ -7,28 +7,34 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import re
+import secrets
+import time
 import urllib.parse
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from flask import (Flask, jsonify, make_response, redirect, render_template,
-                 request, url_for)
+                   request, session, url_for)
 from markupsafe import escape as xml_escape
 
+from . import admin as admin_mod
 from . import autoupdate
 from . import catalog as catalog_mod
 from . import cloudsearch
 from . import hot as hot_mod
 from . import imgproxy
 from . import seo as seo_mod
+from . import stats as stats_mod
 from .search import detail as fetch_detail
 from .search import fetch_one, search
 from .sources import load_sources
 
 MIN_KW = 2        # 单字符关键词会引发一轮无意义的并发抓取，直接拒掉
 MAX_KW = 60
+VIA_CN = {"api": "搜索", "seo": "落地页", "cloud": "网盘"}
 
 
 def refresh_info() -> dict:
@@ -155,6 +161,44 @@ def create_app() -> Flask:
     app.json.ensure_ascii = False
     app.wsgi_app = TrustForwarded(app.wsgi_app)
 
+    # 登录会话用配置文件里的密钥签名（zhuiju/data/admin.json，见 zhuiju/admin.py）
+    app.secret_key = admin_mod.secret_key()
+    app.permanent_session_lifetime = timedelta(seconds=admin_mod.SESSION_TTL)
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    try:
+        stats_mod.ensure_schema()
+    except Exception:  # noqa: BLE001 - 统计库不可写也不该挡住站点启动
+        pass
+
+    def _csrf_token() -> str:
+        tok = session.get("csrf")
+        if not tok:
+            tok = secrets.token_hex(16)
+            session["csrf"] = tok
+        return tok
+
+    def _csrf_ok() -> bool:
+        want = session.get("csrf") or ""
+        got = request.form.get("csrf") or ""
+        return bool(want) and hmac.compare_digest(str(want), str(got)[:64])
+
+    def _authed() -> bool:
+        at = session.get(admin_mod.SESSION_KEY)
+        try:
+            return bool(at) and (time.time() - float(at)) < admin_mod.SESSION_TTL
+        except (TypeError, ValueError):
+            return False
+
+    def _login_page(error: str | None, code: int):
+        return render_template("admin.html", authed=False, error=error,
+                               csrf=_csrf_token(), asset_v=_asset_ver()), code
+
+    def _record(kw: str, via: str, started: float, **num) -> None:
+        """把一次查询落到 SQLite。IP 只在可信来源下取，见 admin.client_ip。"""
+        stats_mod.record(kw, admin_mod.client_ip(request.environ), via=via,
+                         ms=(time.perf_counter() - started) * 1000, **num)
+
     @app.before_request
     def _touch():
         # 访问即触发：今天没更新过就丢一个后台进程，本次请求照常返回旧数据
@@ -198,7 +242,15 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
         autoupdate.maybe_trigger()
         seo_mod.log_query(kw)
-        return _page(kw, seo_mod.snapshot(kw))
+        started = time.perf_counter()
+        snap = seo_mod.snapshot(kw)
+        # 只有真的去敲了上游（不是命中 6 小时快照）才记一条，
+        # 否则同一部剧被反复打开会把"查询次数"灌水
+        if not snap.get("from_cache"):
+            _record(kw, "seo", started, results=snap.get("count"),
+                    sources_ok=snap.get("sources_ok"),
+                    sources_total=snap.get("sources_total"))
+        return _page(kw, snap)
 
     @app.get("/img")
     def api_img():
@@ -261,7 +313,11 @@ def create_app() -> Flask:
             return jsonify({"error": f"关键词至少需要 {MIN_KW} 个字符"}), 400
         page = max(1, min(20, request.args.get("page", 1, type=int)))
         seo_mod.log_query(kw)
+        started = time.perf_counter()
         out = search(kw, page=page)
+        _record(kw, "api", started, results=len(out.get("results") or []),
+                hits=out.get("hits"), sources_ok=out.get("sources_ok"),
+                sources_total=out.get("sources_total"))
         imgproxy.register_all(out.get("results"))
         return jsonify(out)
 
@@ -293,7 +349,11 @@ def create_app() -> Flask:
         kw = _kw()
         if kw is None:
             return jsonify({"error": f"关键词至少需要 {MIN_KW} 个字符"}), 400
-        return jsonify(cloudsearch.search(kw))
+        started = time.perf_counter()
+        out = cloudsearch.search(kw)
+        _record(kw, "cloud", started, results=out.get("entries"),
+                sources_ok=out.get("with_results"), sources_total=out.get("total_sites"))
+        return jsonify(out)
 
     @app.get("/api/detail")
     def api_detail():
@@ -316,6 +376,53 @@ def create_app() -> Flask:
                         "count": r["count"], "ms": r["ms"], "error": r["error"],
                         "sample": [i["title"] for i in r["items"][:2]]})
         return jsonify({"keyword": kw, "results": out})
+
+    @app.get("/admin")
+    def admin():
+        """后台统计：口令通过才给看，全部数据来自 SQLite。"""
+        if not _authed():
+            return _login_page(None, 401)
+        flt = {k: (request.args.get(k) or "").strip()[:80]
+               for k in ("ip", "kw", "via", "day_from", "day_to")}
+        if flt["via"] not in stats_mod.VIA:
+            flt["via"] = ""
+        per = request.args.get("per", 50, type=int) or 50
+        page = request.args.get("page", 1, type=int) or 1
+        rows = stats_mod.list_queries(flt, page=page, per=per)
+        agg = stats_mod.summary(flt)
+        # 翻页链接要把当前筛选条件一起带上，否则点了下一页筛选就丢了
+        keep = {k: v for k, v in flt.items() if v}
+        keep["per"] = rows["per"]
+        return render_template(
+            "admin.html", authed=True, error=None, csrf=_csrf_token(),
+            asset_v=_asset_ver(), via_cn=VIA_CN, flt={**flt, "per": rows["per"]},
+            agg=agg, rows=rows,
+            pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
+            args_next={**keep, "page": rows["page"] + 1},
+            args_prev={**keep, "page": rows["page"] - 1})
+
+    @app.post("/admin/login")
+    def admin_login():
+        who = admin_mod.client_ip(request.environ)
+        wait = admin_mod.throttle.blocked(who)
+        if wait:                      # 同一来源连续错太多次就先冷却，脚本猜口令猜不动
+            return _login_page(f"失败次数过多，请 {wait} 秒后再试", 429)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        if admin_mod.password_ok(request.form.get("password") or ""):
+            admin_mod.throttle.reset(who)
+            session[admin_mod.SESSION_KEY] = time.time()
+            session.permanent = True
+            session["csrf"] = secrets.token_hex(16)     # 登录后换一枚，旧表单不能再复用
+            return redirect(url_for("admin"))
+        left = admin_mod.throttle.fail(who)
+        return _login_page(f"口令不正确（还可尝试 {left} 次）", 401)
+
+    @app.post("/admin/logout")
+    def admin_logout():
+        if _csrf_ok():
+            session.pop(admin_mod.SESSION_KEY, None)
+        return redirect(url_for("admin"))
 
     @app.errorhandler(404)
     def nf(_e):
