@@ -244,5 +244,64 @@ check("按来源类型筛选正常", r.count('name="ref_kind"') >= 1)
 r = c.get("/admin?ref_kind=bogus").get_data(as_text=True)
 check("非法来源类型当没填", "Edge 124.0" in r)      # 没被筛成空
 
+print("\n8) 配色静态体检：把上次那种「蓝底红字」的替换事故钉住")
+def palette(block):
+    out = {}
+    for name, val in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", block):
+        v = val.strip()
+        if re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", v):
+            out[name] = v
+    return out
+
+
+def rgb(v):
+    v = v.strip()
+    if v.startswith("#"):
+        h = v[1:]
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+    n = re.findall(r"[\d.]+", v)
+    return [float(n[0]), float(n[1]), float(n[2])]
+
+
+def contrast(a, b):
+    def lum(c):
+        f = lambda v: (v / 255) / 12.92 if v / 255 <= .03928 else ((v / 255 + .055) / 1.055) ** 2.4
+        r, g, bl = rgb(c)
+        return .2126 * f(r) + .7152 * f(g) + .0722 * f(bl)
+    l1, l2 = lum(a), lum(b)
+    return round((max(l1, l2) + .05) / (min(l1, l2) + .05), 2)
+
+
+# 这些配对是从 CSS 里读出来的实际搭配，改任何一处配色都会在这里暴露
+PAIRS = [("--ink", "--surface"), ("--ink-2", "--surface"), ("--ink-2", "--surface-2"),
+         ("--dim", "--surface"), ("--on-accent", "--brand"), ("--brand-ink", "--brand-soft"),
+         ("--ok", "--ok-bg"), ("--bad", "--bad-bg"), ("--warn", "--warn-bg")]
+for label, blk in (("亮色", root), ("暗色", dark)):
+    pal = palette(blk)
+    for fg, bg in PAIRS:
+        if fg not in pal or bg not in pal:
+            check(f"{label} {fg}/{bg} 两色都在调色板里", False, sorted({fg, bg} - set(pal)))
+            continue
+        c = contrast(pal[fg], pal[bg])
+        check(f"{label} {fg} on {bg} 对比度 {c} ≥ 4.5", c >= 4.5, c)
+
+gobtn = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
+                        re.search(r"\.gobtn \{([^}]*)\}", css).group(1)))
+check("主按钮前景是 --on-accent 而不是语义色", "var(--on-accent)" in gobtn.get("color", ""),
+      gobtn.get("color"))
+check("主按钮与输入框同一套圆角", gobtn.get("border-radius") == "8px", gobtn.get("border-radius"))
+unified = re.search(r"\.pbtn, \.pager a, \.jumpbtn, \.themebtn, \.fbtn \{", css)
+check("翻页/跳转/主题/筛选胶囊合并成一处定义", unified is not None)
+check("旧的分立胶囊定义已删除", css.count(".pbtn {\n") == 0 and css.count(".pager a {\n") == 0)
+check("主题切换渐变只在切换期间生效",
+      ".theme-anim" in css and "prefers-reduced-motion" in css)
+tj = (BASE / "zhuiju" / "static" / "theme.js").read_text(encoding="utf-8")
+check("theme.js 切换时才加 theme-anim 并定时摘掉",
+      'classList.add("theme-anim")' in tj and "classList.remove" in tj and "setTimeout" in tj)
+check("首屏预置不走 apply，所以不会一进页面就闪一遍渐变",
+      "apply(" not in th.split("<script>")[0] and "apply(\"auto\", true)" not in tj.split("sync();")[0])
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
