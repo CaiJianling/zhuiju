@@ -2,16 +2,21 @@
 """确定性地重启本地站点：先杀掉监听端口的旧进程，再起新的，最后验证路由已注册。
 
 改完代码后用它，比手动关窗口可靠：旧进程占着端口时，新起的 Flask 会静默绑定失败，
-页面看起来正常但跑的还是没有新路由的旧代码。全程只用 Python（WinAPI），不解析命令输出。
+页面看起来正常但跑的还是没有新路由的旧代码。全程只用 Python，不解析任何命令输出。
 
     python tools/restart.py
     python tools/restart.py --port 8000
+
+Windows 走 WinAPI（kernel32 + iphlpapi 的 TCP 表），Linux 走 /proc：
+读 /proc/net/tcp* 找 LISTEN 的 socket inode，再在 /proc/<pid>/fd 里反查归属。
+非 root 时看不到别人的 fd，这时候只能按 logs/server.pid 收尾，会明确说出来。
 """
 from __future__ import annotations
 
 import argparse
 import ctypes
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -21,9 +26,20 @@ import urllib.request
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
+WIN = os.name == "nt"
 
 
 def pid_alive(pid: int) -> bool:
+    if not WIN:
+        try:
+            os.kill(pid, 0)             # 只是探活，不发信号
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True                 # 进程在，只是不属于我
+        except OSError:
+            return False
+        return True
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(0x1000, False, pid)
     if not h:
@@ -37,6 +53,18 @@ def pid_alive(pid: int) -> bool:
 
 
 def kill_pid(pid: int) -> None:
+    if not WIN:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                return                  # 已经没了 / 不是我的进程
+            if sig == signal.SIGTERM:
+                for _ in range(12):     # 给 Flask 一点收尾时间，别留半死的监听
+                    time.sleep(0.25)
+                    if not pid_alive(pid):
+                        return
+        return
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(0x0001, False, pid)
     if h:
@@ -44,16 +72,75 @@ def kill_pid(pid: int) -> None:
         k32.CloseHandle(h)
 
 
+def _proc_listen_pids(port: int, proc: Path | None = None, readlink=None) -> list[int]:
+    """Linux：从 /proc 找监听该端口的 PID。找不到就返回空表，不猜。
+
+    /proc/net/tcp 的表头把 tx_queue rx_queue、tr tm->when 各写成两个名字，数据行里它们
+    却各自合成一个字段，所以列号不能照着表头数。内核 seq_printf 的实际顺序是：
+    sl, local, remote, st, tx:rx, tr:when, retrnsmt, uid, timeout, inode ——
+    inode 在 **f[9]**，st 在 f[3]，端口是 f[1] 冒号后面那段 16 进制。
+    照着表头数会取到 f[8]（那是 timeout），端口永远匹配不上：旧进程杀不掉、
+    页面看着"起来了"其实跑的还是旧代码。
+    st=0A 才是 LISTEN。inode 只是号码，还得去 /proc/<pid>/fd 里找 socket:[inode] 反查归属，
+    非 root 时看别人的 fd 会 EACCES，只能跳过（那种情况按 logs/server.pid 收尾）。
+
+    proc / readlink 可以注入：真实 /proc 与 socket 软链接都只在 Linux 有，
+    在 Windows 上没法造出来，不注入就没法验证这套解析。
+    """
+    readlink = readlink or os.readlink
+    proc = proc or Path("/proc")
+    inodes = set()
+    for name in ("net/tcp", "net/tcp6"):
+        try:
+            lines = (proc / name).read_text().splitlines()[1:]
+        except (OSError, UnicodeDecodeError):
+            continue
+        for ln in lines:
+            f = ln.split()
+            if len(f) < 10 or f[3] != "0A":
+                continue
+            try:
+                if int(f[1].split(":")[1], 16) != port:
+                    continue
+            except (ValueError, IndexError):
+                continue
+            inodes.add(f[9])
+    if not inodes:
+        return []
+    pids = []
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            links = list((entry / "fd").iterdir())
+        except OSError:
+            continue                        # 权限不够 / 进程已退出
+        for link in links:
+            try:
+                tgt = readlink(str(link))         # 不是 os.readlink：注入点要真被用上
+            except OSError:
+                continue
+            if tgt.startswith("socket:[") and tgt[8:-1] in inodes:
+                pids.append(int(entry.name))
+                break
+    return sorted(set(pids))
+
+
+
 def listener_pids(port: int) -> list[int]:
-    """用 iphlpapi 的 TCP 表找到监听该端口的 PID。
+    """用 iphlpapi 的 TCP 表找到监听该端口的 PID（Linux 走 /proc，见 _proc_listen_pids）。
 
     MIB_TCPROW_OWNER_PID 的字段顺序是 state, localAddr, localPort, remoteAddr,
     remotePort, owningPid —— 端口在第 3 个 DWORD（不是第 2 个，那是本地地址），
     且按网络字节序存放。取错列会永远匹配不上，导致旧进程杀不掉、
     页面看着"起来了"其实跑的还是旧代码。
     """
-    if os.name != "nt":
-        return []
+    if not WIN:
+        return _proc_listen_pids(port)
     AF_INET, OWNER_PID_LISTENER = 2, 3
     g = ctypes.windll.iphlpapi
     size = ctypes.c_ulong(0)
@@ -131,12 +218,15 @@ def main() -> int:
         return 1
 
     (BASE / "logs").mkdir(exist_ok=True)
-    flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0
+    kw = {"creationflags": 0x00000008 | 0x00000200} if WIN else {"start_new_session": True}
     with open(BASE / "logs" / "server.out", "a", encoding="utf-8") as fh:
         fh.write(f"\n=== 重启 {time.strftime('%Y-%m-%d %H:%M:%S')} port={port} ===\n")
+        # 用"跑这个脚本的解释器"起站点，宝塔那类 venv 建在站点外面的部署才不会被
+        # 起成系统 python（那样起来也没依赖，页面直接 500）
         subprocess.Popen([sys.executable, "-u", str(BASE / "run.py")], cwd=str(BASE),
-                         stdout=fh, stderr=fh, creationflags=flags,
-                         env={**os.environ, "ZHUIJU_PORT": str(port), "PYTHONUTF8": "1"})
+                         stdout=fh, stderr=fh,
+                         env={**os.environ, "ZHUIJU_PORT": str(port), "PYTHONUTF8": "1"},
+                         **kw)
 
     # 就绪判据用"只有当前这版代码才有"的特征，否则旧进程应答也会被判成起来了
     probe = root + "/api/catalog?kw=&link_kw=zz"

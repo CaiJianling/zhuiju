@@ -9,9 +9,17 @@
     所以页面照常返回**旧数据**，更新完成后文件被替换，刷新即拿到新数据
     （catalog.py 按文件 mtime 缓存，无需重启服务）。
   - 用锁文件避免反复访问把更新任务排队重复启动；锁超过 25 分钟视为上次进程已死，自动放行。
+  - 一轮失败后进入 ZHUIJU_RETRY_MINUTES（默认 15 分钟）冷却：否则服务器上只要有人访问，
+    就会每分钟重跑一遍注定失败的六步，既刷爆 logs 也白敲第三方接口。
+
+跨平台
+  解释器一律现找（python_bin()），不写死 .venv/Scripts/python.exe ——那是 Windows 的
+  venv 布局，Linux（含宝塔面板建的 venv）在 bin/ 下面，写死就会 [Errno 8] Exec format error
+  把六个步骤一起挂在同一行上。判活/终止也按平台分叉。
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -30,6 +38,15 @@ LOCK_TTL = 25 * 60          # 锁的有效期，超过认为上次进程已死
 CHECK_TTL = 60              # 同一进程内多久才重新看一次状态文件，避免每次请求都读盘
 # "一天"以凌晨几点为界：2 点前访问不算新的一天，不触发；2 点后当天没跑过才触发
 REFRESH_HOUR = int(os.environ.get("ZHUIJU_REFRESH_HOUR", "2"))
+# 一轮失败后多久才允许再自动重试；设 0 就是每次访问都重试
+RETRY_MINUTES = int(os.environ.get("ZHUIJU_RETRY_MINUTES", "15"))
+
+# 站点自己 + 各步骤子进程都要用到的依赖，用来判断某个解释器"是不是这个项目的 venv"
+DEPS = ("flask", "requests")
+# 常见 venv 目录名：本项目文档用 .venv，宝塔面板建的是 venv
+VENV_NAMES = (".venv", "venv", "env")
+_py_cache: list = []            # [(解释器路径, 说明)]，进程内只算一次
+LAST_TRIGGER: list = []         # 最近一次 maybe_trigger 的结论，供 /api/refresh 排查
 
 # 更新步骤的唯一清单：refresh.py 与页面进度都从这里取，避免两处各写一份对不上
 STEPS = [
@@ -58,6 +75,128 @@ def logical_day(now: datetime | None = None) -> date:
     """
     now = now or datetime.now()
     return (now - timedelta(hours=REFRESH_HOUR)).date()
+
+
+# --------------------------------------------------------------------------- 解释器在哪
+def is_windows() -> bool:
+    """平台判定单独包一层：测试里要能模拟 Linux，不然跨平台这段永远没被验证过。"""
+    return os.name == "nt"
+
+
+def _usable(p: Path) -> bool:
+    """文件在、且（非 Windows 下）真有执行位。软链接照常跟。"""
+    try:
+        if not p.is_file():
+            return False
+    except OSError:
+        return False
+    return True if is_windows() else os.access(str(p), os.X_OK)
+
+
+def has_deps(exe: str) -> bool:
+    """这个解释器里装没装本站依赖。说不清装没装，跑一句 import 最省事。
+
+    探的就是自己（sys.executable）时用 importlib 就地查，省一次进程启动。
+    """
+    exe = str(exe or "")
+    if not exe:
+        return False
+    try:
+        # 只是"这是不是我自己"的比较，所以两边都 resolve；
+        # 返回给调用方的路径一律不 resolve（见 python_info 里那条软链接的注释）
+        same = Path(exe).resolve() == Path(sys.executable).resolve()
+    except OSError:
+        same = False
+    if same:
+        return all(importlib.util.find_spec(m) for m in DEPS)
+    try:
+        return subprocess.run([exe, "-c", "import " + ", ".join(DEPS)],
+                              capture_output=True, timeout=25).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def venv_dir() -> str:
+    """venv 建在站点外面（宝塔就是这样）时指到这里，不用改代码。"""
+    return os.environ.get("ZHUIJU_VENV", "").strip()
+
+
+def _candidates() -> list:
+    """按"最可能是本站解释器"排序的候选：环境变量 > 正在跑站点的 > 站点目录里的 venv。"""
+    out = []
+    env = os.environ.get("ZHUIJU_PYTHON", "").strip()
+    if env:
+        out.append((env, "ZHUIJU_PYTHON 指定"))
+    out.append((sys.executable, "当前跑站点的解释器"))
+    roots = ([Path(venv_dir())] if venv_dir() else []) + [BASE / n for n in VENV_NAMES]
+    for base in roots:
+        if is_windows():
+            out.append((str(base / "Scripts" / "python.exe"), f"{base.name} 虚拟环境"))
+        else:
+            for name in ("python", "python3"):
+                out.append((str(base / "bin" / name), f"{base.name} 虚拟环境"))
+    return [(str(p), why) for p, why in out if p]
+
+
+def python_info() -> tuple:
+    """选出来的解释器和选它的理由。进程内只算一次——探依赖要起子进程，不能每请求都探。
+
+    这里以前写死 .venv/Scripts/python.exe，那是 Windows 的 venv 布局：Linux 在 bin/python，
+    宝塔更把 venv 建到站点目录外面（/www/server/python_project/virtualenv_env/<名字>/）。
+    写死的结果是要么路径不存在，要么 exec 到从 Windows 拷上来的 PE 文件，
+    报 [Errno 8] Exec format error，六个步骤全挂在同一行上。
+    """
+    if _py_cache:
+        return _py_cache[0]
+    seen, chosen, first_usable = set(), None, None
+    for exe, why in _candidates():
+        if exe in seen or not _usable(Path(exe)):
+            continue
+        seen.add(exe)
+        first_usable = first_usable or (exe, why)
+        if has_deps(exe):
+            # 原样留着这个路径，**不要 resolve()**：宝塔 venv 里的 bin/python 是指向真
+            # 解释器的软链接，解析到真身之后就离开 venv 了，site-packages 跟着就没了，
+            # 探依赖时明明齐全、跑起来却说 import 不到 flask
+            chosen = (exe, f"{why} · 依赖齐全")
+            break
+    if chosen is None:
+        chosen = first_usable or (sys.executable or "python3", "没找到可执行的解释器")
+    _py_cache.clear()
+    _py_cache.append(chosen)
+    return chosen
+
+
+def python_bin() -> str:
+    """跑更新步骤该用的解释器路径。"""
+    return python_info()[0]
+
+
+def py_exe(script: str, args: str = "") -> str:
+    """给页面/文档用的一行命令，粘了就能跑（venv 在外面时尤其重要）。"""
+    return f"{python_bin()} {script} {args}".strip()
+
+
+def retry_hint() -> str:
+    """横幅里"怎么手动催更"。写死"双击 refresh.bat"在 Linux 上是句做不到的指引。"""
+    if is_windows():
+        return "双击 refresh.bat 立即更新"
+    return f"跑 {py_exe('tools/refresh.py', '--force')} 可立即更新"
+
+
+def next_retry_in(s: dict) -> int:
+    """上一轮失败后的冷却还剩几秒；0 = 现在访问就该重试。
+
+    读不出 finished_at（老状态文件、手动写的）就当不知道，不猜，直接允许重试。
+    """
+    if s.get("ok") or RETRY_MINUTES <= 0:
+        return 0
+    try:
+        done = datetime.strptime(str(s.get("finished_at", "")), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return 0
+    left = RETRY_MINUTES * 60 - (time.time() - done.timestamp())
+    return max(0, int(left))
 
 
 def progress() -> dict:
@@ -113,7 +252,7 @@ def _lock_pid_alive() -> bool:
         pid = int(LOCK.read_text(encoding="utf-8").split()[0])
     except (OSError, ValueError, IndexError):
         return False
-    if os.name == "nt":
+    if is_windows():
         import ctypes
 
         STILL_ACTIVE = 259
@@ -184,24 +323,37 @@ def _cycle_done(s: dict) -> bool:
 
 
 def needs_update(now: datetime | None = None) -> bool:
-    """当天（以凌晨 REFRESH_HOUR 为界）没有完整成功更新过，才需要再跑。"""
+    """当天（以凌晨 REFRESH_HOUR 为界）没有完整成功更新过，才需要再跑。
+
+    上一轮是失败的，还要看冷却：失败往往是环境性的（解释器不对、依赖没装、出网被挡），
+    这种时候只要有人访问就重跑一遍注定失败的六步，等于每分钟敲一次第三方接口、
+    往 logs 里灌一堆同样的 refresh-*.log。冷却过了 ZHUIJU_RETRY_MINUTES 自然又会试。
+    """
     if running():
         return False
     s = _read_state()
-    return not (s.get("date") == logical_day(now).isoformat() and _cycle_done(s))
+    if s.get("date") == logical_day(now).isoformat() and _cycle_done(s):
+        return False
+    return next_retry_in(s) <= 0
 
 
 def _spawn() -> None:
     LOCK.parent.mkdir(exist_ok=True)
+    LOG.parent.mkdir(exist_ok=True)
     with open(LOG, "a", encoding="utf-8", buffering=1) as fh:
         fh.write(f"\n=== 访问触发后台更新 {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        flags = 0
-        if os.name == "nt":
+        kw = {}
+        if is_windows():
             # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：不跟随控制台的生死
-            flags = 0x00000008 | 0x00000200
+            kw["creationflags"] = 0x00000008 | 0x00000200
+        else:
+            # setsid：脱离父进程所在的进程组，宝塔重启站点时发的 SIGTERM 才不会顺带
+            # 把正在跑一半的更新一起带走
+            kw["start_new_session"] = True
+        # 用站点自己的解释器拉起 refresh.py：它在站点进程里跑起来，sys.executable
+        # 就是那个 venv 的 python，后面各步骤再按 python_bin() 现找
         child = subprocess.Popen([sys.executable, "-u", str(REFRESH)], cwd=str(BASE),
-                                 stdout=fh, stderr=fh, creationflags=flags,
-                                 close_fds=True)
+                                 stdout=fh, stderr=fh, close_fds=True, **kw)
         # 锁里必须记子进程 PID：记服务端自己的 PID 的话，探活永远为真，
         # 子进程崩了页面还会一直显示"正在更新"
         LOCK.write_text(f"{child.pid} {time.time()}", encoding="utf-8")
@@ -211,22 +363,30 @@ def maybe_trigger() -> str:
     """给请求线程调用：只做文件判断，需要时丢一个后台进程，绝不阻塞响应。"""
     now = time.time()
     if _last_check[0] and now - _last_check[0] < CHECK_TTL:
-        return "running" if running() else ("stale" if _last_check[1] else "fresh")
-    _last_check[0] = now
-    need = needs_update()
-    _last_check[1] = need
-    if need:
-        try:
-            _spawn()
-            return "started"
-        except Exception as exc:  # noqa: BLE001 - 起不来也不能影响页面
-            _last_check[1] = False
-            return f"error: {type(exc).__name__}"
-    return "running" if running() else "fresh"
+        r = "running" if running() else ("stale" if _last_check[1] else "fresh")
+    else:
+        _last_check[0] = now
+        need = needs_update()
+        _last_check[1] = need
+        if need:
+            try:
+                _spawn()
+                r = "started"
+            except Exception as exc:  # noqa: BLE001 - 起不来也不能影响页面
+                _last_check[1] = False
+                # 把解释器和目录权限带上：服务器上"更新没动静"八成是这两件事
+                r = f"error: {type(exc).__name__}: {exc} (python={python_bin()})"
+        else:
+            r = "running" if running() else ("cooldown" if next_retry_in(_read_state()) > 0 else "fresh")
+    LAST_TRIGGER.clear()
+    LAST_TRIGGER.extend([r, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))])
+    return r
+
 
 
 def status() -> dict:
     s = _read_state()
+    exe, why = python_info()
     return {
         "running": running(),
         "need_update": needs_update(),
@@ -240,6 +400,14 @@ def status() -> dict:
         "sources_total": s.get("sources_total"),
         "upstream_updated_at": s.get("upstream_updated_at"),
         "progress": progress(),
+        # 这三项是为"服务器上更新没动静"准备的：用哪个解释器、为什么是它、
+        # 失败冷却还剩多久、最近一次触发的结论。没有它们只能猜。
+        "python": exe,
+        "python_why": why,
+        "retry_cmd": py_exe("tools/refresh.py", "--force"),
+        "retry_in": next_retry_in(s),
+        "retry_minutes": RETRY_MINUTES,
+        "last_trigger": " ".join(map(str, LAST_TRIGGER)),
     }
 
 

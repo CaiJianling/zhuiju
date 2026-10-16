@@ -94,7 +94,7 @@
       "search_template": null,
       "note": "TVBox 配置『老刘备』内实测可用",
       "enabled": true,
-      "browsable": true
+      "browsable": false
     },
     {
       "id": "cjffzy",

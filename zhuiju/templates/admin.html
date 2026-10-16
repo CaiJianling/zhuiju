@@ -20,6 +20,13 @@
     {% if authed %}
     <p class="fresh ok"><i class="dot s-ok"></i>已登录
       <span class="fresh-hint">当前条件命中 {{ agg.count }} 条查询</span></p>
+    {# 部署到 Linux/宝塔后最容易问的就是"更新到底在用哪个 python、为什么没动"，
+       这一行把判据直接摆在页面上，不用登服务器翻日志 #}
+    <p class="atip">自动更新用的解释器：<code>{{ upd.python }}</code>（{{ upd.python_why }}）
+      · 最近一次访问触发：{{ upd.last_trigger or "还没访问触发过" }}
+      {% if upd.retry_in %}· 上一轮失败，约 {{ (upd.retry_in + 59) // 60 }} 分钟后才会再自动重试
+      （{{ upd.retry_minutes }} 分钟冷却，改完环境可跑
+      <code>{{ upd.retry_cmd }}</code> 立刻重试）{% endif %}</p>
     {% endif %}
   </div>
 </header>
@@ -301,7 +308,7 @@
       <span class="asub">{{ markers | length }} 个地点 · {{ agg.count }} 次查询</span></h2>
     {% if not geo.ready %}
     <p class="empty">还没下载归属地库，所以地图和归属地列都是空的。跑一次就有（约 14MB，走 gh-proxy 镜像）：
-      <code>.venv\Scripts\python.exe tools\fetch_geo.py</code></p>
+      <code>{{ fetch_cmd }}</code></p>
     {% elif not map_paths %}
     <p class="empty">底图文件读不出来：{{ geo }}</p>
     {% else %}

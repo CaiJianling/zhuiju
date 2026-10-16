@@ -38,6 +38,10 @@ zhuiju/data/stats.db-shm
 # 后台口令配置文件：明文 password + 会话签名密钥，换台机器就该重新生成
 zhuiju/data/admin.json
 
+# 部署时写本机解释器/端口/口令的小文件（模板是 zhuiju.env.example）：
+# 里面可能有口令与 secret_key，跟 admin.json 一样不能提交
+zhuiju.env
+
 # 维护脚本的草稿与中间产物
 .probe/
 

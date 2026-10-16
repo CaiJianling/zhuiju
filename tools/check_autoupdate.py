@@ -5,17 +5,22 @@
 
 用 Flask 的 test_client 直接走真实代码路径，并把要拉起的更新脚本换成一个可控的桩
 （睡 90 秒，保证测试期间一直算"正在更新"），因此锁文件、子进程 PID、触发/跳过/重试
-都能确定性验证。进程判活与终止走 WinAPI（kernel32），不解析任何命令输出。
+都能确定性验证。进程判活与终止按平台分叉：Windows 用 kernel32，Linux 用 os.kill + SIGKILL，
+两边都不解析命令输出。
 """
 from __future__ import annotations
 
 import ctypes
 import json
+import os
+import re
 import shutil
+import signal
 import sys
+import tempfile
 import time
 import urllib.parse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -28,6 +33,7 @@ BAK = BASE / ".probe" / "state.bak.json"
 STUB = BASE / ".probe" / "refresh_stub.py"
 STUB_SLEEP = 90
 MARK = "访问触发后台更新"
+WIN = os.name == "nt"
 
 FAILS = []
 
@@ -39,6 +45,16 @@ def check(name, cond, got=None):
 
 
 def pid_alive(pid: int) -> bool:
+    if not WIN:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(0x1000, False, pid)          # QUERY_LIMITED_INFORMATION
     if not h:
@@ -52,6 +68,12 @@ def pid_alive(pid: int) -> bool:
 
 
 def kill_pid(pid: int) -> None:
+    if not WIN:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            return
+        return
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(0x0001, False, pid)          # PROCESS_TERMINATE
     if h:
@@ -175,9 +197,13 @@ def main() -> int:
     check("running() 变回 False", autoupdate.running() is False)
     check("死 PID 的锁被自动清掉", not LOCK.exists(), LOCK.exists())
 
-    print("\nE) 今天更新失败 -> 再次访问要重试（不能只挂着旧的“正在更新”）")
+    print("\nE) 今天更新失败且冷却期已过 -> 再次访问要重试（不能只挂着旧的“正在更新”）")
     reset()
+    # finished_at 必须显式写：write_state 是合并写的，留着 A 段那个"刚刚"的时间，
+    # 这里会被 H 段的失败冷却挡掉，看起来像守卫失效
+    wrote = (datetime.now() - timedelta(minutes=autoupdate.RETRY_MINUTES + 5))
     write_state(date=autoupdate.logical_day().isoformat(), ok=False, failed_steps=["health"],
+                finished_at=wrote.strftime("%Y-%m-%d %H:%M:%S"),
                 sources_enabled=8, sources_total=10)
     before = spawn_count()
     page()
@@ -215,6 +241,80 @@ def main() -> int:
         kill_pid(pid3)
         time.sleep(0.5)
     check("进程消失后进度状态跟着变 False", autoupdate.progress()["running"] is False)
+
+    print("\nH) 刚失败过一轮 -> 冷却期内访问不该再重跑（服务器上门坏了别每分钟敲一次）")
+    reset()
+    write_state(date=autoupdate.logical_day().isoformat(), ok=False, failed_steps=["health"],
+                finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    before = spawn_count()
+    page()
+    time.sleep(1.0)
+    check("冷却中不启动", not LOCK.exists(), LOCK.exists())
+    check("冷却中启动次数没变", spawn_count() == before, {"before": before, "now": spawn_count()})
+    check("need_update=False（因为在冷却）", api("/api/refresh")["need_update"] is False)
+    check("状态里给出还剩多少秒", api("/api/refresh")["retry_in"] > 0,
+          api("/api/refresh")["retry_in"])
+    info = refresh_info()
+    check("失败横幅仍然标着失败", info["state"] == "failed", info)
+    check("失败横幅把解释器也带上（Linux 上一眼能看出是不是 python 选错了）",
+          "解释器" in info["hint"] and "refresh-*.log" in info["hint"], info["hint"])
+    check("冷却没过时横幅讲清还要等多久", "分钟内不再自动重试" in info["hint"], info["hint"])
+    autoupdate.RETRY_MINUTES = 0          # 设 0 就是"每次访问都可以重试"，用来验证开关有效
+    check("ZHUIJU_RETRY_MINUTES=0 时不冷却", autoupdate.needs_update() is True,
+          autoupdate.next_retry_in(autoupdate._read_state()))
+    autoupdate.RETRY_MINUTES = 15
+    old = (datetime.now() - timedelta(minutes=autoupdate.RETRY_MINUTES + 5))
+    write_state(finished_at=old.strftime("%Y-%m-%d %H:%M:%S"))
+    check("冷却期过了就重新允许更新",
+          autoupdate.needs_update() is True, autoupdate.next_retry_in(autoupdate._read_state()))
+    reset()
+
+    print("\nI) 解释器是现找的，不是写死的 .venv/Scripts/python.exe")
+    exe, why = autoupdate.python_info()
+    check("选出来的解释器文件存在", Path(exe).is_file(), exe)
+    check("选出来的解释器能 import flask/requests", autoupdate.has_deps(exe), {"exe": exe, "why": why})
+    check("理由里说清了为什么是它", bool(why) and "·" in why, why)
+    rp = (BASE / "tools" / "refresh.py").read_text(encoding="utf-8")
+    check("refresh.py 的解释器来自现找，不是写死的 .venv 路径",
+          bool(re.search(r"^PY = python_bin\(\)", rp, re.M))
+          and 'BASE / ".venv"' not in rp and '".venv"' not in rp,
+          re.findall(r"^PY = .*", rp, re.M))
+    fake = str(Path(exe))
+    autoupdate._py_cache.clear()
+    os.environ["ZHUIJU_PYTHON"] = fake
+    check("ZHUIJU_PYTHON 指哪儿用哪儿（原样保留，不解析软链接）",
+          autoupdate.python_bin() == fake,
+          {"got": autoupdate.python_bin(), "want": fake})
+    autoupdate._py_cache.clear()
+    os.environ.pop("ZHUIJU_PYTHON")
+    outside = Path(tempfile.mkdtemp(prefix="zhuiju_bt_env_"))      # 宝塔：venv 在站点外面
+    os.environ["ZHUIJU_VENV"] = str(outside)
+    cands = [p for p, _ in autoupdate._candidates()]
+    own = [p for p in cands if p.startswith(str(outside))]
+    proj = [p for p in cands if p.startswith(str(BASE / ".venv")) and p != sys.executable]
+    check("ZHUIJU_VENV 指的目录进了候选，且排在项目内 .venv 之前",
+          bool(own) and (not proj or cands.index(own[0]) < cands.index(proj[0])), cands[:6])
+    check("外面那个 venv 没有可用解释器时不会选它，而是退回跑站点的那个",
+          autoupdate.python_bin() == sys.executable, autoupdate.python_bin())
+    shutil.rmtree(outside, ignore_errors=True)
+    autoupdate._py_cache.clear()
+    os.environ.pop("ZHUIJU_VENV")
+    real_win = autoupdate.is_windows
+    try:
+        autoupdate.is_windows = lambda: False          # 在 Windows 上模拟 Linux 的目录布局
+        venv_c = [p for p, why in autoupdate._candidates() if "虚拟环境" in why]
+        check("当成 Linux 时 venv 候选换成 bin/python、bin/python3（不再是 Scripts/python.exe）",
+              venv_c and all(Path(x).parent.name == "bin" for x in venv_c), venv_c[:6])
+        check("Linux 下手动催更给的是命令而不是 refresh.bat",
+              "refresh.bat" not in autoupdate.retry_hint(), autoupdate.retry_hint())
+    finally:
+        autoupdate.is_windows = real_win
+        autoupdate._py_cache.clear()
+    check("Windows 下仍然提示 refresh.bat",
+          autoupdate.retry_hint().count("refresh.bat") == 1 if real_win() else True)
+    st = api("/api/refresh")
+    check("状态里带了解释器与最近触发结论，页面能直接看出问题",
+          {"python", "python_why", "retry_cmd", "last_trigger"} <= set(st), sorted(st))
 
     print()
     if BAK.exists():

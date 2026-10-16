@@ -1,0 +1,6 @@
+# shell 脚本必须是 LF：在 Windows 上变成 CRLF 再传上服务器，会得到
+# "bad interpreter: /bin/sh^M" 这种看不出所以然的报错。.bat 反过来必须 CRLF。
+# 不写 text=auto，避免"由 git 根据检测到的类型自动决定"再把 .sh 换成 CRLF。
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf

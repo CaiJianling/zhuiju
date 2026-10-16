@@ -11,11 +11,16 @@
     python tools/refresh.py                # 正常执行（当天已更新则跳过）
     python tools/refresh.py --force        # 忽略当天标记，强制重跑
     python tools/refresh.py --skip-deep    # 跳过较慢的"补抽新接口"步骤
+    python tools/refresh.py --check-env    # 只报告会用哪个解释器、依赖齐不齐（部署排查）
+
+Linux 上别直接敲 python3：用站点根目录的 refresh.sh，它会按 zhuiju.env / ZHUIJU_PYTHON
+找到宝塔那个建在站点外面的 venv。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -24,13 +29,29 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
-from zhuiju.autoupdate import LOCK, PROGRESS, STEPS, logical_day
+from zhuiju.autoupdate import (LOCK, PROGRESS, STEPS, has_deps, logical_day,  # noqa: E402
+                               python_bin, python_info)
 # 步骤清单与"当天"口径都取自站点同一处，避免两边各写一份对不上
 
-PY = BASE / ".venv" / "Scripts" / "python.exe"
+# 解释器现找：venv 在站点里面（.venv/venv，Windows 是 Scripts、Linux 是 bin）还是在
+# 站点外面（宝塔的 /www/server/python_project/virtualenv_env/xxx），都由 autoupdate 那套
+# 候选顺序判定；这里再写死 .venv/Scripts/python.exe 就是这次 Linux 上六步全挂的原因。
+PY = python_bin()
 STATE = BASE / "zhuiju" / "data" / "refresh_state.json"
 LOG_DIR = BASE / "logs"
 KEEP_LOGS = 14
+
+
+def preflight() -> str:
+    """跑之前先确认解释器能用：早失败、说人话，比六步各报一遍同一句强。"""
+    exe, why = python_info()
+    if not Path(exe).is_file():
+        return f"找不到解释器 {exe}（{why}）"
+    if not has_deps(exe):
+        return (f"{exe} 里没装 flask/requests（{why}）：\n"
+                f"  {exe} -m pip install -r requirements.txt "
+                f"-i https://pypi.tuna.tsinghua.edu.cn/simple")
+    return ""
 
 def run(script: str, args: list[str] = (), timeout: int = 600) -> tuple[bool, str]:
     cmd = [str(PY), script, *args]
@@ -114,12 +135,58 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="忽略当天已更新的标记")
     ap.add_argument("--skip-deep", action="store_true", help="跳过补抽新接口与模板验证")
+    ap.add_argument("--check-env", action="store_true",
+                    help="只报告会用哪个解释器、依赖齐不齐，然后退出（部署排查用）")
     args = ap.parse_args()
+
+    exe, why = python_info()
+    if args.check_env:
+        bad = preflight()
+        print(f"外层解释器    {sys.executable}")
+        print(f"跑步骤的解释器 {exe}（{why}）")
+        print(f"站点目录      {BASE}")
+        print(f"venv 指定     ZHUIJU_PYTHON={os.environ.get('ZHUIJU_PYTHON', '(未设)')} "
+              f"ZHUIJU_VENV={os.environ.get('ZHUIJU_VENV', '(未设)')} "
+              f"配置文件={Path(__file__).resolve().parent.parent / 'zhuiju.env'}")
+        print("环境检查      " + ("通过" if not bad else "不通过：\n" + bad))
+        return 0 if not bad else 1
 
     LOG_DIR.mkdir(exist_ok=True)
     now = datetime.now()
     today = logical_day(now).isoformat()      # 以凌晨 2 点为界的逻辑日期
     prev = read_state()
+
+    bad = preflight()
+    if bad:
+        # 解释器不对/依赖没装：直接把话说清楚写进状态和日志，页面横幅就能显示出来，
+        # 而不是六个步骤各抛一遍 Exec format error
+        print(f"[FAIL] 环境不对，没开始跑：\n{bad}", flush=True)
+        note = bad.splitlines()[0]
+        try:
+            # 目录没权限时（服务器上 www 写不了 logs）别把唯一一句人话也弄丢了
+            LOG_DIR.mkdir(exist_ok=True)
+            (LOG_DIR / f"refresh-{now.strftime('%Y%m%d-%H%M%S')}.log").write_text(
+                f"追剧资源搜索 每日更新  {now:%Y-%m-%d %H:%M:%S}\n"
+                f"解释器： {PY}（{python_info()[1]}）\n\n{bad}\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"日志写不出去：{type(exc).__name__}: {exc}", flush=True)
+        write_progress(running=False, result="env", note=note,
+                       done=0, total=len(STEPS),
+                       steps=[{"key": s["key"], "label": s["label"], "state": "fail",
+                               "error": note[:90]} for s in STEPS])
+        try:
+            STATE.write_text(json.dumps({**prev, "date": today, "ok": False,
+                                         "failed_steps": ["env"], "partial": False,
+                                         "finished_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                         "python": PY}, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+        except OSError as exc:
+            print(f"状态文件写不出去：{type(exc).__name__}: {exc}", flush=True)
+        try:
+            LOCK.unlink()
+        except OSError:
+            pass
+        return 1
 
     # 只有"完整跑完的一轮"才算这个周期已经更新过（判据与站点自动触发共用 _cycle_done）。
     # 之前 --skip-deep 也写 ok=true，结果手动跑个快版就把当天真正的全量更新挡掉了。
@@ -131,7 +198,8 @@ def main() -> int:
     started = time.time()
     log_path = LOG_DIR / f"refresh-{now.strftime('%Y%m%d-%H%M%S')}.log"
     lines = [f"追剧资源搜索 每日更新  {now:%Y-%m-%d %H:%M:%S}",
-             f"force={args.force} skip_deep={args.skip_deep}", ""]
+             f"force={args.force} skip_deep={args.skip_deep}",
+             f"解释器： {PY}（{python_info()[1]}）· 站点进程 {sys.executable}", ""]
 
     def save_log(extra: str = "") -> None:
         """逐步落盘：更新要跑几分钟，中途看日志才能知道卡在哪一步。"""
@@ -197,6 +265,7 @@ def main() -> int:
         "fetched_at": now.strftime("%Y-%m-%d"),
         "fetched_today": True,
         "log": log_path.name,
+        "python": PY,
         "steps": {k: v for k, v in results.items()},
         **sources_summary(),
     }

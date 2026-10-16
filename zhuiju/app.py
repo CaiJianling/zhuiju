@@ -63,7 +63,7 @@ def refresh_info() -> dict:
     if not s:
         return {"fresh": False, "state": "never", "progress": prog,
                 "text": "尚未自动更新过",
-                "hint": "打开页面就会自动开始更新，也可双击 refresh.bat 立即更新"}
+                "hint": "打开页面就会自动开始更新，" + autoupdate.retry_hint()}
 
     ok = bool(s.get("ok"))
     done_cycle = autoupdate._cycle_done(s)
@@ -74,19 +74,24 @@ def refresh_info() -> dict:
                 "hint": f"上游目录版本 {s.get('upstream_updated_at', '未知')}"}
     if not ok:
         bad = "、".join(s.get("failed_steps") or []) or "未知步骤"
+        left = autoupdate.next_retry_in(s)
+        # 把"用的哪个解释器"带上：Linux/宝塔 上八成是解释器或依赖不对，
+        # 光说"步骤失败"只能让人去翻日志猜
+        cool = f"{left // 60 + 1} 分钟内不再自动重试，" if left else ""
+        py = str(s.get("python") or autoupdate.python_bin())
+        hint = (f"时间 {s.get('finished_at', '未知')} · {cool}{autoupdate.retry_hint()}；"
+                f"详情看 logs 下最新的 refresh-*.log（解释器 {py}）")
         return {"fresh": False, "state": "failed", "progress": prog,
-                "text": f"上次自动更新有步骤失败（{bad}）",
-                "hint": f"时间 {s.get('finished_at', '未知')} · 双击 refresh.bat 重试，"
-                        f"详情看 logs 下最新的 refresh-*.log"}
+                "text": f"上次自动更新有步骤失败（{bad}）", "hint": hint}
     if autoupdate.is_partial(s):
         # 手动跑过 --skip-deep 的快版：数据确实新，但这一周期的全量更新还没做
         return {"fresh": False, "state": "partial", "progress": prog,
                 "text": f"上次只跑了快版（{str(s.get('finished_at', ''))[5:16]}，"
                         f"跳过 {'、'.join(s.get('skipped_steps') or []) or '若干步骤'}）",
-                "hint": "访问时会自动补跑完整一轮；也可双击 refresh.bat 立即更新"}
+                "hint": "访问时会自动补跑完整一轮，" + autoupdate.retry_hint()}
     return {"fresh": False, "state": "stale", "progress": prog,
             "text": f"数据是 {s.get('date', '未知')} 更新的，已过当天周期",
-            "hint": "凌晨 2 点后访问会自动重来；也可双击 refresh.bat 立即更新"}
+            "hint": "凌晨 2 点后访问会自动重来，" + autoupdate.retry_hint()}
 
 
 def _proxied_hot(h: dict) -> dict:
@@ -448,6 +453,8 @@ def create_app() -> Flask:
             geo=geo_info, map_paths=base["d"], map_active="".join(
                 base["by_iso"][i] for i in sorted(drawn)),
             geo_warn=stats_mod.MIGRATE_ERROR,
+            fetch_cmd=autoupdate.py_exe("tools/fetch_geo.py"),
+            upd=autoupdate.status(),
             markers=markers, offmap=[m for m in markers if m["iso"] not in base["by_iso"]],
             notice="口令已更新，下次登录请用新口令" if request.args.get("set") else None,
             pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,

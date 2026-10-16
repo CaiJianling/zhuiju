@@ -102,12 +102,18 @@ python -m venv .venv
 :: 离线：浏览器识别与来源页判定、爬虫分离、主题（调色板完整性与页面接线）
 .venv\Scripts\python.exe tests\test_agent_theme.py
 
+:: 离线：跨平台部署路径（解释器现找、zhuiju.env 解析、refresh.sh 行尾、Linux 的 /proc 解析）
+.venv\Scripts\python.exe tests\test_deploy_paths.py
+
 :: 活体：自己起一个临时端口的服务，验证路由 / 网盘查询 / 未回归，跑完自动关闭
 .venv\Scripts\python.exe tests\test_cloud_live.py
 
 :: 验收"访问时异步触发更新"（用桩替换真实更新，不真跑几分钟）
 .venv\Scripts\python.exe tools\check_autoupdate.py
 ```
+
+Linux 上把 `.venv\Scripts\python.exe` 换成 `<你的venv>/bin/python`（宝塔见"部署到 Linux"一节），
+`\` 换成 `/`。上面的测试都不依赖 shell 命令，两边结果一致。
 
 ## 目录结构
 
@@ -120,7 +126,9 @@ zhuiju/
   hot.py            猜你想搜（CMS 最新流 + 豆瓣候选回查 + ac=detail 补海报，后台重建、6 小时缓存、按页取）
   seo.py            /s/ 落地页快照、查询记录、robots 与 sitemap
   imgproxy.py       海报代理（补防盗链 Referer、忽略自签证书、拦内网）
-  autoupdate.py     访问时触发的后台更新（STEPS 唯一清单、逻辑日、锁文件 + 子进程 PID 判活、进度）
+  __init__.py       包导入时读 zhuiju.env（venv 在站点外面时在那儿指一次，处处都认）
+  autoupdate.py     访问时触发的后台更新（STEPS 唯一清单、逻辑日、锁文件 + 子进程 PID 判活、
+                    进度、解释器现找 python_bin()、失败冷却 ZHUIJU_RETRY_MINUTES）
   stats.py          查询统计落 SQLite（过滤/分页/聚合走参数化 SQL；写失败不影响搜索）
   geoip.py          离线 IP 归属地：纯标准库读 ip2region xdb + 国家轮廓转内嵌 SVG 路径
   agent.py          User-Agent 识别（浏览器/系统/设备/爬虫）与 Referer 来源判定，纯标准库
@@ -151,21 +159,27 @@ tools/                  重新采数据的维护脚本，日常使用不需要�
   harvest_more_apis.py  从全部 TVBox 配置（含中文域名 IDN）补抽候选接口并实测
   add_sources.py        把实测通过的新接口并入 sources.json
   refresh.py            一次完整更新的总入口（本周期已完整跑过则跳过；--skip-deep 的快版不算跑完）
+                        --check-env 只报告"会用哪个解释器、依赖齐不齐"，部署排查用
   fetch_geo.py          下载 IP 归属地库与国家轮廓底图，算好 country_points.json（走 gh-proxy）
   restart.py            确定性地重启本地站点（先杀干净旧进程，再验证新路由已生效）
-  check_autoupdate.py   验收访问触发的异步更新（用桩，不真跑几分钟；七个场景）
+                        Windows 走 WinAPI，Linux 走 /proc（非 root 时只能按 server.pid 收尾）
+  check_autoupdate.py   验收访问触发的异步更新（用桩，不真跑几分钟；九个场景）
 tests/
   test_smoke.py         离线：检索解析、合并分层、目录
   test_cloudparse.py    离线：网盘结果解析器（自造 HTML）
   test_seo_hot.py       离线：猜你想搜归类 / 半年窗口 / SEO 清洗与 robots、sitemap
   test_cloud_live.py    活体：临时端口起服务验证路由与查询，跑完自动关
+  test_deploy_paths.py  离线：跨平台部署路径（解释器现找、zhuiju.env、refresh.sh 行尾、/proc 解析）
 data/upstream/          上游 JSON 缓存（build_catalog.py 自动下载）
 zhuiju/data/cache/      运行时缓存：hot.json（猜你想搜）、seo-*.json（/s/ 快照）
 zhuiju/data/queries.jsonl  搜过的关键词，供 sitemap 生成
 logs/                   更新日志、后台更新记录、服务输出、server.pid
-run.py              起服务 + 自动开浏览器（ZHUIJU_NO_BROWSER=1 可关）
-启动.bat            一键启动
-refresh.bat         一键手动更新
+run.py              起服务 + 自动开浏览器（ZHUIJU_NO_BROWSER=1 可关；无 DISPLAY 时不开）
+启动.bat            一键启动（Windows）
+refresh.bat         一键手动更新（Windows）
+refresh.sh          同上，Linux / macOS 版（sh refresh.sh --check-env 先看环境）
+zhuiju.env.example  部署配置模板：拷成 zhuiju.env 就能指定站点外的 venv、端口、口令
+.gitattributes      强制 .sh 用 LF、.bat 用 CRLF（.sh 带上 CRLF 会得到 /bin/sh^M）
 ```
 
 ## 数据自动更新（访问时触发）
@@ -203,14 +217,23 @@ refresh.bat         一键手动更新
   进程活着就不受 `LOCK_TTL`（25 分钟）约束——单个步骤最坏 15 分钟，用超时推翻"进程明明还在"
   会多起一个更新进程。
 - 锁文件 `logs/autoupdate.lock` 记录子进程 PID；更新进行中重复访问不会再启动第二个。
-  今天更新**失败**、或只跑过 `--skip-deep` 快版时，再次访问会重新触发完整一轮。
+  今天更新**失败**、或只跑过 `--skip-deep` 快版时，再次访问会重新触发完整一轮——
+  但失败的要等冷却过去：一轮刚失败（状态里有 `finished_at`）后的 `ZHUIJU_RETRY_MINUTES`
+  （默认 15）分钟内不再自动重跑。失败大多是环境性的（解释器不对、依赖没装、出网被挡），
+  这种时候只要有人访问就重跑一遍注定失败的六步，等于每分钟敲一次第三方接口并灌满 `logs/`。
+  冷却对"读不出 `finished_at` 的老状态文件"不算数（不猜，直接允许重试）。
 - 更新写完文件后，站点按 mtime 重新读取，**不用重启服务**就能看到新数据。
-- 更新过程逐步写入 `logs/refresh-*.log`（保留 14 份），长跑期间也能看进度。
+- 更新过程逐步写入 `logs/refresh-*.log`（保留 14 份），长跑期间也能看进度。日志开头两行
+  写明了**跑各步骤用的解释器以及选它的理由**——"六步全挂且 `seconds` 只有 0.1"这种就一眼能看出来。
 
 一次更新做的事：拉上游目录（走 gh-proxy）→ 体检所有检索源并写回 `enabled`/`browsable` →
 从 TVBox 配置补抽新接口 → 并入实测可用的 → 双关键词验证各站搜索路径 → 写入模板。
-整套约 8 分钟；只想快点走完可加 `--skip-deep`（这种快版不再算"本周期已更新"）。手动执行：双击 `refresh.bat`，
-或 `.venv\Scripts\python.exe tools\refresh.py --force`。
+整套约 8 分钟；只想快点走完可加 `--skip-deep`（这种快版不再算"本周期已更新"）。手动执行：
+Windows 双击 `refresh.bat`，或 `.venv\Scripts\python.exe tools\refresh.py --force`；
+Linux 用 `sh refresh.sh --force`。想先确认环境对不对，加 `--check-env`（只报解释器和依赖，不跑）。
+
+跑之前有一道 preflight：解释器不存在、或者里面没装 `flask/requests`，就直接把这句话写进状态
+和日志并结束（`failed_steps: ["env"]`），不会让六个步骤各抛一遍 `Exec format error`。
 
 ### GitHub 数据一律走国内镜像
 
@@ -224,9 +247,15 @@ refresh.bat         一键手动更新
 让每天的"拉上游目录"实际是个空操作。
 
 验收这套机制：`.venv\Scripts\python.exe tools\check_autoupdate.py`（用桩替换真实更新，
-七个场景：不该触发时不触发、该触发时启动、期间仍可搜索、重复访问只起一个、
-进程死了要识破、失败后要重试、横幅措辞对得上、进度以子进程存活为准）。
+九个场景：不该触发时不触发、该触发时启动、期间仍可搜索、重复访问只起一个、
+进程死了要识破、失败后要重试、横幅措辞对得上、进度以子进程存活为准、
+**失败冷却期内不重跑**、**解释器是现找的**）。
 测试的状态/进度/锁文件全在 `.probe/autoupdate_test/`，不会污染真实数据。
+
+跨平台那部分另有 `.venv\Scripts\python.exe tests\test_deploy_paths.py`：在 Windows 上把
+`is_windows()` 换成假值来验 Linux 的候选顺序，再造一棵假 `/proc` 验端口归属的解析
+（真 `/proc` 和 socket 软链接在 Windows 上造不出来，不注入就没法测——这条测试确实抓出过一次
+"参数写了但函数里没用它"的错）。
 
 ## 后台统计（/admin）
 
@@ -466,6 +495,83 @@ Python 3.13 把文档用例段也算进 `is_private`，若先判 private 就会�
 都被指到临时目录，不会碰你正在用的那份数据；覆盖口令生成与修改、环境变量覆盖、
 写入/过滤/分页/聚合、脏输入与注入串、XFF 采信规则、限流、未登录不泄漏数据、
 登录全流程、三个入口的埋点、以及"统计库打不开时搜索仍 200"。
+
+## 部署到 Linux（宝塔面板）
+
+本仓库里所有命令示例都是 Windows 写法。Linux 上把 `.venv\Scripts\python.exe`
+换成 `.venv/bin/python`；用宝塔的话把站点根目录 `zhuiju.env` 建好（见下），
+`sh refresh.sh --check-env` 会把它最终会用哪个解释器打出来。
+
+**别把 Windows 的 `.venv` 目录传上去。** venv 不可移植：里面是 Windows 的 exe 和指向本机
+的 `pyvenv.cfg`。传上去之后 `exec` 会得到
+
+```
+OSError: [Errno 8] Exec format error: '/www/wwwroot/zhuiju/.venv/Scripts/python.exe'
+```
+
+六个步骤挂在同一行上、`seconds` 只有 0.1 —— 就是这个原因（以前 `tools/refresh.py` 写死了
+那个路径）。删掉 `.venv`，在服务器上用宝塔的 Python 环境重建，或者：
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+### 解释器与端口写在哪
+
+宝塔创建的 venv **在站点目录外面**，例如 `/www/server/pyporject_evn/zhuiju/bin/python`。
+代码不再假设它在哪儿：`autoupdate.python_bin()` 按
+`ZHUIJU_PYTHON` → 正在跑站点的那个解释器 → `ZHUIJU_VENV` 指的目录 → 站点内 `.venv|venv|env`
+的顺序现找，并且真的跑一句 `import flask, requests` 确认依赖齐不齐，缺依赖的候选不会被选。
+所以站点自己触发的更新本来就用对了解释器，什么都不用配；要手动跑 `tools/*.py` 才需要指一下：
+
+```sh
+# 站点根目录建 zhuiju.env（模板是 zhuiju.env.example；这文件已被 git 忽略，因为可以写口令）
+ZHUIJU_PYTHON=/www/server/pyporject_evn/zhuiju/bin/python
+ZHUIJU_PORT=5000
+```
+
+`zhuiju.env` 在导入 `zhuiju` 包时读取，只认列出的那几个键，值两边的引号和 CRLF 的 `\r` 都会去掉，
+**已经设了的环境变量优先**。`ZHUIJU_VENV` 则给"不想写全路径"的场合用（指到 venv 目录即可）。
+
+选出来的路径**故意不做 `resolve()`**：venv 里的 `bin/python` 通常是指向真解释器的软链接，
+一解析就跑到 venv 外面了，`site-packages` 跟着丢——探依赖时明明齐全，真跑起来却说 import 不到
+flask。`tests/test_deploy_paths.py` 用一条带 `..` 的路径钉住了这个行为。
+
+### 权限与要带过去的文件
+
+`zhuiju/data/` 和 `logs/` 必须能被跑站点的那个用户写（宝塔通常是 `www`）——更新状态、进度、
+锁、SQLite 统计库、`data/cache/` 全在那里：
+
+```sh
+chown -R www:www /www/wwwroot/zhuiju
+```
+
+只用标准库 + Flask + requests，没有别的二进制依赖。开发实测在 Python 3.13；宝塔常见版本
+（3.8–3.12）里那些新式类型标注都被 `from __future__ import annotations` 推迟了，不会在运行时求值，
+但**低版本我没有真跑过**，装完先跑一句 `sh refresh.sh --check-env` 确认依赖 import 得动。
+
+跟着 git 走的三个数据文件（`sources.json` / `templates.json` / `catalog.json`）克隆下来就有；
+`admin.json`、`stats.db`、`refresh_state.json`、`data/geo/` 都被 git 忽略，属于本机数据：
+口令会在服务器首次启动时随机生成并打印一次（登录后领你改），统计库要从本机拷才留得住历史，
+归属地库要重跑一次 `sh refresh.sh` 之外的那条命令：
+
+```sh
+.venv/bin/python tools/fetch_geo.py        # 约 14MB，走 gh-proxy 镜像链
+```
+
+### 验收
+
+```sh
+sh refresh.sh --check-env     # 会用哪个解释器、依赖齐不齐、zhuiju.env 读到了没有
+sh refresh.sh --force         # 真跑一轮六步，成功与否写进 zhuiju/data/refresh_state.json
+tail -n 40 logs/refresh-*.log # 日志头两行有解释器和选它的理由
+```
+
+页头横幅和 `/admin` 顶部那行会显示"自动更新用的解释器 / 最近一次访问触发的结论 / 失败冷却还剩
+多久"，不用登服务器翻日志。更新仍然**只在访问时触发**，不需要 cron 或计划任务；一轮失败后默认
+15 分钟内不再自动重跑（`ZHUIJU_RETRY_MINUTES=0` 可以关掉），改完环境跑一次 `--force` 就正常了。
+挂反代时 `X-Forwarded-For` 只有在上一跳是回环地址时才被采信，所以后台统计要能看出真实访客，
+得靠 nginx 传头（见"端口与反向代理"）。
 
 ## 端口与反向代理
 

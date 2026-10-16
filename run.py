@@ -10,6 +10,7 @@
 import argparse
 import os
 import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -18,6 +19,9 @@ from pathlib import Path
 os.environ.setdefault("PYTHONUTF8", "1")
 
 BASE = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE))
+import zhuiju  # noqa: F401,E402  导入包就会读 zhuiju.env，下面这两个默认值才拿得到里面的设置
+
 DEFAULT_PORT = int(os.environ.get("ZHUIJU_PORT", "5000"))
 DEFAULT_HOST = os.environ.get("ZHUIJU_HOST", "127.0.0.1")
 
@@ -33,6 +37,8 @@ def port_in_use(host: str, port: int) -> bool:
 def _open(url: str, host: str, port: int):
     if os.environ.get("ZHUIJU_NO_BROWSER") == "1":
         return
+    if os.name != "nt" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return            # 没有图形界面的服务器（宝塔这类）：别白费一次 fork
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     for _ in range(40):
         try:
@@ -40,7 +46,10 @@ def _open(url: str, host: str, port: int):
                 break
         except OSError:
             time.sleep(0.25)
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001 - 打不开浏览器不算启动失败
+        pass
 
 
 def main() -> int:
@@ -73,6 +82,10 @@ def main() -> int:
 
     cfg = admin_mod.load()
     print(f"追剧资源搜索已启动： {url}   （Ctrl+C 退出）")
+    # 把解释器打出来：服务器上"更新没跑"八成是 python 用错了，这行日志最直接
+    print(f"  解释器： {sys.executable}")
+    from zhuiju import autoupdate as au
+    print(f"  更新解释器判据： {au.python_info()[1]}")
     if args.host not in ("127.0.0.1", "localhost"):
         print(f"  监听在 {args.host}，局域网内其它设备可访问，请确认这是你想要的")
     print(f"  后台统计： {url}admin")
