@@ -277,7 +277,10 @@ def contrast(a, b):
 # 这些配对是从 CSS 里读出来的实际搭配，改任何一处配色都会在这里暴露
 PAIRS = [("--ink", "--surface"), ("--ink-2", "--surface"), ("--ink-2", "--surface-2"),
          ("--dim", "--surface"), ("--on-accent", "--brand"), ("--brand-ink", "--brand-soft"),
-         ("--ok", "--ok-bg"), ("--bad", "--bad-bg"), ("--warn", "--warn-bg")]
+         ("--ok", "--ok-bg"), ("--bad", "--bad-bg"), ("--warn", "--warn-bg"),
+         # 海报上的「详情」按钮压在任意封面上，这对底色不跟主题翻转（暗色下若跟着
+         # --on-accent 翻成近黑，就成了黑压黑），两个主题都要单独达标
+         ("--poster-ink", "--poster-scrim")]
 for label, blk in (("亮色", root), ("暗色", dark)):
     pal = palette(blk)
     for fg, bg in PAIRS:

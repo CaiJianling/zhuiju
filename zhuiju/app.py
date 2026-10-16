@@ -29,8 +29,9 @@ from . import hot as hot_mod
 from . import imgproxy
 from . import seo as seo_mod
 from . import stats as stats_mod
+from .search import by_id as source_by_id
 from .search import detail as fetch_detail
-from .search import fetch_one, search
+from .search import detail_by_title, fetch_one, search
 from .sources import load_sources
 
 MIN_KW = 2        # 单字符关键词会引发一轮无意义的并发抓取，直接拒掉
@@ -400,13 +401,33 @@ def create_app() -> Flask:
 
     @app.get("/api/detail")
     def api_detail():
-        src_id = request.args.get("src", "")
-        vid = request.args.get("vid", "")
-        title = (request.args.get("t") or "")[:60]
-        src = next((s for s in load_sources() if s.id == src_id), None)
-        if src is None or not vid:
-            return jsonify({"ok": False, "error": "未知的来源或影片 ID"}), 400
-        return jsonify(fetch_detail(src, vid, title))
+        """取一部片的详情。
+
+        优先按 (来源, 影片 ID) 查 —— 搜索结果里每个来源都带着 ID，一次请求就够。
+        没有 ID 时（猜你想搜那些海报）才按片名查：那条路要并发打一遍所有检索源，
+        所以只在用户真的点开详情时才走，页面渲染时一律不预取。
+
+        `meta=1` 只要影片信息、**不把播放线路发给前端**：海报上的「详情」按钮走这一档，
+        要看线路仍然得点进卡片里的来源名（那条路不带 meta）。上游 ac=detail 本来就把
+        线路字段一起返回，这里是本站剥掉，不发就不进 DOM、不进缓存。
+        """
+        src_id = (request.args.get("src") or "").strip()[:32]
+        vid = (request.args.get("vid") or "").strip()[:32]
+        title = (request.args.get("t") or request.args.get("kw") or "").strip()[:60]
+        meta_only = (request.args.get("meta") or "").strip() in ("1", "true", "yes")
+        src = source_by_id(src_id) if src_id else None
+        if src is not None and vid:
+            if not src.enabled:
+                return jsonify({"ok": False, "via": "id", "source": src.id,
+                                "source_name": src.name, "error": f"{src.name} 已停用"}), 404
+            out = fetch_detail(src, vid, title)
+        elif len(title) >= MIN_KW:
+            out = detail_by_title(title)
+        else:
+            return jsonify({"ok": False, "error": "既没有来源与影片 ID，也没给出片名"}), 400
+        if meta_only:
+            out = {k: v for k, v in out.items() if k != "lines"}
+        return jsonify(out)
 
     @app.get("/api/health")
     def api_health():

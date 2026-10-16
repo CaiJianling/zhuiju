@@ -243,10 +243,21 @@
   function card(r, i) {
     // 占位符由 CSS 的 .cover::before 负责：图片加载失败被移除后会自动露出
     // 海报统一走 /img 代理：第三方图床有防盗链（无/错 Referer 返回 418/403）和自签证书
-    const pic = r.pic && /^https?:/.test(r.pic)
-      ? '<img loading="lazy" decoding="async" src="/img?url=' + encodeURIComponent(r.pic) +
-        '" alt="" onerror="this.remove()">'
+    const proxied = r.pic && /^https?:/.test(r.pic) ? '/img?url=' + encodeURIComponent(r.pic) : '';
+    const pic = proxied
+      ? '<img loading="lazy" decoding="async" src="' + esc(proxied) + '" alt="" onerror="this.remove()">'
       : '';
+    // 详情要的信息全放在按钮自己的 data-* 上：卡片已经渲染出来的东西不必再问一次后端
+    const withVid = (r.sources || []).find((s) => s.vid) || {};
+    const dAttrs = ' data-detail data-title="' + esc(r.title) + '" data-pic="' + esc(proxied) +
+      '" data-year="' + esc(r.year || '') + '" data-area="' + esc(r.area || '') +
+      '" data-type="' + esc(r.type || '') + '" data-remarks="' + esc(r.remarks || '') +
+      '" data-actor="' + esc(r.actor || '') + '" data-n="' + (r.sources || []).length +
+      '" data-src="' + esc(withVid.id || '') + '" data-vid="' + esc(withVid.vid || '') +
+      '" data-srcs="' + esc(JSON.stringify((r.sources || []).map((s) =>
+        ({ id: s.id, name: s.name, vid: s.vid || '' })))) + '"';
+    const dbtn = '<button class="dbtn" type="button" aria-label="查看《' + esc(r.title) +
+      '》的详情"' + dAttrs + '>详情</button>';
     const tags = [];
     if (r.type) tags.push('<span class="tag">' + esc(r.type) + '</span>');
     if (r.year) tags.push('<span class="tag">' + esc(r.year) + '</span>');
@@ -266,7 +277,7 @@
       : '';
     const MATCH_LABEL = { series: '同系列版本', contains: '近似名称', other: '模糊匹配' };
     return '<article class="card">' +
-      '<div class="cover">' + pic + '</div>' +
+      '<div class="cover">' + pic + dbtn + '</div>' +
       '<div class="body">' +
       '<h3 class="title">' + esc(r.title) +
       (r.match === 'exact' ? '' : '<span class="flag">' + (MATCH_LABEL[r.match] || '模糊匹配') + '</span>') +
@@ -399,14 +410,25 @@
 
   /* 猜你想搜：一行正好铺满容器，翻页切换整行（不做横向滚动条） */
   function hotCard(x) {
-    const cover = x.pic
-      ? '<span class="hcover"><img loading="lazy" decoding="async" src="' + esc(x.pic) +
-        '" alt="" onerror="this.remove()"></span>'
-      : '<span class="hcover"></span>';
+    // 结构是 div.hotcard > span.hcover(图 + 详情按钮) + a.hotlink(片名 + 元信息)。
+    // 不能像以前那样整张卡片是个 <a>：按钮嵌在链接里是无效 HTML，点了也会顺带跳转。
+    // 缓存里那些老条目没留 src/vid，这时详情走"按片名查"那条路，
+    // 服务端要并发检索一轮（所以更要点开才查）。
+    const dAttrs = ' data-detail data-title="' + esc(x.title) +
+      '" data-pic="' + esc(x.pic || '') + '" data-year="' + esc(x.year || '') +
+      '" data-type="' + esc(x.type || '') + '" data-remarks="' + esc(x.remarks || '') +
+      '" data-src="' + esc(x.src || '') + '" data-vid="' + esc(x.vid || '') +
+      '" data-n="' + (x.n_sources || 0) + '"';
+    const dbtn = '<button class="dbtn" type="button" aria-label="查看《' + esc(x.title) +
+      '》的详情"' + dAttrs + '>详情</button>';
+    const cover = '<span class="hcover">' + (x.pic
+        ? '<img loading="lazy" decoding="async" src="' + esc(x.pic) +
+          '" alt="" onerror="this.remove()">' : '') + dbtn + '</span>';
     const meta = [x.year || x.type, x.rate ? '豆瓣 ' + x.rate : '',
                   x.n_sources > 1 ? x.n_sources + ' 源' : ''].filter(Boolean).join(' · ');
-    return '<a class="hotcard" href="' + esc(x.url) + '" data-title="' + esc(x.title) + '">' +
-      cover + '<b>' + esc(x.title) + '</b><span class="hotmeta">' + esc(meta) + '</span></a>';
+    return '<div class="hotcard">' + cover +
+      '<a class="hotlink" href="' + esc(x.url) + '" data-title="' + esc(x.title) + '">' +
+      '<b>' + esc(x.title) + '</b><span class="hotmeta">' + esc(meta) + '</span></a></div>';
   }
 
   // 每页张数 = CSS 网格实际列数，两边共用一个来源，不会算错行
@@ -480,6 +502,135 @@
 
   ['movie', 'tv'].forEach((kind) => {
     if (document.querySelector('.hotgrid[data-kind="' + kind + '"]')) showHotPage(kind, 0);
+  });
+
+  /* ---------------- 海报右下角「详情」→ 影片信息（点开才查，绝不预取） ----------------
+     两条来路：搜索结果卡片每个来源都带影片 ID，一次 ac=detail 就够；
+     猜你想搜那些（以及没留 ID 的旧缓存）只有片名，服务端要先并发检索一轮才知道 ID。
+     两种都只在点了「详情」之后才发请求 —— 列表渲染时一个都不发。
+     面板只给影片信息：请求带 meta=1，本站连播放线路都不发给前端，要看线路仍然得
+     点片名进页面、或在卡片里点来源名展开。 */
+  const dpEl = $('dpanel'), dpTitle = $('dp-title'), dpBody = $('dp-body'), dpClose = $('dp-close');
+  const dcache = {};                  // key -> 已取到的详情：来回开关不重复请求
+  const dpending = {};                // key -> 在途请求：连点两次只发一次
+  let dpToken = 0, dpBack = null;
+
+  function specOf(el) {
+    const d = el.dataset;
+    let srcs = [];
+    try { srcs = JSON.parse(d.srcs || '[]'); } catch (e) { srcs = []; }
+    return { title: d.title || '', year: d.year || '', area: d.area || '', type: d.type || '',
+             remarks: d.remarks || '', actor: d.actor || '', pic: d.pic || '',
+             src: d.src || '', vid: d.vid || '', n: +d.n || 0, srcs: srcs };
+  }
+  const dkey = (s) => (s.src && s.vid ? s.src + ':' + s.vid : 'kw:' + s.title);
+  // meta=1：让后端把 lines 剥掉，前端拿不到也就渲染不出播放链接
+  const detailURL = (s) => (s.src && s.vid
+    ? '/api/detail?src=' + encodeURIComponent(s.src) + '&vid=' + encodeURIComponent(s.vid) +
+      '&t=' + encodeURIComponent(s.title) + '&meta=1'
+    : '/api/detail?kw=' + encodeURIComponent(s.title) + '&meta=1');
+
+  // 唯一的入口就是这个按钮：结果卡片的按钮在 .cover 里，猜你想搜的按钮与片名链接是兄弟节点，
+  // 都不会顺带触发跳转
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.dbtn');
+    if (!b) return;
+    openDetail(specOf(b));
+  });
+
+  function headHTML(s) {
+    const tags = [s.type, s.year, s.area, s.remarks].filter(Boolean)
+      .map((t) => '<span class="tag">' + esc(t) + '</span>').join('');
+    const chips = (s.srcs || []).length > 1
+      ? '<div class="dpchips"><span class="dplbl">换源看</span>' + s.srcs.map((x, i) =>
+          // vid 从接口来是数字、从 data-* 读回来是字符串，比的时候两边都要当字符串，
+          // 否则选中态永远点不亮
+          '<button class="dchip' + (String(x.id) === String(s.src) &&
+          String(x.vid) === String(s.vid) ? ' on' : '') +
+          '" type="button" data-i="' + i + '">' + esc(x.name) + '</button>').join('') + '</div>'
+      : '';
+    return '<div class="dpcover">' + (s.pic
+        ? '<img src="' + esc(s.pic) + '" alt="" onerror="this.remove()">' : '') + '</div>' +
+      (tags ? '<div class="dptags">' + tags + '</div>' : '') +
+      (s.actor ? '<p class="dprow"><b>主演</b>' + esc(s.actor) + '</p>' : '') +
+      (s.n > 1 ? '<p class="dprow"><b>覆盖</b>' + s.n + ' 个采集源</p>' : '') +
+      chips +
+      '<div id="dp-wait"><div class="dpskel"><i></i><i></i><i></i></div>' +
+      '<p class="dphint">' + (dcache[dkey(s)] ? '这一条本页已经查过，直接用缓存，不再请求。'
+        : (s.src && s.vid ? '正在读取这部片的详情…'
+          : '这条没留影片 ID，正在按片名把各检索源都打一遍再取详情，会慢几秒…')) + '</p></div>';
+  }
+
+  function fillDetail(s, d) {
+    const box = $('dp-wait');
+    if (!box) return;                 // 面板已经关了或换了条目
+    if (!d || d.ok === false) {
+      box.innerHTML = '<p class="dperr">' + esc((d && d.error) || '没取到详情') +
+        ' <button class="dpretry" type="button">重试</button></p>';
+      box.querySelector('.dpretry').onclick = () => {
+        delete dcache[dkey(s)];
+        openDetail(s);                // 重走一遍：连头部一起重画，状态最简单
+      };
+      return;
+    }
+    // 采集源给的演员表常常是整部戏几十个名字连成一串，面板里截一下，不然一行 meta 占半屏
+    const cut = (v, n) => { const t = String(v || ''); return t.length > n ? t.slice(0, n) + '…' : t; };
+    const rows = [['导演', cut(d.director, 40)], ['主演', cut(d.actor || s.actor, 64)],
+                  ['年份', d.year || s.year], ['地区', d.area || s.area],
+                  ['类型', d.type || s.type],
+                  ['更新', d.notes || d.remarks || s.remarks]].filter((r) => r[1]);
+    box.innerHTML =
+      (rows.length ? '<dl class="dpmeta">' + rows.map((r) =>
+        '<dt>' + esc(r[0]) + '</dt><dd>' + esc(String(r[1])) + '</dd>').join('') + '</dl>' : '') +
+      (d.blurb ? '<p class="dpblurb">' + esc(d.blurb) + '</p>' : '') +
+      // 这里不放任何播放链接：面板只是"这部片是什么"，"去哪儿看"仍然得点进去
+      '<p class="dpgoto">要看播放线路：点片名进这部片的页面，或在结果卡片「来源」那一行点某个源名展开。</p>' +
+      '<p class="dpfoot">以上信息来自 ' + esc(d.source_name || '该源') +
+      (d.via === 'kw' ? '（按片名定位到的）' : '（按影片 ID 直取）') +
+      '，第三方接口随时可能失效。' +
+      (s.title ? '<a href="/s/' + encodeURIComponent(s.title) + '">按这个片名搜一遍</a>' : '') +
+      '</p>';
+  }
+
+  function openDetail(s) {
+    const key = dkey(s), token = ++dpToken;
+    if (!dpBack) dpBack = document.activeElement;
+    dpTitle.textContent = s.title || '详情';
+    dpBody.innerHTML = headHTML(s);
+    dpEl.hidden = false;
+    dpEl.classList.add('on');
+    document.body.classList.add('dp-open');
+    dpClose.focus();
+    Array.prototype.forEach.call(dpBody.querySelectorAll('.dchip'), (b) => {
+      b.onclick = () => {
+        const x = (s.srcs || [])[+b.dataset.i];
+        if (x) openDetail(Object.assign({}, s, { src: x.id, vid: x.vid }));
+      };
+    });
+    if (dcache[key]) { fillDetail(s, dcache[key]); return; }
+    if (!s.title) { fillDetail(s, { ok: false, error: '这条目连片名都没有，查不了详情' }); return; }
+    if (!dpending[key]) {
+      dpending[key] = getJSON(detailURL(s))
+        .then((d) => { delete dpending[key]; dcache[key] = d; return d; })
+        .catch((e) => {
+          delete dpending[key];
+          return { ok: false, error: '读取失败：' + (e && e.message ? e.message : e) };
+        });
+    }
+    dpending[key].then((d) => { if (token === dpToken) fillDetail(s, d); });
+  }
+
+  function closeDetail() {
+    dpToken++;                        // 在途请求回来时不再填已经关掉的面板
+    dpEl.classList.remove('on');
+    document.body.classList.remove('dp-open');
+    setTimeout(() => { if (!dpEl.classList.contains('on')) dpEl.hidden = true; }, 260);
+    if (dpBack && dpBack.focus) dpBack.focus();
+    dpBack = null;
+  }
+  dpClose.addEventListener('click', closeDetail);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !dpEl.hidden) closeDetail();
   });
 
   /* 更新进度：跑起来时轮询，跑完提示刷新 */

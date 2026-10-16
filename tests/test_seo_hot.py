@@ -144,5 +144,18 @@ check("末页 has_more=False", p4["has_more"] is False and p4["total"] == 30, p4
 check("offset 越界返回空列表而不是 500", tail["items"] == [] and tail["has_more"] is False, tail)
 check("非法 kind 不返回条目", "items" not in json.loads(bad) or not json.loads(bad).get("items"), bad[:80])
 
+print("\n9) 猜你想搜那一行要带得出 (源, 影片 ID)")
+# 右键看详情时有这对儿就能一次 ac=detail 命中，不必再并发检索一轮
+row = app_mod.hot_mod.pack_row({"title": "某剧", "kind": "tv", "year": "2026", "type": "国产剧",
+                    "remarks": "更新至第2集", "pic": "http://c/1.jpg", "updated": "2026-10-01",
+                    "sources": {"red"}, "probe": ("red", 456)}, {})
+check("行里带 src", row["src"] == "red", row)
+check("行里带 vid（数字转字符串）", row["vid"] == "456", row)
+made = app_mod.hot_mod._mk("某剧", {"type": "电影", "year": "2026", "vid": 789, "source": "hongniu"}, "douban")
+check("豆瓣回查那条路记的是条目自己的源，不是占位词 douban", made["probe"][0] == "hongniu",
+      made["probe"])
+check("改造前的旧条目没有 probe 时不炸，src/vid 留空",
+      app_mod.hot_mod.pack_row({"title": "旧", "kind": "movie", "year": "", "type": "", "remarks": "",
+                    "pic": "", "updated": "", "sources": set()}, {})["src"] == "")
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

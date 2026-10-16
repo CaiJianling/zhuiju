@@ -83,8 +83,10 @@ def _mk(title: str, item: dict, src_id: str) -> dict:
         "year": str(item.get("year") or ""), "type": item.get("type", ""),
         "remarks": item.get("remarks", ""), "pic": item.get("pic", ""),
         "updated": str(item.get("updated") or ""), "sources": {src_id},
-        # 记下"哪个源的哪个 ID"，列表模式不给海报时可以再查一次详情
-        "probe": (src_id, item.get("vid")),
+        # 记下"哪个源的哪个 ID"：列表模式不给海报时用它补图，
+        # 右键看详情时也用它直接 ac=detail，省掉一次全源并发检索。
+        # 豆瓣回查那条路传进来的 src_id 是占位词 "douban"，所以优先取条目自己的 source。
+        "probe": (item.get("source") or src_id, item.get("vid")),
     }
 
 
@@ -208,6 +210,29 @@ def verify_pool(cands: list[dict], sources: list[Source], since: date) -> dict:
     return found
 
 
+def pack_row(b: dict, d: dict) -> dict:
+    """一个候选条目 -> 页面/缓存里的那一行。
+
+    单独拆出来是为了能被测试直接调用（以前它是 build() 里的闭包，
+    想验一行里少了哪些字段就得真跑一遍 build，那要几分钟网络）。
+    """
+    # 豆瓣封面优先：CMS 的图常挂在非标端口/自签证书上（浏览器会静默加载失败）
+    pic = d.get("cover") or b["pic"]
+    src, vid = b.get("probe") or ("", None)
+    return {
+        "title": b["title"],
+        "kind": b["kind"] or ("movie" if d.get("douban_type") == "movie" else "tv"),
+        "year": b["year"], "type": b["type"], "remarks": b["remarks"],
+        "pic": pic, "rate": d.get("rate", ""),
+        "douban": bool(d), "updated": b["updated"], "n_sources": len(b["sources"]),
+        "from_douban": "douban" in b["sources"],
+        # 右键看详情时用这对儿直接 ac=detail；缓存可能比源列表旧（源改名/停用），
+        # 取不到详情时前端会退回按片名查，所以这里带着空值也没关系
+        "src": str(src or ""), "vid": str(vid or ""),
+        "url": "/s/" + urllib.parse.quote(b["title"]),
+    }
+
+
 def build(limit_each: int = 60) -> dict:
     today = date.today()
     since = today - timedelta(days=HALF_YEAR_DAYS)
@@ -222,18 +247,7 @@ def build(limit_each: int = 60) -> dict:
     filled = fill_pics(buckets, sources)
 
     def pack(key: str, b: dict) -> dict:
-        d = douban.get(key, {})
-        # 豆瓣封面优先：CMS 的图常挂在非标端口/自签证书上（浏览器会静默加载失败）
-        pic = d.get("cover") or b["pic"]
-        return {
-            "title": b["title"],
-            "kind": b["kind"] or ("movie" if d.get("douban_type") == "movie" else "tv"),
-            "year": b["year"], "type": b["type"], "remarks": b["remarks"],
-            "pic": pic, "rate": d.get("rate", ""),
-            "douban": bool(d), "updated": b["updated"], "n_sources": len(b["sources"]),
-            "from_douban": "douban" in b["sources"],
-            "url": "/s/" + urllib.parse.quote(b["title"]),
-        }
+        return pack_row(b, douban.get(key, {}))
 
     def sort_key(x):
         """猜你想搜按"最新在前"排：更新时间倒序，其次年份，再按覆盖源数与豆瓣评分。"""

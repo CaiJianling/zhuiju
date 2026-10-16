@@ -20,6 +20,9 @@
   --err-bg: #fdf3f1;
   --warn-bg: #fffaf1;
   --warn-line: #f3e0bd;
+  --poster-ink: #fff;
+  --poster-scrim: rgba(20, 24, 31, .62);
+  --poster-line: rgba(255, 255, 255, .28);
   --shimmer-a: #eef1f6;
   --shimmer-b: #e2e8f1;
   --sea: #eaf1f8;
@@ -687,6 +690,13 @@ code {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
+}
+/* 片名和元信息才是链接（海报交给详情按钮），链接不能嵌按钮，所以拆成两层 */
+.hotlink {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   text-decoration: none;
   color: inherit;
   min-width: 0;
@@ -768,7 +778,7 @@ code {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-.hotcard:hover b { color: var(--brand-ink); }
+.hotlink:hover b, .hotlink:focus-visible b { color: var(--brand-ink); }
 .hotmeta { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hotnote { margin: 12px 0 0; font-size: 12px; color: var(--dim); }
 .ssrlist { margin: 0; padding-left: 20px; font-size: 13.5px; }
@@ -1043,6 +1053,10 @@ code {
   --shadow-s: 0 1px 2px rgba(0, 0, 0, .5);
   --shadow-m: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 18px rgba(0, 0, 0, .45);
   --on-accent: #0d1016;
+  /* 海报上的详情按钮压在图片上，配色不跟主题翻转 */
+  --poster-ink: #fff;
+  --poster-scrim: rgba(12, 15, 20, .68);
+  --poster-line: rgba(255, 255, 255, .34);
   --on-accent-dim: rgba(13, 16, 22, .62);
   --brand-dim: #2c3a5e;
   --brand-2: #89aaff;
@@ -1089,7 +1103,7 @@ code {
    每块面板固定只显示几行（关键词/IP/浏览器/来源/归属地 5 行，明细 10 行），
    剩下的在框内用滚动条看，页面本身不再被这些表拉长。
    高度不写死像素：行高会随折行变化（浏览器格、来源格经常换行），写死就会露半行，
-   所以收起态的高度由 JS 量第 N+1 行的位置来定。 */
+   所以框高由 JS 量第 N+1 行的位置来定。 */
 .fold {
   overflow: auto;                  /* 两个方向都可能超：竖着超行、横着超宽列 */
   scrollbar-width: thin;
@@ -1107,4 +1121,188 @@ code {
   z-index: 1;
   background: var(--surface);
   box-shadow: inset 0 -1px 0 var(--line);
+}
+
+/* ---------------- 海报上的「详情」按钮 + 详情面板 ----------------
+   按钮常驻在海报右下角（不靠 hover 才发现得了），半透明压在封面上；
+   面板是非模态的：开着它照样能翻页、搜别的片，Esc 或 × 关掉。
+   面板只显示影片信息，一条播放链接都不给 —— 要看线路仍然得点进去。 */
+.dbtn {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  z-index: 2;                       /* 封面里的 img 是 z-index:1 */
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  color: var(--poster-ink);
+  background: var(--poster-scrim);
+  border: 1px solid var(--poster-line);
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: .82;
+  transition: opacity .16s, background .16s, border-color .16s;
+}
+.dbtn:hover, .dbtn:focus { opacity: 1; background: var(--brand); border-color: var(--brand); }
+.dbtn:focus-visible { outline: 2px solid var(--brand-ink); outline-offset: 2px; }
+/* 没有 hover 的触屏上给满不透明度，否则按钮像装饰 */
+@media (hover: none) { .dbtn { opacity: 1; } }
+
+.dpanel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 80;
+  width: min(420px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  box-shadow: var(--shadow-m);
+  transform: translateX(calc(100% + 20px));
+  transition: transform .26s ease;
+}
+.dpanel[hidden] { display: none; }
+.dpanel.on { transform: none; }
+.dphead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.dphead h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dpclose {
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.dpclose:hover { border-color: var(--brand); color: var(--brand-ink); }
+.dpbody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.dpcover {
+  position: relative;
+  width: 132px;
+  aspect-ratio: 3 / 4;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  display: grid;
+  place-items: center;
+  margin-bottom: 12px;
+}
+.dpcover::before { content: "🎬"; opacity: .3; }
+.dpcover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.dptags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.dprow { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-2); }
+.dprow b { color: var(--dim); font-weight: 500; margin-right: 6px; }
+.dpchips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 12px; }
+.dplbl { font-size: 11.5px; color: var(--dim); }
+.dchip {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--tab-bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.dchip:hover { border-color: var(--brand); color: var(--brand-ink); }
+.dchip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-ink); }
+.dpskel { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+.dpskel i {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--shimmer-a), var(--shimmer-b), var(--shimmer-a));
+  background-size: 200% 100%;
+  animation: dp-shimmer 1.15s linear infinite;
+}
+.dpskel i:nth-child(2) { width: 78%; }
+.dpskel i:nth-child(3) { width: 56%; }
+@keyframes dp-shimmer { to { background-position: -200% 0; } }
+.dphint { margin: 0; font-size: 12px; color: var(--dim); }
+.dperr { margin: 6px 0; font-size: 12.5px; color: var(--bad); }
+.dpretry {
+  font: inherit;
+  font-size: 12px;
+  margin-left: 6px;
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+.dpmeta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0 0 12px;
+  font-size: 12.5px;
+}
+.dpmeta dt { color: var(--dim); }
+.dpmeta dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.dpblurb {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-height: 168px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.dpgoto {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-m);
+}
+.dpfoot { margin: 10px 0 0; font-size: 11.5px; color: var(--dim); }
+.dpfoot a { color: var(--brand-ink); }
+@media (max-width: 560px) {
+  .dpanel { top: 8px; right: 8px; bottom: 8px; left: 8px; width: auto; }
+  /* 窄屏上面板几乎盖满，开着它再滚背后的页面很容易错位，直接把页面滚动锁住 */
+  body.dp-open { overflow: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dpanel { transition: none; }
+  .dpskel i { animation: none; }
 }

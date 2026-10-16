@@ -236,6 +236,57 @@ def _fail(src: Source, msg: str, t0: float) -> dict:
             "error": msg}
 
 
+def by_id(sid: str) -> Source | None:
+    """按 id 找检索源（详情页只知道自己来自哪个 id）。"""
+    return next((s for s in load_sources() if s.id == sid), None)
+
+
+# 按片名查详情要并发打一遍所有源，比按 ID 查贵一个量级，所以结果短暂缓存；
+# 只缓存成功的：失败多半是临时的（某个源此刻不通），把失败钉 15 分钟反而更糟
+DETAIL_TTL = 900
+_detail_cache: dict[str, tuple] = {}
+
+
+def detail_by_title(kw: str) -> dict:
+    """没有影片 ID 时按片名取详情：先正常检索，取排序最靠前、又带 ID 的那条再查。
+
+    猜你想搜那些海报只有片名和封面（数据来自最新流与豆瓣回查，没留 ID），
+    右键看详情时只能走这条路。返回里额外带 `via`/`matched`/`n_sources`，
+    前端能说清"这条详情来自哪个源、合并了几个源"。
+    """
+    kw = clean_text(kw)[:60]
+    if len(kw) < 2:
+        return {"ok": False, "error": "片名太短，无法定位到具体影片", "via": "kw"}
+    hit = _detail_cache.get(kw)
+    if hit and time.time() - hit[0] < DETAIL_TTL:
+        return hit[1]
+    out = {"ok": False, "error": "没搜到可以查详情的条目", "title": kw, "via": "kw"}
+    try:
+        for r in search(kw)["results"]:
+            src, vid = None, None
+            for s in r["sources"]:
+                cand = by_id(s["id"])
+                if s.get("vid") and cand is not None and cand.enabled:
+                    src, vid, want = cand, s["vid"], r["title"]
+                    break
+            if src is None:
+                continue
+            d = detail(src, vid, want)
+            out = {**d, "title": d.get("title") or want, "matched": want,
+                   "match": r["match"], "n_sources": len(r["sources"]),
+                   "pic": d.get("pic") or r.get("pic") or "", "year": d.get("year") or r.get("year"),
+                   "area": d.get("area") or r.get("area"), "type": d.get("type") or r.get("type"),
+                   "actor": d.get("actor") or r.get("actor"), "via": "kw"}
+            break
+    except Exception as exc:  # noqa: BLE001 - 详情查不出来也不能把请求炸了
+        out = {"ok": False, "error": f"{type(exc).__name__}"[:60], "via": "kw"}
+    if out.get("ok"):
+        if len(_detail_cache) > 64:
+            _detail_cache.clear()
+        _detail_cache[kw] = (time.time(), out)
+    return out
+
+
 def merge(per_source: list[dict], kw: str) -> list[dict]:
     """按归一化片名跨源合并，返回按"覆盖源数 + 年份"排序的结果。"""
     buckets: dict[str, dict] = {}
