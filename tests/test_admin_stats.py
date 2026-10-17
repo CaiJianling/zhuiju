@@ -571,10 +571,73 @@ try:
     check("升级后按国家筛选能查到历史数据",
           stats_mod.list_queries({"geo": "CN"})["total"] == 1,
           stats_mod.list_queries({"geo": "CN"})["total"])
+    # 补列之前这批行的 browser/os/device 也是 NULL，而新写的用 '未知'/''——同一含义两种写法
+    # 会在「浏览器 / 设备」里占两行都叫「未知」（真实库里就撞上过：16 条 + 9 条），
+    # 点进去的过滤条件还只命中其中一套，数字对不上
+    con2 = sqlite3.connect(str(old))
+    null_agent = con2.execute("SELECT COUNT(*) FROM queries WHERE browser IS NULL"
+                              " OR device IS NULL OR os IS NULL").fetchone()[0]
+    con2.close()
+    check("升级把这三列也归一了，库里不留 NULL", null_agent == 0, null_agent)
+    s_old = stats_mod.summary({}, top=15)
+    unk = [b for b in s_old["by_browser"] if b["browser"] == "未知"]
+    check("没有 UA 的老记录在面板上只占一行「未知」", len(unk) == 1, s_old["by_browser"])
+    check("那一行是全部 4 条，不是只算一段", bool(unk) and unk[0]["n"] == 4, unk)
+    check("点「未知」进去还是这 4 条（浏览器口径与面板对得上）",
+          stats_mod.list_queries({"browser": "未知"})["total"] == (unk[0]["n"] if unk else None),
+          stats_mod.list_queries({"browser": "未知"})["total"])
+    check("设备口径也对得上",
+          stats_mod.list_queries({"device": "未知"})["total"] == (unk[0]["n"] if unk else None),
+          stats_mod.list_queries({"device": "未知"})["total"])
 finally:
     stats_mod.DB, stats_mod._ready = _real_db2, False
     stats_mod.MIGRATE_ERROR = ""
     stats_mod.ensure_schema()
+
+print("\n18b) 就算没升级到一半，NULL / '' / '未知' 也得并成一个桶")
+# 上面是"跑过 ensure_schema 之后"；这里故意绕开迁移，直接查一个混着三种写法的库，
+# 验证聚合与过滤自己会并桶（备份恢复、老库刚补完列还没归一这类情况）
+mix = TMP / "mix.db"
+mc = sqlite3.connect(str(mix))
+mc.executescript(stats_mod.SCHEMA)
+mc.executemany("INSERT INTO queries (ts, day, ip, kw, via, browser, os, device, bot, ua)"
+               " VALUES (?,?,?,?,?,?,?,?,?,?)",
+               [("2026-10-16 09:00:%02d" % i, "2026-10-16", "1.1.1.%d" % (i + 2),
+                 "混着%d" % i, "api", b, o, d, 0, "Mozilla/5.0")
+                for i, (b, o, d) in enumerate([(None, None, None), ("未知", "", "未知"),
+                                               ("", "", ""), (None, None, None)])])
+mc.commit()
+mc.close()
+_real_db3, _ready3 = stats_mod.DB, stats_mod._ready
+stats_mod.DB, stats_mod._ready = mix, True       # _ready=True：跳过 ensure_schema 的归一
+try:
+    s = stats_mod.summary({}, top=15)
+    u = [x for x in s["by_browser"] if x["browser"] == "未知"]
+    check("库里确实混着三种写法",
+          sqlite3.connect(str(mix)).execute(
+              "SELECT COUNT(*) FROM queries WHERE browser IS NULL OR browser = ''").fetchone()[0] == 3,
+          None)
+    check("没归一也只有一行「未知」，四条全在里面",
+          len(u) == 1 and u[0]["n"] == 4, s["by_browser"])
+    check("浏览器与设备两个口径都命中四条",
+          stats_mod.list_queries({"browser": "未知"})["total"] == 4
+          and stats_mod.list_queries({"device": "未知"})["total"] == 4,
+          (stats_mod.list_queries({"browser": "未知"})["total"],
+           stats_mod.list_queries({"device": "未知"})["total"]))
+    con = sqlite3.connect(str(mix))
+    first = stats_mod.normalize_agent(con)
+    con.commit()
+    again = stats_mod.normalize_agent(con)
+    nul = con.execute("SELECT COUNT(*) FROM queries WHERE browser IS NULL"
+                      " OR os IS NULL OR device IS NULL").fetchone()[0]
+    con.close()
+    check("归一函数幂等：第一次改 2 行，第二次 0 行，之后库里没有 NULL",
+          first == 2 and again == 0 and nul == 0, (first, again, nul))
+    check("归一完再查，还是那一行四条",
+          [x for x in stats_mod.summary({}, top=15)["by_browser"]
+           if x["browser"] == "未知"][0]["n"] == 4, None)
+finally:
+    stats_mod.DB, stats_mod._ready = _real_db3, _ready3
 
 print("\n19) 区块顺序与明细翻页控件")
 dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)

@@ -80,6 +80,27 @@ GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"),
 AGENT_COLUMNS = (("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"),
                  ("bot", "INTEGER"), ("ua", "TEXT"),
                  ("ref", "TEXT"), ("ref_kind", "TEXT"), ("ref_label", "TEXT"))
+
+# 「认不出来」在库里只能有一种写法。补列之前那批行这三列是 NULL（那时根本没存 UA），
+# 现在的写法是 browser/device 存 "未知"、os 存 ''（见 record()）。两套写法混在一张表里，
+# 面板上同一个"未知"就占两行（看着像重复统计），点进去过滤条件又只命中其中一套，
+# 数字对不上比数错更难查。
+UNKNOWN = "未知"
+
+
+def normalize_agent(con) -> int:
+    """把历史 NULL 行写成和现在一样的口径，返回改了多少行。幂等：没有 NULL 就是 0。
+
+    原始 UA 仍然留在 ua 列里（这批行的 ua 是空串，所以确实无从判断，不是丢了证据）。
+    """
+    n = con.execute("SELECT COUNT(*) FROM queries WHERE browser IS NULL"
+                    " OR os IS NULL OR device IS NULL").fetchone()[0]
+    if not n:
+        return 0
+    for col, val in (("browser", UNKNOWN), ("device", UNKNOWN), ("os", "")):
+        con.execute(f"UPDATE queries SET {col} = ? WHERE {col} IS NULL", (val,))
+    return n
+
 # 归属地的索引必须等列真的存在之后再建：把它写在 SCHEMA 里，
 # 对已有库就是"给还不存在的列建索引" -> no such column，整个 ensure_schema 失败
 # （而且 create_app 把异常吞了，症状是"新克隆正常、老库升级后归属地一直是空"）
@@ -108,6 +129,9 @@ def ensure_schema() -> None:
                 if name not in cols:
                     con.execute(f"ALTER TABLE queries ADD COLUMN {name} {typ}")
             con.execute(GEO_INDEX)          # 列确定了存在之后才建它的索引
+            # 老行的 browser/device/os 是 NULL，和新写的 '未知'/'' 是同一个意思，
+            # 不归一就会在面板上占两行
+            normalize_agent(con)
             con.commit()
             _ready = True
             MIGRATE_ERROR = ""
@@ -210,7 +234,10 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
                  clean_ip(ip) or "unknown", kw, via if via in VIA else "api",
                  results, hits, sources_ok, sources_total,
                  round(float(ms), 1) if ms is not None else None, iso, country, geo,
-                 a["browser"] or "未知", a["os"], a["device"], 1 if a["bot"] else 0,
+                 # 认不出来就按库里的统一写法存（'' 也算认不出来），别把 NULL/''/'未知'
+                 # 三种写法混进同一张表——那会让面板上同一个"未知"占两行
+                 a["browser"] or UNKNOWN, a["os"] or "", a["device"] or UNKNOWN,
+                 1 if a["bot"] else 0,
                  a["ua"][:200], f["origin"] or f["path"] or "", f["kind"], f["label"]))
             con.commit()
         finally:
@@ -253,8 +280,14 @@ def _where(f: dict) -> tuple[str, list]:
         elif key in ("browser", "os"):
             # 这两个是自由文本框：输 "Windows" 该能命中 "Windows 10/11"，
             # 所以用模糊匹配；表格里的胶囊传的是精确值，同样命中
-            conds.append(sql)
-            params.append(f"%{val}%")
+            if val == UNKNOWN:
+                # 「未知」这个桶要把 NULL 与 '' 一起算上（库里同一含义有三种写法，
+                # 见 normalize_agent），否则面板合成一行、点进去却少几行
+                conds.append(f"({key} IS NULL OR {key} = '' OR {key} = ?)")
+                params.append(val)
+            else:
+                conds.append(sql)
+                params.append(f"%{val}%")
         elif key in ("day_from", "day_to"):
             # 日期一律规整成 YYYY-MM-DD，别让人往 SQL 里塞奇怪东西
             d = _norm_date(val)
@@ -277,11 +310,13 @@ def _where(f: dict) -> tuple[str, list]:
         elif key in ("device", "ref_kind"):
             if val not in _ENUMS[key]:
                 continue
-            conds.append(sql)
-            params.append(val)
-        elif key == "browser":
-            conds.append(sql)
-            params.append(str(val)[:60])
+            if key == "device" and val == UNKNOWN:
+                # 同 browser：老行是 NULL，新行是 '未知'，一个桶
+                conds.append("(device IS NULL OR device = '' OR device = ?)")
+                params.append(val)
+            else:
+                conds.append(sql)
+                params.append(val)
         elif key == "geo":
             # 国家码就两位大写字母；'--' 是页面上"内网/保留"那个桶的暗号
             g = str(val).strip().upper()
@@ -371,12 +406,18 @@ def summary(f: dict, top: int = 15) -> dict:
             f" MAX(day) AS last_day"
             f" FROM queries WHERE {where} GROUP BY COALESCE(iso,'')"
             f" ORDER BY n DESC LIMIT ?", params + [int(top) + 12])]
+        # 三列都按"同一种未知只算一个桶"归一之后再分组：GROUP BY 用列号引用上面
+        # 归一好的表达式，免得 SELECT 和 GROUP BY 各写一份、改一处漏一处
         by_browser = [dict(r) for r in con.execute(
-            f"SELECT COALESCE(browser,'未知') AS browser, COALESCE(os,'') AS os,"
-            f" COALESCE(device,'') AS device, COUNT(*) AS n, COUNT(DISTINCT ip) AS ips,"
+            f"SELECT CASE WHEN browser IS NULL OR browser = '' THEN '未知' ELSE browser END"
+            f" AS browser,"
+            f" COALESCE(os, '') AS os,"
+            f" CASE WHEN device IS NULL OR device = '' THEN '未知' ELSE device END"
+            f" AS device,"
+            f" COUNT(*) AS n, COUNT(DISTINCT ip) AS ips,"
             f" SUM(bot) AS bots"
-            f" FROM queries WHERE {where} GROUP BY COALESCE(browser,'未知'),"
-            f" COALESCE(os,''), COALESCE(device,'') ORDER BY n DESC LIMIT ?",
+            f" FROM queries WHERE {where}"
+            f" GROUP BY 1, 2, 3 ORDER BY n DESC LIMIT ?",
             params + [int(top)])]
         by_ref = [dict(r) for r in con.execute(
             f"SELECT COALESCE(ref_kind,'direct') AS kind, COUNT(*) AS n,"

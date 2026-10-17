@@ -173,7 +173,11 @@ try:
     check("一次升级把两批列都补齐", need <= set(cols), sorted(need - set(cols)))
     check("升级没报错", stats_mod.MIGRATE_ERROR == "", stats_mod.MIGRATE_ERROR)
     old_row = stats_mod.list_queries({})["items"][0]
-    check("老行浏览器为空而不是编一个", not old_row["browser"], old_row)
+    check("老行不编具体浏览器名，归到新写法「未知」（NULL 与 '未知' 混着会裂成两行）",
+          old_row["browser"] == stats_mod.UNKNOWN and old_row["device"] == stats_mod.UNKNOWN
+          and old_row["os"] == "", old_row)
+    check("原始 UA 没被伪造：那批行本来就没存 UA，留 NULL/空",
+          not old_row["ua"], repr(old_row["ua"]))
     check("老行仍能读出来（回填不了也不该丢数据）", old_row["kw"] == "老记录", old_row)
 finally:
     stats_mod.DB, stats_mod._ready = real_db, False
