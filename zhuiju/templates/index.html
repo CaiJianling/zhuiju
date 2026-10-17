@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   {% include "_theme.html" %}
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# viewport-fit=cover：不写这个，env(safe-area-inset-*) 永远是 0，
+     底部抽屉会压在全屏 iPhone 的home indicator 上 #}
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>{{ seo.title }}</title>
   <meta name="description" content="{{ seo.description }}">
   <link rel="canonical" href="{{ seo.canonical }}">

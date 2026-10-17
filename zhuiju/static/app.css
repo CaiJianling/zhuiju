@@ -1,6 +1,15 @@
 /* 追剧资源搜索 — 视觉样式 */
 
 :root {
+  /* 小字号统一走 token。桌面上这些是 11 / 11.5px 的次要信息，手机上只要抬 token 就全部到位：
+     给每条复合选择器（.row .ct、.csite .ct 之类）各写一遍覆盖是徒劳的 —— 单类选择器比不过
+     两个类的特异性，看着改了其实没改（第一版就踩了这个坑，量出来还是 11.5px）。 */
+  --fs-min: 11px;
+  --fs-sm: 11.5px;
+  /* 输入控件的字号也必须走 token：媒体查询本身不加特异性，`.admfield input` 是
+     （0,1,1），而 `input { font-size: 16px }` 只有（0,0,1），位置再靠后也压不过它 ——
+     第一次改完量下来口令框还是 12.5px，iOS 一聚焦就把整页放大。 */
+  --fs-input: 12.5px;
   --focus-ring: rgba(53, 102, 230, .18);
   --on-accent-dim: rgba(255, 255, 255, .6);
   --land-on-fill: rgba(53, 102, 230, .2);
@@ -96,7 +105,7 @@ b { font-weight: 600; }
   background: var(--brand);
 }
 .ver {
-  font-size: 11px;
+  font-size: var(--fs-min);
   font-weight: 500;
   color: var(--ink-2);
   background: var(--surface-2);
@@ -328,7 +337,7 @@ main { padding: 18px 0 44px; }
   overflow-wrap: break-word;
 }
 .title .flag {
-  font-size: 11px;
+  font-size: var(--fs-min);
   font-weight: 500;
   color: var(--dim);
   background: var(--surface-2);
@@ -377,7 +386,7 @@ a.openlink:hover { color: var(--brand-ink); }
   flex-direction: column;
   gap: 10px;
 }
-.line .lname { font-size: 11.5px; color: var(--dim); margin-bottom: 6px; }
+.line .lname { font-size: var(--fs-sm); color: var(--dim); margin-bottom: 6px; }
 .eps {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
@@ -433,7 +442,7 @@ a.openlink:hover { color: var(--brand-ink); }
 .csite .chead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .csite .chead b { font-size: 14px; }
 .csite .ct {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--brand-ink);
   background: var(--brand-soft);
   border-radius: 5px;
@@ -509,7 +518,7 @@ a.openlink:hover { color: var(--brand-ink); }
 .deep:hover { border-color: var(--brand); box-shadow: var(--shadow-m); transform: translateY(-1px); }
 .deep b { display: flex; align-items: center; gap: 7px; font-size: 14.5px; font-weight: 600; }
 .deep span { font-size: 12px; color: var(--dim); }
-.deep .cat { align-self: flex-start; font-size: 11px; color: var(--brand-ink); }
+.deep .cat { align-self: flex-start; font-size: var(--fs-min); color: var(--brand-ink); }
 
 /* 状态点 */
 .dot {
@@ -547,7 +556,7 @@ a.openlink:hover { color: var(--brand-ink); }
 .row .nm { font-weight: 600; flex: 0 0 auto; max-width: 190px; }
 .row .ct {
   flex: 0 0 auto;
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--brand-ink);
   background: var(--brand-soft);
   border-radius: 5px;
@@ -562,7 +571,7 @@ a.openlink:hover { color: var(--brand-ink); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.row .stars { color: var(--star); font-size: 11.5px; letter-spacing: 1px; }
+.row .stars { color: var(--star); font-size: var(--fs-sm); letter-spacing: 1px; }
 .row .links { display: flex; gap: 10px; }
 .row a { font-size: 12px; color: var(--brand-ink); text-decoration: none; }
 .row a:hover { text-decoration: underline; }
@@ -702,7 +711,7 @@ code {
   min-width: 0;
 }
 
-.pageof { font-size: 11.5px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pageof { font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 /* 更新进度 */
 .prog { margin: 8px 0 0; }
@@ -727,7 +736,7 @@ code {
   margin-top: 7px;
 }
 .pstep {
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   color: var(--dim);
   background: var(--surface-2);
   border: 1px solid var(--line);
@@ -779,7 +788,7 @@ code {
   -webkit-box-orient: vertical;
 }
 .hotlink:hover b, .hotlink:focus-visible b { color: var(--brand-ink); }
-.hotmeta { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hotmeta { font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hotnote { margin: 12px 0 0; font-size: 12px; color: var(--dim); }
 .ssrlist { margin: 0; padding-left: 20px; font-size: 13.5px; }
 .ssrlist li { margin-bottom: 4px; }
@@ -794,24 +803,6 @@ code {
 .foot { padding: 18px 0 30px; color: var(--dim); font-size: 12.5px; }
 .foot p { margin: 0 0 4px; }
 .foot .dim { font-size: 12px; color: var(--unknown); }
-
-/* ---------------- 窄屏 ---------------- */
-@media (max-width: 640px) {
-  .topbar { padding: 20px 0 16px; }
-  .topbar h1 { font-size: 19px; }
-  main { padding-top: 14px; }
-  .searchbar { position: static; padding: 12px; }
-  .field { flex-wrap: wrap; }
-  /* 窄屏下让"回主页 + 输入框"占一行，搜索按钮换到下一行整宽 */
-  .field input { flex: 1 1 auto; }
-  .field .go { flex: 1 1 100%; padding: 10px; }
-  .card { padding: 12px; gap: 12px; }
-  .cover { flex-basis: 74px; width: 74px; }
-  .statline { flex-direction: column; align-items: flex-start; }
-  .row { flex-wrap: wrap; font-size: 13px; }
-  .row .nm { max-width: none; }
-  .row .tg { flex-basis: 100%; order: 5; }
-}
 
 /* ---------------- 后台统计页 ---------------- */
 /* .panel / .tip 这些名字在首页标签系统里已经有含义（.panel 默认 display:none），
@@ -848,10 +839,10 @@ code {
   margin-bottom: 14px;
 }
 .admfield { display: flex; flex-direction: column; gap: 3px; }
-.admfield > span { font-size: 11.5px; color: var(--dim); }
+.admfield > span { font-size: var(--fs-sm); color: var(--dim); }
 .admfield input, .admfield select {
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-input);
   padding: 5px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -927,7 +918,7 @@ code {
   padding: 10px 13px;
 }
 .stat b { display: block; font-size: 21px; line-height: 1.25; font-variant-numeric: tabular-nums; }
-.stat span { font-size: 11.5px; color: var(--dim); }
+.stat span { font-size: var(--fs-sm); color: var(--dim); }
 .rangehint { margin: 0 0 16px; font-size: 12px; color: var(--dim); }
 .asect {
   background: var(--surface);
@@ -940,12 +931,12 @@ code {
 .asub { font-size: 12px; font-weight: 400; color: var(--dim); }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
-.atip { margin: 10px 0 0; font-size: 11.5px; color: var(--dim); line-height: 1.6; }
-.atip code { font-size: 11px; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+.atip { margin: 10px 0 0; font-size: var(--fs-sm); color: var(--dim); line-height: 1.6; }
+.atip code { font-size: var(--fs-min); background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
 .table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .table th {
   text-align: left;
-  font-size: 11px;
+  font-size: var(--fs-min);
   font-weight: 600;
   color: var(--dim);
   padding: 5px 8px;
@@ -1009,7 +1000,7 @@ code {
 }
 .worldmap .mk:hover { fill-opacity: 1; fill: var(--brand-ink); }
 .geotbl td:first-child { max-width: 320px; overflow-wrap: anywhere; }
-.code { font-size: 11px; color: var(--dim); margin-left: 4px; }
+.code { font-size: var(--fs-min); color: var(--dim); margin-left: 4px; }
 
 /* 明细翻页：跳转控件跟在上一页/下一页后面，同一行排开。
    #detail 不再需要滚动避让：那是给"翻页后把明细滚进视野"用的，而现在明细自己就是个
@@ -1018,7 +1009,7 @@ code {
 .jumplbl { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 5px; }
 .jumpin {
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-input);
   width: 62px;
   padding: 3px 7px;
   border: 1px solid var(--line);
@@ -1028,7 +1019,7 @@ code {
 }
 .jumpin:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 
-.pager .pages { font-size: 11.5px; }
+.pager .pages { font-size: var(--fs-sm); }
 
 /* ---------------- 暗色主题 ----------------
    只改自定义属性，不动任何一条具体规则：亮暗两套共用同一批 var()，
@@ -1084,7 +1075,7 @@ code {
 }
 
 /* 主题切换按钮：放在标题旁，文字由 theme.js 写（当前配色 + 当前模式） */
-.themebtn { font-size: 11.5px; font-weight: 400; margin-left: 8px; vertical-align: 2px; }
+.themebtn { font-size: var(--fs-sm); font-weight: 400; margin-left: 8px; vertical-align: 2px; }
 [data-theme="dark"] body { -webkit-font-smoothing: auto; }
 [data-theme="dark"] img, [data-theme="dark"] .hcover img { opacity: .94; }
 
@@ -1133,7 +1124,7 @@ code {
   bottom: 5px;
   z-index: 2;                       /* 封面里的 img 是 z-index:1 */
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-min);
   line-height: 1.4;
   padding: 1px 7px;
   color: var(--poster-ink);
@@ -1231,7 +1222,7 @@ code {
 .dprow { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-2); }
 .dprow b { color: var(--dim); font-weight: 500; margin-right: 6px; }
 .dpchips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 12px; }
-.dplbl { font-size: 11.5px; color: var(--dim); }
+.dplbl { font-size: var(--fs-sm); color: var(--dim); }
 .dchip {
   font: inherit;
   font-size: 12px;
@@ -1295,14 +1286,140 @@ code {
   border: 1px dashed var(--line);
   border-radius: var(--r-m);
 }
-.dpfoot { margin: 10px 0 0; font-size: 11.5px; color: var(--dim); }
+.dpfoot { margin: 10px 0 0; font-size: var(--fs-sm); color: var(--dim); }
 .dpfoot a { color: var(--brand-ink); }
 @media (max-width: 560px) {
-  .dpanel { top: 8px; right: 8px; bottom: 8px; left: 8px; width: auto; }
-  /* 窄屏上面板几乎盖满，开着它再滚背后的页面很容易错位，直接把页面滚动锁住 */
+  /* 手机上改成底部抽屉：右侧滑入在竖屏里会盖住 90% 宽，看着像把页面切了一半；
+     从下面推上来更符合单手操作，也不遮标题栏。env(...) 要配合
+     <meta name="viewport" ... viewport-fit=cover> 才拿得到刘海机的安全区。 */
+  .dpanel {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    max-height: 86vh;
+    border-radius: var(--r-l) var(--r-l) 0 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    transform: translateY(calc(100% + 20px));
+  }
+  .dphead { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+  .dpbody { padding: 12px 14px calc(16px + env(safe-area-inset-bottom)); }
+  .dpcover { width: 104px; }
+  /* 竖屏里两列海报各 ~150px，一行放 3 个就看不清片名了，交给详情按钮去说 */
+  .hotgrid { --hot-cols: 2; }
   body.dp-open { overflow: hidden; }
+}
+@media (min-width: 561px) and (max-width: 900px) {
+  .dpanel { width: min(360px, calc(100vw - 24px)); }
 }
 @media (prefers-reduced-motion: reduce) {
   .dpanel { transition: none; }
   .dpskel i { animation: none; }
+}
+
+/* ---------------- 手机 / 平板 ----------------
+   下面的值都是量出来的，不是拍的。改之前用 360 / 390 / 430 / 768 / 1440 五档 iframe 量到：
+   ① 360 的屏上 `.wrap`（`100% - 48px` 再左右各 24px 内边距）只剩 249px 放内容 —— 31% 的宽度
+      被边距吃掉，卡片、面板、标签全被挤；
+   ② 四个标签各被挤到 98px 高（"网盘 · 磁力直达"在里面换了行），看着像四块竖着的砖；
+   ③ 91 处文字小于 12px（11 / 11.5px），手机上读着费劲；
+   ④ 22 个可点元素够不上拇指目标，海报角上那颗「详情」只有 37×19px。
+   顺序很关键：这些覆盖必须留在文件最后，否则同优先度的桌面规则按先后压掉它们
+   （第一次就踩了这个坑：字号抬了没生效，量出来还是 11.5px）。 */
+
+/* 平板 / 窄窗口：先是触摸目标与字号，这两件跟"是不是手机"关系没那么大 */
+@media (max-width: 900px) {
+  :root { --fs-min: 12.5px; --fs-sm: 12.5px; --fs-input: 16px; }
+  .chip { padding: 6px 13px; }
+  .tab { padding: 8px 13px; font-size: 14px; }
+  .pbtn, .submit, .jumpbtn, .gobtn, .fbtn, .srcbtn, .reset, .themebtn, .homebtn,
+  .pager button, #prev, #next { min-height: 36px; }
+  .srcbtn { padding: 7px 12px; }
+  .dbtn { min-height: 32px; min-width: 40px; padding: 6px 12px; opacity: 1; }
+  a.openlink { display: inline-flex; align-items: center; min-height: 30px; }
+  .dpclose { width: 38px; height: 38px; font-size: 20px; }
+  .eps a { min-height: 34px; display: flex; align-items: center; justify-content: center; }
+  /* iOS Safari 在聚焦字号小于 16px 的输入框时会把整页放大，之后缩不回去；
+     后台那些 12.5px 的筛选框必须抬到 16px。首页搜索框本来就是 16px。
+     这条单类选择器压不过 `.admfield input`，所以真正起作用的是上面 :root 里的 --fs-input，
+     这里只是给没走 token 的控件兜底。 */
+  input, select, textarea { font-size: var(--fs-input); }
+  /* 猜你想搜的片名是唯一的"进页面"入口，海报让给详情按钮，所以这块得够按 */
+  .hotlink { min-height: 44px; }
+  /* 后台两列表单收成 1fr 之后，网格项默认 min-width:auto 会顶在长命令、长片名上不肯缩，
+     撑宽的不是那一段而是整个文档 —— 手机上一页就能横着拖。表格自己会横滚，不需要这个宽度。
+     overflow-wrap 用 anywhere（不是 break-word）：只有 anywhere 会参与 min-content 计算，
+     那条 `python -m ...` 的长命令才是把整列顶到 402px 的元凶。 */
+  .cols > * { min-width: 0; }
+  .asect { min-width: 0; }
+  .atip, .atip code { overflow-wrap: anywhere; }
+  /* 表格里那些筛选/翻页链接命中的只有 17px 高的文字盒，拇指按不准。
+     加内边距再配等量负外边距：可点区域撑到 ~29px，视觉位置和行高一点不动。 */
+  .table a, .pager a { padding: 7px 3px; margin: -7px -3px; }
+  .pager a { display: inline-flex; align-items: center; }
+  /* 「进入」「保存」这类提交按钮被 flex 压窄时会把两个字换成两行（320 上量到 42×51）。
+     按钮文字不许折行；它旁边那一行（改口令的 保存 + 返回链接）允许折行，
+     宁可让链接掉到下一行，也别把按钮压扁。 */
+  .gobtn, .submit, .reset, .fbtn, .jumpbtn, .pbtn { white-space: nowrap; }
+  .pwrow { flex-wrap: wrap; }
+  /* 结果没回来那几秒（以及关了 JS 的人）看到的是这份给爬虫的列表，它在手机上也是能点的，
+     17px 高的行内链接按不准 —— 同样用内边距撑开，行距多给一点免得上下两条互相盖住 */
+  .ssrlist li { margin-bottom: 10px; }
+  .ssrlist a { display: inline-block; padding: 6px 3px; margin: -6px -3px; }
+  a, button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+}
+
+@media (max-width: 640px) {
+  /* 宽度还给内容：左右各 10px 足够呼吸，不再按桌面的 48+48 扣 */
+  .wrap { width: 100%; padding: 0 10px; }
+  main { padding-top: 12px; }
+  .topbar { padding: 16px 0 14px; }
+  .topbar h1 { font-size: 19px; }
+  .searchbar { position: static; padding: 10px; margin-bottom: 12px; border-radius: var(--r-m); }
+  .field { flex-wrap: wrap; }
+  .field input { flex: 1 1 auto; min-width: 0; }
+  .field .go { flex: 1 1 100%; padding: 11px; }
+  .examples { gap: 7px 6px; }
+
+  /* 标签：一行放不下就横着滑，不要各自换成三行。
+     min-width:0 是必需的 —— .tabs 是 flex 项，默认 min-width:auto 会被四个不换行的标签
+     撑到 min-content，结果不是内部横滚而是把整个文档顶宽（量到 document.scrollWidth 377 > 360），
+     手机上页面就能横向拖动，一看就是"没适配"。 */
+  .tabs { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+          min-width: 0; max-width: 100%; flex: 1 1 auto; }
+  .statline > * { min-width: 0; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; white-space: nowrap; }
+  .statline { flex-direction: column; align-items: flex-start; gap: 8px 12px; margin-bottom: 12px; }
+  .meta { font-size: 13.5px; }
+
+  .card { padding: 12px; gap: 12px; }
+  .cover { flex-basis: 84px; width: 84px; }
+  .row { font-size: 13.5px; }
+  .row .nm { max-width: none; }
+  .row .tg { flex-basis: 100%; order: 5; }
+  .grouptitle { gap: 6px; }
+  .grouptitle .rule { min-width: 8px; }
+}
+
+@media (max-width: 400px) {
+  .tab { padding: 8px 10px; font-size: 13.5px; }
+  .cover { flex-basis: 72px; width: 72px; }
+  .card { gap: 10px; }
+  .dbtn { padding: 5px 9px; }
+}
+
+/* 登录那一行（口令 + 进入）在 320 上只有 253px 可用：输入框要 199、按钮要 52，
+   挤进去就得靠压按钮，量到的是 42×51 的两行「进入」。手机上干脆各占一整行 ——
+   输入框吃满卡片宽度（43px 高），按钮变成一条 40px 高的整宽按钮。
+   这条只管 ≤560 的手机：平板和窄桌面窗口仍是横排（360 上卡片内宽 293，本来就放得下）。 */
+@media (max-width: 560px) {
+  .loginform { flex-wrap: wrap; }
+  .loginform .admfield { flex: 1 1 100%; }
+  .loginform .admfield input { width: 100%; box-sizing: border-box; padding: 8px 10px; }
+  .loginform .gobtn { flex: 1 1 100%; min-height: 40px; }
 }

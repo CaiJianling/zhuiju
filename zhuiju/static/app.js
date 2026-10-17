@@ -25,14 +25,16 @@
 
   /* ---------------- tabs ---------------- */
   document.querySelectorAll('.tab').forEach((t) => {
-    t.addEventListener('click', () => switchTab(t.dataset.tab));
+    t.addEventListener('click', () => switchTab(t.dataset.tab, t));
   });
-  function switchTab(tab) {
+  function switchTab(tab, t0) {
     state.tab = tab;
     document.querySelectorAll('.tab').forEach((t) =>
       t.classList.toggle('active', t.dataset.tab === tab));
     document.querySelectorAll('.panel').forEach((p) =>
       p.classList.toggle('active', p.id === 'panel-' + tab));
+    // 窄屏上标签栏是横滑的：点完把选中的那个滚进视野，不然可能停在看不见的位置
+    t0 && t0.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (tab === 'dir') ensureCatalog();
     if (tab === 'cloud') ensureCloud();
     if (tab === 'deep') ensureDeep();
@@ -530,12 +532,14 @@
       '&t=' + encodeURIComponent(s.title) + '&meta=1'
     : '/api/detail?kw=' + encodeURIComponent(s.title) + '&meta=1');
 
-  // 唯一的入口就是这个按钮：结果卡片的按钮在 .cover 里，猜你想搜的按钮与片名链接是兄弟节点，
-  // 都不会顺带触发跳转
+  /* 入口就是海报上那颗按钮。触屏上它只有 ~28px，拇指按不准，所以顺带把整张海报
+     也当命中区（海报本身不是链接，不会像以前那样误跳转）；桌面仍只认按钮。 */
+  const coarse = () => !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
   document.addEventListener('click', (e) => {
-    const b = e.target.closest('.dbtn');
-    if (!b) return;
-    openDetail(specOf(b));
+    const hit = e.target.closest(coarse() ? '.hcover, .cover, .dbtn' : '.dbtn');
+    const btn = hit && (hit.classList.contains('dbtn') ? hit : hit.querySelector('.dbtn'));
+    if (!btn) return;
+    openDetail(specOf(btn));
   });
 
   function headHTML(s) {

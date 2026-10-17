@@ -92,7 +92,7 @@ python -m venv .venv
 :: 离线：猜你想搜归类 / 半年窗口 / SEO 清洗与 robots、sitemap / 分页按钮可点性
 .venv\Scripts\python.exe tests\test_seo_hot.py
 
-:: 离线：海报右键"查看详情"的详情接口、按片名兜底、缓存边界与前端接线（不联网，全部用桩）
+:: 离线：海报「详情」按钮的详情接口、按片名兜底、缓存边界与前端接线（不联网，全部用桩）
 .venv\Scripts\python.exe tests\test_detail.py
 
 :: 离线：图片代理的防盗链映射与内网拦截边界
@@ -102,7 +102,7 @@ python -m venv .venv
 ::         口令登录、首次改口令、限流、注入边界、老库升级回填
 .venv\Scripts\python.exe tests\test_admin_stats.py
 
-:: 离线：浏览器识别与来源页判定、爬虫分离、主题（调色板完整性与页面接线）
+:: 离线：浏览器识别与来源页判定、爬虫分离、主题（调色板完整性与页面接线）、手机/平板适配的每条量过的值
 .venv\Scripts\python.exe tests\test_agent_theme.py
 
 :: 离线：跨平台部署路径（解释器现找、zhuiju.env 解析、refresh.sh 行尾、Linux 的 /proc 解析）
@@ -150,7 +150,6 @@ zhuiju/
     cache/hot.json  猜你想搜缓存   cache/mirror_used.json  这次上游数据实际走的哪个镜像
   templates/index.html, admin.html, admin_password.html, _theme.html
   static/app.css, app.js, theme.js
-  static/app.css, app.js
 tools/                  重新采数据的维护脚本，日常使用不需要跑
   build_catalog.py      上游 resources.json -> 本地目录（requests 走 gh-proxy 镜像链，记下实际用的源）
   harvest_apis.py       从 15 个 TVBox 配置地址里抽取候选采集接口
@@ -222,6 +221,56 @@ zhuiju.env.example  部署配置模板：拷成 zhuiju.env 就能指定站点外
 
 `/api/detail` 的入参因此是：`?src=<源>&vid=<影片 ID>`（优先）或 `?kw=<片名>`（兜底），
 两者都可再加 `&meta=1`；两个都给不上就 400，源停用则 404 并说明原因，不会偷偷去按片名查。
+
+
+## 手机 / 平板适配
+
+改法是靠量的，不是靠猜的：把首页、结果页、后台面板分别塞进 **320 / 360 / 390 / 768 / 1440**
+五档 iframe（媒体查询按 iframe 自己的视口算），量完再改，改完复量。四组数：
+
+| 量什么 | 改之前 | 改之后 |
+| --- | --- | --- |
+| 320px 屏上留给内容的净宽 | 249px（`.wrap` 是 `100% - 48px` 再左右各 24px 内边距，31% 的屏被边距吃掉） | 285px（360→325、390→355、768→657） |
+| 小于 12px 的文字 | 91 处（11 / 11.5px 的次要信息） | 0 处 |
+| 高度不足 30px 的可点元素 | 22 处（海报角上那颗「详情」只有 37×19px） | 0 处（详情按钮 44×32，片名 44，后台表格里的链接 17→31） |
+| 文档横向溢出 | 首页 377>360 能横着拖；后台 360 溢 100px、390 溢 70px | 全部 0 |
+
+具体做的几件事：
+
+- **把宽度还给内容。** ≤640px 时 `.wrap` 改成整宽只留 10px 内边距；四个标签不再各自换成 98px
+  高的砖，而是一行横滑（`.tabs` 内部 `overflow-x:auto`，滚动条藏掉）。
+- **小字号与输入框字号都走 token**（`--fs-min` / `--fs-sm` / `--fs-input`），窄屏只抬 token。
+  `--fs-input` 是为了 iOS：聚焦字号小于 16px 的输入框时 Safari 会把整页放大且缩不回去，
+  后台那些 12.5px 的筛选框必须抬到 16px。
+- **触摸目标按用途给，不是一刀切 44px。** 访客用的猜你想搜片名给到 44；后台表格里那些筛选链接
+  和结果没回来那几秒显示的那份给爬虫的列表（`.ssrlist`）都用"内边距 + 等量负外边距"撑开
+  （表格链接 17→31，列表链接 17→34）—— 实测行高一个像素没变（31/31/30/31/31，整表 122px，
+  加这条规则前后一样），只是按得准了。
+- **手机上面板改成底部抽屉**（≤560px）：铺满整宽、限高 `86vh`、从下面推上来、`padding-bottom`
+  带 `env(safe-area-inset-bottom)` 躲开 home indicator，打开时锁住页面滚动，关掉即解锁。
+  抽屉里照样一条播放链接都不给（实测面板内 `href^="http"` 为 0）。
+- **登录那张卡片在手机上也改成整宽**。`口令 + 进入` 原本是横排，320 上卡片内宽只剩 253px，
+  flex 把按钮压成 42×51（"进入"两个字换了行）；≤560 改成各占一整行，输入框吃满（235×43）、
+  按钮 235×40。561 以上仍是横排 —— 360 上卡片内宽 293，本来就放得下，没必要竖着。
+
+踩过的四个坑，都写进测试了（`tests/test_agent_theme.py` 第 11 节，28 条）：
+
+1. 覆盖规则必须留在**文件最后**。同优先度的规则按先后取胜，第一次把窄屏那段写在中间，
+   字号看着改了、量出来还是 11.5px。
+2. **媒体查询不加特异性**。`input { font-size:16px }` 是 (0,0,1)，压不住 `.admfield input`
+   的 (0,1,1) —— 所以真正起作用的是 token，兜底那条只是给没走 token 的控件用的。
+3. **flex / grid 项默认 `min-width:auto`**，不肯缩到比内容更窄：四个不换行的标签能把整个文档
+   顶宽（不是标签条自己横滚），后台收成单列后一长串 `python -m ...` 命令也能顶宽。
+   解法都是 `min-width: 0`，让该横滚的那层（`.tabs`、`.fold`）自己去滚。
+4. 断长 token 要用 **`overflow-wrap: anywhere`**，不是 `break-word`：只有 `anywhere` 参与
+   min-content 计算，`break-word` 写得再对也照样把列顶宽。
+
+复量的办法没留在仓库里（探针页是会被人访问到的，量完就删了）：在站点任意页的控制台里
+`document.createElement('iframe')` 设成 320/360/390/768/1440 宽指向 `/`、`/s/庆余年`、`/admin`，
+媒体查询按 iframe 自己的视口算，量 `documentElement.scrollWidth - clientWidth`、每个 `a/button/input`
+的 `getBoundingClientRect().height`、以及计算样式里小于 12px 的字号。后台面板要连着数据一起量，
+就先在服务端把 `/admin` 渲染成快照再剥掉 `<script>`（折叠高度是 JS 量的，量布局不需要它）。
+注意别把窗口缩到 900 以下来"假装手机"——那连的是窄桌面，`hover: none` 那些行为不一样。
 
 
 ## 数据自动更新（访问时触发）

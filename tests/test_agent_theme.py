@@ -427,5 +427,91 @@ check("翻页不再把页面滚到明细顶部：整套 scrollIntoView 定位都
 check("窗口变窄重算（折行变了会露半行），且做防抖",
       "resize" in js and "clearTimeout(foldT)" in js and "setTimeout(refold, 200)" in js)
 
+print("\n11) 手机 / 平板：宽度还给内容、触摸目标、小字号 token")
+# 这一节的每条断言都对应一次实测到的问题（360px 上净宽只剩 249px、标签被挤成 98px 高、
+# 91 处文字小于 12px、22 个控件够不上拇指），别再退回去
+idx_narrow = css.index("/* ---------------- 手机 / 平板")
+tail = css[idx_narrow:]
+check("窄屏覆盖排在文件最后（同优先度靠后者胜，写在中间等于没写）",
+      idx_narrow > max(css.index(".themebtn {"), css.index(".dbtn {"),
+                      css.index(".pbtn, .pager a"), css.index(".csite .ct")),
+      idx_narrow)
+check("小字号都走 token，文件里不留硬编码的 11 / 11.5px",
+      not re.search(r"font-size:\s*11(\.5)?px", css) and "--fs-min: 11px" in css
+      and "--fs-sm: 11.5px" in css, re.findall(r"font-size: 11[^;]*", css)[:3])
+check("窄屏把两个 token 抬到 12.5px", "--fs-min: 12.5px" in tail and "--fs-sm: 12.5px" in tail)
+check("桌面那份 .wrap 仍是 100% - 48px（窄屏是覆盖，不是改写）",
+      "100% - 48px" in css[:idx_narrow])
+check("窄屏 .wrap 整宽 + 只留 10px 内边距", "width: 100%; padding: 0 10px" in tail.replace("\n          ", " ")
+      or ("width: 100%" in tail and "padding: 0 10px" in tail), re.findall(r"\.wrap \{[^}]*\}", tail))
+check("标签条窄屏横滑，并且带 min-width:0",
+      "overflow-x: auto" in tail and "min-width: 0" in tail, re.findall(r"\.tabs \{[^}]*\}", tail))
+check("（这条是当初的坑）只写 overflow-x:auto 不够：flex 项默认 min-width:auto，"
+      "四个不换行的标签会把文档顶宽，所以 max-width:100% 也得在",
+      "max-width: 100%" in tail)
+check("详情按钮在触屏上够按（32px 高、40px 宽起）",
+      re.search(r"\.dbtn \{[^}]*min-height: 32px", tail) is not None
+      and re.search(r"\.dbtn \{[^}]*min-width: 40px", tail) is not None,
+      re.findall(r"\.dbtn \{[^}]*\}", tail))
+check("片名是海报上唯一的进页面入口，给到 44px", ".hotlink { min-height: 44px; }" in tail)
+check("剧集链接成块，不再是 19px 的行内链接",
+      re.search(r"\.eps a \{[^}]*min-height: 34px", tail) is not None)
+check("关掉点击灰底与双击缩放延迟", "-webkit-tap-highlight-color: transparent" in tail
+      and "touch-action: manipulation" in tail)
+# 输入框字号也必须走 token：媒体查询不加特异性，`.admfield input`（0,1,1）压着
+# `input`（0,0,1），第一次只写了兜底那条，量出来后台口令框还是 12.5px —— iOS 一聚焦就放大整页
+check("输入控件字号走 --fs-input，桌面 12.5px / 窄屏 16px",
+      "--fs-input: 12.5px" in css[:idx_narrow] and "--fs-input: 16px" in tail,
+      re.findall(r"--fs-input[^;]*", css))
+check("后台筛选框与翻页跳转框都吃这个 token",
+      re.search(r"\.admfield input, \.admfield select \{[^}]*var\(--fs-input\)", css) is not None
+      and re.search(r"\.jumpin \{[^}]*var\(--fs-input\)", css) is not None,
+      re.findall(r"\.admfield input[^{]*\{[^}]*\}", css)[:1] + re.findall(r"\.jumpin \{[^}]*\}", css)[:1])
+check("文件里不再有硬编码的 12.5px 输入框字号",
+      not re.search(r"\.(admfield input|jumpin)[^}]*?font-size: 12\.5px", css, re.S))
+# .cols 收成单列后，网格项默认 min-width:auto 会顶在长命令上不肯缩，撑宽的是整个文档
+check("窄屏网格项允许缩到 0（否则一长串命令就把页面顶得能横着拖）",
+      ".cols > * { min-width: 0; }" in tail and ".asect { min-width: 0; }" in tail,
+      re.findall(r"\.(cols > \*|asect) \{[^}]*\}", tail))
+check("长命令用 overflow-wrap:anywhere 断行（break-word 不参与 min-content，等于没断）",
+      re.search(r"\.atip[^{]*code[^{]*\{[^}]*overflow-wrap: anywhere", tail) is not None
+      or "overflow-wrap: anywhere" in tail, re.findall(r"[^}]*overflow-wrap: anywhere[^}]*\}", tail))
+check("表格与翻页链接的可点区域用「内边距 + 等量负外边距」撑高，不改变行高",
+      re.search(r"\.table a, \.pager a \{ padding: (\d+)px 3px; margin: -\1px -3px; \}", tail) is not None,
+      re.findall(r"\.table a[^;]*;[^;]*;", tail))
+check("提交按钮的文字不许折行（320 上「进入」被 flex 压成 42×51 的两行）",
+      re.search(r"\.gobtn[^{]*\{[^}]*white-space: nowrap", tail) is not None,
+      re.findall(r"\.gobtn[^}]*\}", tail))
+# 手机（≤560）登录改成各占一整行；平板与窄桌面窗口（561+）仍是横排 —— 360 上卡片内宽 293 本来就放得下
+lg = re.search(r"@media \(max-width: 560px\) \{(.*?)\n\}", css[idx_narrow:], re.S)
+check("≤560 登录各占一整行（输入框吃满、按钮 40px 高）",
+      lg is not None and ".loginform { flex-wrap: wrap; }" in lg.group(1)
+      and re.search(r"\.loginform \.gobtn \{ flex: 1 1 100%; min-height: 40px", lg.group(1)) is not None
+      and re.search(r"\.loginform \.admfield input \{ width: 100%[^}]*box-sizing: border-box", lg.group(1)) is not None,
+      lg.group(1) if lg else None)
+check("登录整宽只写在 ≤560 这一段（561 以上卡片内宽够横排，不该竖着）",
+      css.count(".loginform { flex-wrap: wrap; }") == 1
+      and lg is not None and ".loginform { flex-wrap: wrap; }" in lg.group(1),
+      css.count(".loginform { flex-wrap: wrap; }"))
+check("它排在 .pwrow 那条之后、且在文件末尾（覆盖必须靠后）",
+      lg is not None and css.index("@media (max-width: 560px) {\n  .loginform") > css.index(".pwrow { flex-wrap: wrap; }"))
+check("结果没回来之前那份给爬虫的 SSR 列表也按得准（行内链接撑到 34px）",
+      re.search(r"\.ssrlist a \{ display: inline-block; padding: (\d+)px 3px; margin: -\1px -3px; \}", tail) is not None,
+      re.findall(r"\.ssrlist a[^}]*\}", tail))
+sheet = re.search(r"@media \(max-width: 560px\) \{(.*?)\n\}", css, re.S).group(1)
+check("手机上面板是底部抽屉（贴左右下 + 限高 + 从下面推上来）",
+      "bottom: 0" in sheet and "left: 0" in sheet and "right: 0" in sheet
+      and "translateY(" in sheet and "86vh" in sheet, sheet)
+check("抽屉躲开 iPhone  home indicator", "env(safe-area-inset-bottom)" in css)
+idxh = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
+check("viewport 带 viewport-fit=cover（不然 env() 恒为 0）", "viewport-fit=cover" in idxh)
+ajs = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+check("触屏上整张海报都是命中区，桌面仍只认那颗按钮",
+      "(hover: none)" in ajs and ".hcover, .cover, .dbtn" in ajs,
+      re.findall(r".*hover: none.*", ajs))
+check("点过的标签会被带进视野（横滑时不会点到看不见的标签）",
+      "scrollIntoView({ block: 'nearest', inline: 'nearest' })" in ajs)
+check("没有任何地方劫持右键", "contextmenu" not in ajs and "contextmenu" not in idxh)
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

@@ -218,7 +218,10 @@ check("多源时把 (id, vid) 列表放进 data-srcs，供面板换源",
 check("旧缓存没有 src/vid 时模板不报错（default('', true)）",
       "x.src | default('', true)" in html and "x.vid | default('', true)" in html)
 check("点击走的是按钮代理，不是整张海报",
-      "closest('.dbtn')" in js and "openDetail(specOf(b))" in js)
+      "openDetail(specOf(btn))" in js
+      and re.search(r"closest\(coarse\(\) \? '\.hcover, \.cover, \.dbtn' : '\.dbtn'\)", js) is not None
+      and "hit.classList.contains('dbtn') ? hit : hit.querySelector('.dbtn')" in js,
+      re.findall(r"closest\(.*?\);", js))
 lazy = js[js.index("function openDetail"):js.index("function closeDetail")]
 check("详情请求只在 openDetail 一处发起", js.count("getJSON(detailURL(s))") == 1)
 check("请求一律带 meta=1（两条来路都带上）",
