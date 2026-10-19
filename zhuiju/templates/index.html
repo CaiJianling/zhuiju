@@ -158,7 +158,9 @@
                       data-title="{{ x.title }}" data-pic="{{ x.pic }}"
                       data-year="{{ x.year }}" data-type="{{ x.type }}"
                       data-remarks="{{ x.remarks }}" data-src="{{ x.src | default('', true) }}"
-                      data-vid="{{ x.vid | default('', true) }}" data-n="{{ x.n_sources }}">详情</button>
+                      data-vid="{{ x.vid | default('', true) }}" data-n="{{ x.n_sources }}"
+                      {# tojson 出来的 JSON 里满是双引号，属性必须用单引号包（' 本身被转义成 \u0027，不会顶穿） #}
+                      data-srcs='{{ x.sources | default([], true) | tojson }}'>详情</button>
             </span>
             <a class="hotlink" href="{{ x.url }}" data-title="{{ x.title }}">
               <b>{{ x.title }}</b>
@@ -184,7 +186,8 @@
       <ol>
         <li>在上面输入剧名或片名，回车即可。结果来自 <b id="srcn">{{ sources|length }}</b> 个已实测可用的公开采集接口。</li>
         <li>同一部片会合并多个来源，点来源名可展开该源的播放线路。</li>
-        <li>海报右下角的<b>「详情」</b>按钮看这部剧的信息（简介、主演、各源情况）；要看播放线路仍然得点片名进页面，或在卡片里点来源名展开。</li>
+        <li>海报右下角的<b>「详情」</b>按钮看这部剧的信息（简介、主演、各源情况）和<b>观看地址</b>：
+          一行一条线路，点一下才铺开这个源的分集，跳过去就是第三方的播放页。</li>
         <li>「网盘 · 磁力直达」把片名直接带到资源站搜索页；「资源站目录」按名称、标签、分类筛选 {{ categories|length }} 类收录站点。</li>
       </ol>
       <p class="note">目录与检索源在你访问本站时自动检查并后台补跑（页头会标明今天是否更新过，详见"数据自动更新"一节）；接口为第三方公开源，随时可能失效，可用 <code>/api/health</code> 自检。</p>

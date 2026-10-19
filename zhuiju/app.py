@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import re
 import secrets
+import threading
 import time
 import urllib.parse
 from datetime import date, timedelta
@@ -36,7 +38,17 @@ from .sources import load_sources
 
 MIN_KW = 2        # 单字符关键词会引发一轮无意义的并发抓取，直接拒掉
 MAX_KW = 60
+# 观看点击是个公开接口，不设上限就等于邀请人拿脚本把统计库灌满。
+# 一分钟内同一个 IP 超过这么多条就丢掉（仍然回 204，别让前端以为失败而重试）。
+CLICK_WINDOW = 60
+CLICK_MAX = 120
+# ip -> (这一窗口的起始时刻, 已记条数)。开发服务器是多线程的，读写要上锁。
+_click_rate: dict = {}
+_click_lock = threading.Lock()
 VIA_CN = {"api": "搜索", "seo": "落地页", "cloud": "网盘"}
+CLICK_PLACE_CN = {"panel": "海报详情", "card": "卡片线路", "hot": "猜你想搜"}
+CLICK_KIND_CN = {"play": "观看地址", "detail": "详情"}
+DEFAULT_WINDOW = int(os.environ.get("ZHUIJU_ADMIN_DAYS", "7"))   # 后台不选日期时看最近几天
 REF_KIND_CN = {"site": "站内上一页", "search": "搜索引擎", "out": "外部站点",
                "direct": "直接访问/无来源", "other": "无法解析"}
 
@@ -197,6 +209,9 @@ def create_app() -> Flask:
     app.permanent_session_lifetime = timedelta(seconds=admin_mod.SESSION_TTL)
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    # 本站的 POST 只有后台表单和观看埋点，都是几百字节。给个上限：/api/click 是公开接口，
+    # 不设上限就等于让人拿任意大的正文来把进程撑住（超了直接 413，不进解析）
+    app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
     try:
         stats_mod.ensure_schema()
     except Exception:  # noqa: BLE001 - 统计库不可写也不该挡住站点启动
@@ -401,20 +416,20 @@ def create_app() -> Flask:
 
     @app.get("/api/detail")
     def api_detail():
-        """取一部片的详情。
+        """取一部片的详情：影片信息 + 播放线路。
 
         优先按 (来源, 影片 ID) 查 —— 搜索结果里每个来源都带着 ID，一次请求就够。
         没有 ID 时（猜你想搜那些海报）才按片名查：那条路要并发打一遍所有检索源，
         所以只在用户真的点开详情时才走，页面渲染时一律不预取。
 
-        `meta=1` 只要影片信息、**不把播放线路发给前端**：海报上的「详情」按钮走这一档，
-        要看线路仍然得点进卡片里的来源名（那条路不带 meta）。上游 ac=detail 本来就把
-        线路字段一起返回，这里是本站剥掉，不发就不进 DOM、不进缓存。
+        线路在这里一并返回（上游 ac=detail 本来就一起给）。以前海报详情面板走的是
+        `meta=1` 剥掉 lines，那是"点详情不给链接"那一版的产物；现在面板也要给观看地址
+        （折叠起来，点开某条线路才铺集数），这个参数就没有调用方了，删掉比留着
+        一段没人走的分支好。
         """
         src_id = (request.args.get("src") or "").strip()[:32]
         vid = (request.args.get("vid") or "").strip()[:32]
         title = (request.args.get("t") or request.args.get("kw") or "").strip()[:60]
-        meta_only = (request.args.get("meta") or "").strip() in ("1", "true", "yes")
         src = source_by_id(src_id) if src_id else None
         if src is not None and vid:
             if not src.enabled:
@@ -425,9 +440,47 @@ def create_app() -> Flask:
             out = detail_by_title(title)
         else:
             return jsonify({"ok": False, "error": "既没有来源与影片 ID，也没给出片名"}), 400
-        if meta_only:
-            out = {k: v for k, v in out.items() if k != "lines"}
         return jsonify(out)
+
+    @app.post("/api/click")
+    def api_click():
+        """记一次行为：kind=play 点开了观看地址，kind=detail 点了海报上的「详情」按钮。
+
+        播放页是第三方的，点了之后浏览器直接跳走，本站只能知道"这人从哪条线路点了第几集"。
+        详情那一列加上观看那一列，合起来是这个漏斗：搜了 → 点开详情看了 → 真去点了播放地址；
+        光看查询数分不出这三步。
+
+        公开接口，所以几件事必须做：play 只收 http(s)（值由客户端写，进库后还要当链接用，
+        `javascript:` 混进来就是自己留 XSS；detail 本来就没有地址）、字段全部截断、按 IP 限流。
+        校验不过就安静丢掉并回 204：这是埋点，回 4xx 只会让前端以为没发出去而重试。
+        """
+        raw = request.get_data(cache=True, as_text=True) or ""
+        try:
+            p = json.loads(raw) if raw else {}
+        except ValueError:
+            p = request.get_json(silent=True) or {}
+        if not isinstance(p, dict):
+            p = {}
+        ip = admin_mod.client_ip(request.environ)
+        now = time.time()
+        with _click_lock:
+            start, cnt = _click_rate.get(ip) or (now, 0)
+            if now - start > CLICK_WINDOW:
+                start, cnt = now, 0
+            if len(_click_rate) > 4096:          # 别让这张表本身变成内存漏洞
+                _click_rate.clear()
+                start, cnt = now, 0
+            if cnt >= CLICK_MAX:
+                return "", 204
+            _click_rate[ip] = (start, cnt + 1)
+        stats_mod.record_click(
+            ip, kind=str(p.get("kind") or "play"), url=str(p.get("url") or ""),
+            kw=str(p.get("kw") or ""), title=str(p.get("title") or ""),
+            src=str(p.get("src") or ""), src_name=str(p.get("src_name") or ""),
+            vid=str(p.get("vid") or ""), line=str(p.get("line") or ""),
+            ep=str(p.get("ep") or ""), place=str(p.get("place") or "card"),
+            ua=request.headers.get("User-Agent", ""))
+        return "", 204
 
     @app.get("/api/health")
     def api_health():
@@ -452,13 +505,37 @@ def create_app() -> Flask:
             return redirect(url_for("admin_password", first=1))
         flt = {k: (request.args.get(k) or "").strip()[:80]
                for k in ("ip", "kw", "via", "geo", "browser", "os", "device", "ref_kind",
-                         "day_from", "day_to")}
+                         "day_from", "day_to", "title", "host", "place", "kind")}
         if flt["via"] not in stats_mod.VIA:
             flt["via"] = ""
+        if flt["place"] not in stats_mod.CLICK_PLACES:
+            flt["place"] = ""
+        if flt["kind"] not in stats_mod.CLICK_KINDS:
+            flt["kind"] = ""
+        # 什么都不选时默认最近一周（含今天）：用得越久这页越长，而"今天有没有人用"
+        # 恰恰是最想知道的。?day=all 是显式要看全部的出口，日期框里回填的就是这个区间。
+        day_all = (request.args.get("day") or "") == "all"
+        if day_all:
+            flt["day_from"] = flt["day_to"] = ""
+        elif not flt["day_from"] and not flt["day_to"]:
+            flt["day_to"] = date.today().isoformat()
+            flt["day_from"] = (date.today() - timedelta(days=DEFAULT_WINDOW - 1)).isoformat()
         per = request.args.get("per", 50, type=int) or 50
         page = request.args.get("page", 1, type=int) or 1
         rows = stats_mod.list_queries(flt, page=page, per=per)
         agg = stats_mod.summary(flt)
+        # 观看点击：面板单独一张表，翻页用 cpage，免得和明细的 page 抢同一个参数
+        cper = request.args.get("cper", 30, type=int) or 30
+        cpage = request.args.get("cpage", 1, type=int) or 1
+        clicks = stats_mod.list_clicks(flt, page=cpage, per=cper)
+        cagg = stats_mod.click_stats(flt)
+        # 明细里那一列"点了几次详情 / 几条观看"按 (ip, 关键词) 查表：一行一次 SQL 会把这页
+        # 打成几十次查询，一次 GROUP BY 全拿再在模板里查
+        ck = stats_mod.click_counts(flt)
+        for r in rows["items"]:
+            c = ck.get((r["ip"], r["kw"]), {})
+            r["clicks_detail"] = c.get("detail", 0)
+            r["clicks_play"] = c.get("play", 0)
         geo_info = geoip.available()
         markers = _markers(agg["by_geo"]) if geo_info["points"] else []
         base = geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}, "error": "没有底图文件"}
@@ -466,11 +543,24 @@ def create_app() -> Flask:
         # 翻页链接要把当前筛选条件一起带上，否则点了下一页筛选就丢了
         keep = {k: v for k, v in flt.items() if v}
         keep["per"] = rows["per"]
+        keepc = {k: v for k, v in flt.items() if v}
+        keepc["cper"] = clicks["per"]
+        if day_all:
+            # 日期被默认值顶掉了，不把这个标记带上，点一次"下一页"就悄悄回到最近一周
+            keep["day"] = "all"
+            keepc["day"] = "all"
+        # 「看全部历史」那个链接要留住除日期以外的筛选，否则一去看全部，筛的东西全丢了
+        keep_args = {k: v for k, v in flt.items()
+                     if v and k not in ("day_from", "day_to", "per", "page")}
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
+            place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN,
+            day_all=day_all, day_window=DEFAULT_WINDOW,
+            keep_days=stats_mod.KEEP_DAYS, keep_args=keep_args,
             flt={**flt, "per": rows["per"]},
             agg=agg, rows=rows, temp=False,
+            clicks=clicks, cagg=cagg,
             geo=geo_info, map_paths=base["d"], map_active="".join(
                 base["by_iso"][i] for i in sorted(drawn)),
             geo_warn=stats_mod.MIGRATE_ERROR,
@@ -480,7 +570,9 @@ def create_app() -> Flask:
             notice="口令已更新，下次登录请用新口令" if request.args.get("set") else None,
             pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
             args_next={**keep, "page": rows["page"] + 1},
-            args_prev={**keep, "page": rows["page"] - 1})
+            args_prev={**keep, "page": rows["page"] - 1},
+            args_cnext={**keepc, "cpage": clicks["page"] + 1},
+            args_cprev={**keepc, "cpage": clicks["page"] - 1})
 
     @app.route("/admin/password", methods=("GET", "POST"))
     def admin_password():

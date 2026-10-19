@@ -374,19 +374,24 @@ check("表头写的是国家 / 地区而不是含糊的归属地",
 check("明细那一列仍然是带省市的完整归属地", "浙江省杭州市" in
       stats_mod.list_queries({"geo": "CN"})["items"][0]["geo"])
 
-print("\n10) 面板内联滚动：五行的五行，明细十行")
+print("\n10) 面板内联滚动：五行的五行，明细和观看点击十行")
 ah = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
 # 认身份靠各表自己的第一个表头，不靠 <h2>：明细和归属地那两块的 h2 里带 <span>，
 # 用 h2 配对着正则会直接漏掉这两块
 folded = [(m.group(1), re.search(r"<th>([^<]+)</th>", m.group(2)).group(1))
           for m in re.finditer(r'<div class="fold" data-fold data-rows="(\d+)">\s*<table[^>]*>'
                                r'\s*<thead><tr>(.*?)</tr>', ah, re.S)]
-check("六块表都包了滚动容器（关键词/IP/浏览器/来源/明细/归属地）", len(folded) == 6, folded)
+check("七块表都包了滚动容器（关键词/IP/浏览器/来源/明细/观看点击/归属地）",
+      len(folded) == 7, folded)
 check("每块包的都是预期那张表",
-      [t for _, t in folded] == ["关键词", "IP", "浏览器", "来源", "时间", "国家 / 地区"],
+      [t for _, t in folded] == ["关键词", "IP", "浏览器", "来源", "时间", "时间", "国家 / 地区"],
       [t for _, t in folded])
-check("前四块与归属地列表都是 5 行，明细 10 行",
-      [n for n, _ in folded] == ["5", "5", "5", "5", "10", "5"], [n for n, _ in folded])
+check("前四块与归属地列表都是 5 行，明细与观看点击 10 行",
+      [n for n, _ in folded] == ["5", "5", "5", "5", "10", "10", "5"], [n for n, _ in folded])
+# 观看点击那张表列多，窄屏上让固定的几列各占两三行会把一行撑到 150px 高
+check("时间/线路/集/来源这几列不折行，行高交给表格自己横滚",
+      ".table .nw { white-space: nowrap; }" in css and ah.count('class="dim nw"') >= 2
+      and 'class="nw"' in ah, ah.count("nw"))
 # 说明文字必须在容器外：不然注意事项也跟着一起滚，第一眼看不到
 fold_spans = [(m.start(), ah.index("</table>", m.start())) for m in
               re.finditer(r'<div class="fold" data-fold', ah)]
@@ -480,8 +485,9 @@ check("窄屏网格项允许缩到 0（否则一长串命令就把页面顶得�
 check("长命令用 overflow-wrap:anywhere 断行（break-word 不参与 min-content，等于没断）",
       re.search(r"\.atip[^{]*code[^{]*\{[^}]*overflow-wrap: anywhere", tail) is not None
       or "overflow-wrap: anywhere" in tail, re.findall(r"[^}]*overflow-wrap: anywhere[^}]*\}", tail))
-check("表格与翻页链接的可点区域用「内边距 + 等量负外边距」撑高，不改变行高",
-      re.search(r"\.table a, \.pager a \{ padding: (\d+)px 3px; margin: -\1px -3px; \}", tail) is not None,
+check("表格、翻页与说明文字里的链接都用「内边距 + 等量负外边距」撑高，不改变行高",
+      re.search(r"\.table a, \.pager a, \.atip a \{ padding: (\d+)px 3px; margin: -\1px -3px; \}",
+                tail) is not None,
       re.findall(r"\.table a[^;]*;[^;]*;", tail))
 check("提交按钮的文字不许折行（320 上「进入」被 flex 压成 42×51 的两行）",
       re.search(r"\.gobtn[^{]*\{[^}]*white-space: nowrap", tail) is not None,

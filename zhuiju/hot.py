@@ -78,15 +78,20 @@ def _recent(item: dict, since: date) -> bool:
 
 
 def _mk(title: str, item: dict, src_id: str) -> dict:
+    # 条目自己带的 source 才是真的采集源 id（豆瓣候选回查那条路传进来的 src_id 是占位词 "douban"）
+    sid = str(item.get("source") or src_id or "")
+    vid = str(item.get("vid") or "")
     return {
         "title": title, "kind": kind_of(item.get("type", "")),
         "year": str(item.get("year") or ""), "type": item.get("type", ""),
         "remarks": item.get("remarks", ""), "pic": item.get("pic", ""),
         "updated": str(item.get("updated") or ""), "sources": {src_id},
         # 记下"哪个源的哪个 ID"：列表模式不给海报时用它补图，
-        # 右键看详情时也用它直接 ac=detail，省掉一次全源并发检索。
-        # 豆瓣回查那条路传进来的 src_id 是占位词 "douban"，所以优先取条目自己的 source。
-        "probe": (item.get("source") or src_id, item.get("vid")),
+        # 点开详情时用它直接 ac=detail，省掉一次全源并发检索。
+        "probe": (sid, vid),
+        # 每个源各自的影片 ID 都要留着：面板上「换源看」的每一颗按钮就是这里的一项。
+        # 只留 probe 那一对的话，猜你想搜那些片就没有源可换。
+        "vids": ({sid: vid} if vid else {}),
     }
 
 
@@ -139,6 +144,10 @@ def feed_pool(sources: list[Source], since: date) -> dict:
                 if b is None:
                     b = buckets[key] = _mk(title, it, s.id)
                 b["sources"].add(s.id)
+                # 同名片在别的源也有各自的 ID，一并留着给面板上的「换源看」
+                sid = str(it.get("source") or s.id)
+                if it.get("vid"):
+                    b["vids"].setdefault(sid, str(it["vid"]))
                 if str(it.get("updated") or "") > b["updated"]:
                     b["updated"] = str(it.get("updated") or "")
                 if not b["kind"]:
@@ -198,27 +207,45 @@ def verify_pool(cands: list[dict], sources: list[Source], since: date) -> dict:
         for title, hits in ex.map(one, [c["title"] for c in cands]):
             key = title_key(title)
             best = None
+            vids: dict[str, str] = {}
             for it in hits:
                 if title_key(it.get("title", "")) != key:
                     continue          # 只认同名，不接受模糊带出来的别的片
                 if not _recent(it, since):
                     continue
+                if it.get("vid"):
+                    # 探了好几个源，把每个源给的那对 ID 都留下：换源看不只要有得换，
+                    # 还得知道"换成哪个源的哪个 ID"
+                    vids[str(it.get("source") or "")] = str(it["vid"])
                 if best is None or (it.get("pic") and not best.get("pic")):
                     best = it
             if best:
-                found[key] = _mk(title, best, "douban")
+                b = _mk(title, best, "douban")
+                for sid, vid in vids.items():
+                    if sid:
+                        b["vids"].setdefault(sid, vid)
+                found[key] = b
     return found
 
 
-def pack_row(b: dict, d: dict) -> dict:
+def pack_row(b: dict, d: dict, names: dict | None = None) -> dict:
     """一个候选条目 -> 页面/缓存里的那一行。
 
     单独拆出来是为了能被测试直接调用（以前它是 build() 里的闭包，
     想验一行里少了哪些字段就得真跑一遍 build，那要几分钟网络）。
     """
-    # 豆瓣封面优先：CMS 的图常挂在非标端口/自签证书上（浏览器会静默加载失败）
+    # 豆瓣封面优先：CMS 的图挂在非标端口/自签证书上的比例高得多（浏览器会静默加载失败）
     pic = d.get("cover") or b["pic"]
     src, vid = b.get("probe") or ("", None)
+    names = names or {}
+    # 「换源看」的每一颗按钮就是这些 (源, 该源里的影片 ID)：probe 那个排在最前，
+    # 面板打开时选中的就是它
+    srcs = []
+    if src and vid:
+        srcs.append({"id": str(src), "name": names.get(str(src), str(src)), "vid": str(vid)})
+    for sid, svid in (b.get("vids") or {}).items():
+        if svid and not any(sid == x["id"] for x in srcs):
+            srcs.append({"id": sid, "name": names.get(sid, sid), "vid": str(svid)})
     return {
         "title": b["title"],
         "kind": b["kind"] or ("movie" if d.get("douban_type") == "movie" else "tv"),
@@ -226,9 +253,9 @@ def pack_row(b: dict, d: dict) -> dict:
         "pic": pic, "rate": d.get("rate", ""),
         "douban": bool(d), "updated": b["updated"], "n_sources": len(b["sources"]),
         "from_douban": "douban" in b["sources"],
-        # 右键看详情时用这对儿直接 ac=detail；缓存可能比源列表旧（源改名/停用），
+        # 带上这对儿就能直接 ac=detail；缓存可能比源列表旧（源改名/停用），
         # 取不到详情时前端会退回按片名查，所以这里带着空值也没关系
-        "src": str(src or ""), "vid": str(vid or ""),
+        "src": str(src or ""), "vid": str(vid or ""), "sources": srcs,
         "url": "/s/" + urllib.parse.quote(b["title"]),
     }
 
@@ -246,8 +273,11 @@ def build(limit_each: int = 60) -> dict:
     # 列表模式不给海报的，用详情补一遍（实测 36 条里有 15 条没图）
     filled = fill_pics(buckets, sources)
 
+    # 源改名或停用了，缓存里那行仍显示当时那个名字：名字在这里就定好写进缓存
+    names = {s.id: s.name for s in sources}
+
     def pack(key: str, b: dict) -> dict:
-        return pack_row(b, douban.get(key, {}))
+        return pack_row(b, douban.get(key, {}), names)
 
     def sort_key(x):
         """猜你想搜按"最新在前"排：更新时间倒序，其次年份，再按覆盖源数与豆瓣评分。"""

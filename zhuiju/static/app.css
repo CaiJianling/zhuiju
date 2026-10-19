@@ -934,6 +934,9 @@ code {
 .atip { margin: 10px 0 0; font-size: var(--fs-sm); color: var(--dim); line-height: 1.6; }
 .atip code { font-size: var(--fs-min); background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
 .table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+/* 短而固定的列（时间、线路名、集名、来源）不折行：窄屏上表格本来就在自己的
+   滚动框里横滑，让这些列各占两三行反而把一行撑到 150px 高，一屏看不到两条 */
+.table .nw { white-space: nowrap; }
 .table th {
   text-align: left;
   font-size: var(--fs-min);
@@ -1117,7 +1120,7 @@ code {
 /* ---------------- 海报上的「详情」按钮 + 详情面板 ----------------
    按钮常驻在海报右下角（不靠 hover 才发现得了），半透明压在封面上；
    面板是非模态的：开着它照样能翻页、搜别的片，Esc 或 × 关掉。
-   面板只显示影片信息，一条播放链接都不给 —— 要看线路仍然得点进去。 */
+   面板里也给观看地址，但一行一条线路、集数点了才铺（见 .lhead / .lbody）。 */
 .dbtn {
   position: absolute;
   right: 5px;
@@ -1277,15 +1280,36 @@ code {
   overflow: auto;
   scrollbar-width: thin;
 }
-.dpgoto {
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  font-size: 12px;
+/* 面板里"观看地址"那一行的标题；线路本身复用卡片那套 .lines/.line/.eps */
+.dplines-h { margin: 4px 0 8px; font-size: 13px; font-weight: 600; color: var(--ink); }
+/* 线路折叠头：一行一条线路，点一下才把那一行的集数插进 DOM。
+   一部 120 集的剧一次铺出来会是一百多个 <a>，面板被撑成长条，而绝大多数没人点。 */
+.lhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-sm);
   color: var(--ink-2);
   background: var(--surface-2);
-  border: 1px dashed var(--line);
-  border-radius: var(--r-m);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  text-align: left;
 }
+.lhead:hover { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
+/* 线路名可能很长（"〔高清〕xx资源"），省略号收在中间那一段，右侧的展开/收起不能被挤走 */
+.lhead span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lhead i {
+  margin-left: auto;
+  font-style: normal;
+  font-size: var(--fs-min);
+  color: var(--dim);
+  white-space: nowrap;
+}
+.line.open .lhead { border-color: var(--brand); color: var(--brand-ink); }
 .dpfoot { margin: 10px 0 0; font-size: var(--fs-sm); color: var(--dim); }
 .dpfoot a { color: var(--brand-ink); }
 @media (max-width: 560px) {
@@ -1337,6 +1361,7 @@ code {
   .chip { padding: 6px 13px; }
   .tab { padding: 8px 13px; font-size: 14px; }
   .pbtn, .submit, .jumpbtn, .gobtn, .fbtn, .srcbtn, .reset, .themebtn, .homebtn,
+  .lhead,
   .pager button, #prev, #next { min-height: 36px; }
   .srcbtn { padding: 7px 12px; }
   .dbtn { min-height: 32px; min-width: 40px; padding: 6px 12px; opacity: 1; }
@@ -1359,7 +1384,9 @@ code {
   .atip, .atip code { overflow-wrap: anywhere; }
   /* 表格里那些筛选/翻页链接命中的只有 17px 高的文字盒，拇指按不准。
      加内边距再配等量负外边距：可点区域撑到 ~29px，视觉位置和行高一点不动。 */
-  .table a, .pager a { padding: 7px 3px; margin: -7px -3px; }
+  .table a, .pager a, .atip a { padding: 7px 3px; margin: -7px -3px; }
+  /* 统计格里的数字现在能点（观看点击跳到下面那块），行内链接的命中区得跟着补一点 */
+  .stat b a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 6px; }
   .pager a { display: inline-flex; align-items: center; }
   /* 「进入」「保存」这类提交按钮被 flex 压窄时会把两个字换成两行（320 上量到 42×51）。
      按钮文字不许折行；它旁边那一行（改口令的 保存 + 返回链接）允许折行，
@@ -1398,6 +1425,10 @@ code {
   .meta { font-size: 13.5px; }
 
   .card { padding: 12px; gap: 12px; }
+  /* 表格在滚动框里还被 width:100% 挤着：中文能按字折行，八列的观看点击表在 320 上
+     一行能撑到 151px 高，字全竖着排，读不动。让它取自然宽度、至少铺满容器 ——
+     横向滚动是看得见的（框自己滚），字竖着排是读不下去的。 */
+  .fold table { width: max-content; min-width: 100%; }
   .cover { flex-basis: 84px; width: 84px; }
   .row { font-size: 13.5px; }
   .row .nm { max-width: none; }

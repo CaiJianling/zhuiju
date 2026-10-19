@@ -4,10 +4,10 @@
     python tests/test_detail.py
 
 覆盖三层：
-  1. 详情数据的来源 —— ac=detail 解析出的字段、按片名兜底那条路、缓存与失败重试、
-     meta=1 必须把播放线路剥干净；
+  1. 详情数据的来源 —— ac=detail 解析出的字段、按片名兜底那条路、缓存与失败重试；
   2. /api/detail 的入参边界 —— 有 ID 走 ID，没 ID 走片名，两个都没有就 400；
-  3. 前端接线 —— 按钮在不在海报角上、右键有没有被劫持、详情请求是不是只在点击之后才发。
+  3. 前端接线 —— 按钮在不在海报角上、右键有没有被劫持、详情请求是不是只在点击之后才发、
+     观看地址在面板里怎么折叠、点了之后往 /api/click 报什么。
 """
 import re
 import sys
@@ -133,7 +133,7 @@ finally:
     search_mod.search, search_mod.detail, search_mod.load_sources = real
     search_mod._detail_cache.clear()
 
-print("\n4) /api/detail 的入参边界，以及 meta=1 把线路剥掉")
+print("\n4) /api/detail 的入参边界：详情连着播放线路一起给")
 import zhuiju.app as app_mod  # noqa: E402
 
 seen = []
@@ -165,13 +165,17 @@ try:
     j = c.get("/api/detail?src=s1&vid=1234&t=庆余年").get_json()
     check("有 ID 时按 ID 走", j["ok"] is True and "lines" in j, j)
     check("ID 原样转给该源的 ac=detail", seen[-1][:3] == ("id", "s1", "1234"), seen[-1])
+    # 上一版这里用 meta=1 把 lines 剥掉（"点详情不给链接"），现在面板要展示观看地址，
+    # 这个参数已经删掉了。留着断言是为了钉住"没有一条静默的半旧分支"：
+    # 带不带 meta 都该给完整详情，前端也就不会因为哪个入口忘了带参数而少东西。
     j = c.get("/api/detail?src=s1&vid=1234&t=庆余年&meta=1").get_json()
-    check("meta=1 时不返回 lines（前端也就无从渲染播放链接）",
-          "lines" not in j and j.get("blurb"), j)
-    check("meta=1 只是剥字段，没改缓存里的内容（线路仍在服务端）",
-          "lines" in app_mod.fetch_detail(SRC, 1234, "庆余年"), app_mod.fetch_detail(SRC, 1234))
-    j = c.get("/api/detail?kw=庆余年&meta=1").get_json()
-    check("按片名那条路同样尊重 meta=1", "lines" not in j, j)
+    check("meta=1 这个参数已经不存在：带它也是完整详情（不是被静默忽略的半旧行为）",
+          "lines" in j and j.get("blurb"), j)
+    check("线路确实来自该源的 ac=detail，条数与集名都在",
+          [l["from"] for l in j["lines"]] == ["l1"] and j["lines"][0]["episodes"][0]["name"] == "第1集",
+          j.get("lines"))
+    j = c.get("/api/detail?kw=庆余年").get_json()
+    check("按片名那条路也给线路（面板两条来路行为一致）", "lines" in j, j)
     check("只有片名时走兜底", seen[-1] == ("kw", "庆余年"), seen[-1])
     check("参数 t 也能当片名用", c.get("/api/detail?t=繁花").get_json()["ok"] is True)
     r = c.get("/api/detail")
@@ -215,6 +219,17 @@ check("详情数据挂在按钮自己的 data-* 上",
       'data-detail data-title="' in js and "dAttrs + '>详情</button>'" in js)
 check("多源时把 (id, vid) 列表放进 data-srcs，供面板换源",
       "data-srcs=" in js and 'esc(JSON.stringify((r.sources || [])' in js)
+# 猜你想搜那些行只有片名来自缓存，换源看的每一颗按钮都要有自己的 (源, ID)；
+# 少这一条的话面板上就永远只有一行的详情，"换源看"整排按钮不会出现
+check("猜你想搜的海报也带 data-srcs（不然面板上没有换源看）",
+      'esc(JSON.stringify((x.sources || [])' in js,
+      re.findall(r"data-srcs[^+]{0,60}", js))
+check("服务端渲染那份猜你想搜也把 sources 写进 data-srcs",
+      "data-srcs='{{ x.sources | default([], true) | tojson }}'" in html,
+      re.findall(r"data-srcs=[^>]{0,60}", html))
+check("JSON 属性用单引号包：tojson 出来的双引号会顶穿双引号属性",
+      'data-srcs="' not in html and " | tojson }}'" in html,
+      re.findall(r'data-srcs="[^"]*', html)[:2])
 check("旧缓存没有 src/vid 时模板不报错（default('', true)）",
       "x.src | default('', true)" in html and "x.vid | default('', true)" in html)
 check("点击走的是按钮代理，不是整张海报",
@@ -224,17 +239,68 @@ check("点击走的是按钮代理，不是整张海报",
       re.findall(r"closest\(.*?\);", js))
 lazy = js[js.index("function openDetail"):js.index("function closeDetail")]
 check("详情请求只在 openDetail 一处发起", js.count("getJSON(detailURL(s))") == 1)
-check("请求一律带 meta=1（两条来路都带上）",
-      js.count("&meta=1") == 2 and "meta=1" in js[js.index("const detailURL"):],
-      js[js.index("const detailURL"):js.index("const detailURL") + 330])
+check("面板的请求不带 meta（要的就是线路），两条来路都不带",
+      "&meta=1" not in js and "meta=" not in js[js.index("const detailURL"):],
+      js[js.index("const detailURL"):js.index("const detailURL") + 320])
 check("渲染卡片/列表时完全不碰详情接口",
       "detailURL" not in js[js.index("function card("):js.index("function renderPager")] and
       "detailURL" not in js[js.index("function hotCard("):js.index("function hotCols")] and
       "openDetail" not in js[js.index("function card("):js.index("function renderPager")] and
       "getJSON" not in js[js.index("function hotCard("):js.index("function hotCols")])
-check("面板里没有 linesHTML：详情面板不渲染播放链接",
-      "linesHTML" not in js[js.index("function headHTML"):js.index("function openDetail")])
-check("面板改成就给影片信息，并指一条去看线路的路", "dpgoto" in js)
+panel_js = js[js.index("function fillDetail"):js.index("function openDetail")]
+check("面板渲染观看地址（fillDetail 里调 linesHTML，并且标明是从详情面板点的）",
+      "linesHTML(d, {" in panel_js and "place: 'panel'" in panel_js,
+      re.findall(r"linesHTML\([^)]*", panel_js))
+# 折叠不是"藏起来"这么简单：120 集一次插进 DOM 会把面板撑成长条，绝大多数没人点
+check("线路默认折叠、集数点了才铺（DOM 里先只有线路名）",
+      '<div class="lbody" hidden>' in js and "body.dataset.filled" in js
+      and "body.innerHTML = epsHTML(" in js, re.findall(r"\.lbody[^;]{0,40}", js)[:3])
+check("线路数据留在内存里按 id 取，不往属性里塞整份 JSON",
+      "lineStore[id] = d.lines" in js and 'data-ls="' in js and "data-lines=" not in js,
+      re.findall(r"lineStore[^;]{0,30}", js)[:3])
+check("展开/收起用 aria-expanded，不是靠猜状态",
+      re.search(r"""setAttribute\((['"])aria-expanded\1""", js) is not None
+      and 'aria-expanded="false"' in js,
+      re.findall(r"aria-expanded[^\"']{0,20}", js)[:4])
+check("卡片线路与面板线路共用同一套折叠（委托在 document 上，两处都管得到）",
+      js.count("closest('.lhead')") == 1 and js.count("closest('.eps a[href]')") == 1)
+
+print("\n6) 观看点击的上报：报什么、怎么报、不能挡住跳转")
+up = js[js.index("function sendClick"):js.index("document.addEventListener('click', (e) => {\n    const a =")]
+check("用 sendBeacon 发，链接该跳就跳（埋点不阻塞跳转）",
+      "navigator.sendBeacon('/api/click'" in up and "application/json" in up, up[:200])
+check("没有 sendBeacon 时退到 fetch + keepalive",
+      "keepalive: true" in up and "credentials: 'same-origin'" in up)
+check("埋点整个包在 try 里：报错也不能影响人点开播放",
+      "try {" in up and "catch" in up)
+rep = js[js.index("const a = e.target.closest('.eps a[href]')"):]
+rep = rep[:rep.index("\n  });")]
+check("报的是当前这条链接与它所属线路的上下文",
+      "kind: 'play'" in rep and "url: a.href" in rep
+      and "line: (line && line.dataset.line) || ''" in rep
+      and "ep: a.dataset.ep" in rep and "place: ctx.place || 'card'" in rep,
+      re.findall(r"^\s+\w+: [^\n]+", rep, re.M)[:8])
+op = js[js.index("function openDetail"):]
+op = op[:op.index("if (!dpBack)")]
+check("点「详情」按钮本身也报一条 kind=detail",
+      "kind: 'detail'" in op and "sendClick(" in op, op[:200])
+check("详情那一笔不许有 url 字段（它本来就没有地址，后端只给 play 校 scheme）",
+      "url" not in op, re.findall(r"url[^\n]{0,30}", op)[:2])
+check("报的 place 分得清海报来自猜你想搜还是搜索结果",
+      "from: el.closest('.hotcard') ? 'hot' : 'card'" in js and "place: s.from || 'card'" in op,
+      re.findall(r"place: s\.from[^\n]*", op))
+check("上报只在点开这一条路径上，渲染列表时一条都不发",
+      "sendClick" not in js[js.index("function card("):js.index("function renderPager")]
+      and "sendClick" not in js[js.index("function hotCard("):js.index("function hotCols")],
+      None)
+check("不去 preventDefault：点了就是要打开那个播放页",
+      "preventDefault" not in rep)
+check("线路名与集名都写在 data- 上，报告才拼得出「哪条线路第几集」",
+      'data-line="' in js and 'data-ep="' in js)
+check("地址由后端筛 scheme，前端只把自己 href 的绝对地址发过去",
+      "url: a.href" in js and "javascript:" not in js[js.index("function epsHTML"):
+                                                js.index("function epsHTML") + 700],
+      None)
 check("同一部片连开两次不重复请求（在途与结果各一层缓存）",
       "if (!dpending[key])" in lazy and "dcache[key]" in lazy)
 check("换源/切条目后旧请求回来不会填新面板（token 校验）",
@@ -262,7 +328,16 @@ check("这对 token 在两个主题里都定义了",
       css.count("--poster-ink:") == 2 and css.count("--poster-scrim:") == 2,
       (css.count("--poster-ink:"), css.count("--poster-scrim:")))
 check("换源按钮的选中态按字符串比较（接口给的是数字 ID）",
-      "String(x.vid) === String(s.vid)" in js)
+      "String(x.id) === String(cur.src) && String(x.vid) === String(cur.vid)" in js)
+# 只有一个源也要有这一排：它说的是"这条详情是哪个源给的"，不是可有可无的装饰
+check("单源也渲染这一排（不再 length > 1 才画）",
+      "if (!srcs || !srcs.length) return '';" in js and "srcs.length > 1 ? '换源看' : '来源'" in js,
+      re.findall(r"srcs\.length[^{]{0,40}", js)[:3])
+check("按片名兜底那条路（srcs 本来是空的）拿到详情后把这一排补上",
+      "insertAdjacentHTML('beforebegin', chipsRow(" in js and "!dpBody.querySelector('.dpchips')" in js,
+      re.findall(r"insertAdjacentHTML\([^\n]{0,60}", js)[:2])
+check("点当前这个源不重开、也不再上报一条（不然一次查看被记成好几次）",
+      "if (String(x.id) === String(s.src) && String(x.vid) === String(s.vid)) return;" in js)
 check("用法说明改成了详情按钮，不再提右键",
       "详情" in html and "右键" not in html[html.index('<div class="placeholder"'):html.index("</main>")])
 

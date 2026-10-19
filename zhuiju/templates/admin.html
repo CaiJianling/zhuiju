@@ -60,6 +60,8 @@
     <br>搜索不受影响；重启服务会再试一次。</p>
   {% endif %}
   <form class="admform" method="get" action="{{ url_for('admin') }}">
+    {# 正在看全部历史时筛了个 IP 提交，不该被悄悄送回"最近一周" #}
+    {% if day_all %}<input type="hidden" name="day" value="all">{% endif %}
     <label class="admfield"><span>起始日期</span>
       <input type="date" name="day_from" value="{{ flt.day_from }}"></label>
     <label class="admfield"><span>结束日期</span>
@@ -113,10 +115,19 @@
     <div class="stat"><b>{{ agg.empty }}</b><span>零结果（{{ pct_empty }}%）</span></div>
     <div class="stat"><b>{{ agg.avg_ok if agg.avg_ok is not none else '—' }}</b><span>平均可用源</span></div>
     <div class="stat"><b>{{ agg.avg_ms if agg.avg_ms is not none else '—' }}</b><span>平均耗时 ms</span></div>
+    {# 点开行为放第一排：搜了多少次不稀罕，稀罕的是搜完之后有没有人真去看 #}
+    <div class="stat"><b><a href="#clicks">{{ cagg.detail }} / {{ cagg.play }}</a></b>
+      <span>详情 / 观看点击</span></div>
   </div>
-  {% if agg.first_ts %}
-  <p class="rangehint">条件内时间跨度：{{ agg.first_ts }} ～ {{ agg.last_ts }}</p>
-  {% endif %}
+  <p class="rangehint">
+    {%- if day_all %}当前是<b>全部历史</b>（库里最多留 {{ keep_days }} 天）·
+    {%- else %}最近 {{ day_window }} 天（{{ flt.day_from }} ～ {{ flt.day_to }}）· {% endif -%}
+    条件内时间跨度：{{ agg.first_ts or '—' }} ～ {{ agg.last_ts or '—' }} ·
+    {%- if day_all %}
+    <a href="{{ url_for('admin') }}">回到最近 {{ day_window }} 天</a>
+    {%- else %}
+    <a href="{{ url_for('admin', day='all', **keep_args) }}">看全部历史</a>
+    {%- endif %}</p>
 
   <section class="asect">
     <h2>按天</h2>
@@ -240,6 +251,7 @@
       <table class="table">
       <thead><tr><th>时间</th><th>IP</th><th>归属地</th><th>浏览器</th><th>系统</th><th>来源页</th>
         <th>关键词</th><th>入口</th>
+        <th title="点了多少次详情 / 点开了几条观看地址（按同一个 IP + 同一个关键词归并）">点开</th>
         <th>结果</th><th>原始命中</th><th>可用源</th><th>耗时 ms</th></tr></thead>
       <tbody>
       {% for r in rows['items'] %}
@@ -247,7 +259,9 @@
           <td class="dim">{{ r.ts }}</td>
           <td><a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a></td>
           <td>
-            {%- if r.iso | default('') | length == 2 %}
+            {# 这里必须用 `or ''` 不是 `default('')`：Jinja 的 default 只管"没这个键"，
+               管不了值是 None，而归属地没回填成的老行 iso 正是 NULL —— 那样这一页直接 500 #}
+            {%- if (r.iso or '') | length == 2 %}
               <a href="{{ url_for('admin', geo=r.iso) }}">{{ r.geo }}</a>
             {%- else %}
               <span class="dim">{{ r.geo or '未解析' }}</span>
@@ -273,6 +287,15 @@
           </td>
           <td><a href="{{ url_for('admin', kw=r.kw) }}">{{ r.kw }}</a></td>
           <td>{{ via_cn.get(r.via, r.via) }}</td>
+          {# 详情数与观看数并排：只给一个合起来的数，就分不出"点开看看"和"真去播了" #}
+          <td class="num">
+            {%- if r.clicks_detail or r.clicks_play -%}
+              <a href="{{ url_for('admin', ip=r.ip, kw=r.kw, kind='detail') }}"
+                 title="点开了几次详情">{{ r.clicks_detail or 0 }}</a>
+              <span class="dim">/</span>
+              <a href="{{ url_for('admin', ip=r.ip, kw=r.kw, kind='play') }}"
+                 title="点开了几条观看地址">{{ r.clicks_play or 0 }}</a>
+            {%- else %}<span class="dim">—</span>{% endif -%}</td>
           <td class="num {{ 'zero' if not r.results }}">{{ r.results if r.results is not none else '—' }}</td>
           <td class="num">{{ r.hits if r.hits is not none else '—' }}</td>
           <td class="num">{{ r.sources_ok if r.sources_ok is not none else '—' }}/{{ r.sources_total if r.sources_total is not none else '—' }}</td>
@@ -288,6 +311,7 @@
       {% if rows.page < rows.pages %}<a href="{{ url_for('admin', **args_next) }}" data-page>下一页 ›</a>{% endif %}
       {# 跳转表单把当前筛选当隐藏域带上：不然跳完页筛选就丢了，等于白筛 #}
       <form class="jumpform" method="get" action="{{ url_for('admin') }}">
+        {% if day_all %}<input type="hidden" name="day" value="all">{% endif %}
         {% for k, v in flt.items() %}{% if v %}
         <input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
         <label class="jumplbl">跳到
@@ -299,6 +323,58 @@
     </div>
     {% else %}
     <p class="empty">这个条件下没有记录。换个日期范围或清空筛选试试。</p>
+    {% endif %}
+  </section>
+
+  {# 紧跟明细：翻明细时顺手看"这批人搜完点开过什么"，两张表共用同一套筛选条件 #}
+  <section class="asect" id="clicks" data-cpages="{{ clicks.pages }}">
+    <h2>详情与观看点击 <span class="asub">第 {{ clicks.page }} / {{ clicks.pages }} 页 · 共
+      {{ clicks.total }} 条 · {{ cagg.ips }} 个 IP · {{ cagg.titles }} 部片 ·
+      详情 {{ cagg.detail }} / 观看 {{ cagg.play }}</span></h2>
+    {% if clicks['items'] %}
+    <div class="fold" data-fold data-rows="10">
+      <table class="table">
+        <thead><tr><th>时间</th><th>类型</th><th>IP</th><th>关键词</th><th>片名</th><th>线路</th>
+          <th>点的是</th><th>目标域名</th><th>从哪儿点的</th></tr></thead>
+      <tbody>
+      {% for c in clicks['items'] %}
+        <tr>
+          <td class="dim nw">{{ c.ts }}</td>
+          <td class="nw"><a href="{{ url_for('admin', kind=c.kind) }}">{{ kind_cn.get(c.kind, '观看地址') }}</a></td>
+          <td><a href="{{ url_for('admin', ip=c.ip) }}">{{ c.ip }}</a></td>
+          <td>{% if c.kw %}<a href="{{ url_for('admin', kw=c.kw) }}">{{ c.kw }}</a>
+              {% else %}<span class="dim">—</span>{% endif %}</td>
+          <td>{% if c.title %}<a href="{{ url_for('admin', title=c.title) }}">{{ c.title }}</a>
+              {%- if c.src_name %}<span class="code">{{ c.src_name }}</span>{% endif %}
+              {% else %}<span class="dim">—</span>{% endif %}</td>
+          <td class="dim nw">{{ c.line or '—' }}</td>
+          <td class="nw">{{ c.ep or '—' }}</td>
+          <td>{% if c.host %}<a href="{{ url_for('admin', host=c.host) }}" title="{{ c.url }}"
+                 target="_blank" rel="noopener noreferrer">{{ c.host }}</a>
+              {% else %}<span class="dim">—</span>{% endif %}</td>
+          <td><a class="dim nw" href="{{ url_for('admin', place=c.place) }}">
+            {{ place_cn.get(c.place, '卡片线路') }}</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      </table>
+    </div>
+    <div class="pager">
+      {% if clicks.page > 1 %}<a href="{{ url_for('admin', **args_cprev) }}" data-cpage>‹ 上一页</a>{% endif %}
+      <span class="dim">第 {{ clicks.page }} / {{ clicks.pages }} 页</span>
+      {% if clicks.page < clicks.pages %}<a href="{{ url_for('admin', **args_cnext) }}" data-cpage>下一页 ›</a>{% endif %}
+    </div>
+    <p class="atip">类型两种：<b>详情</b> = 点了海报右下角那颗按钮（换源看等于又开一次，也记一条）；
+      <b>观看地址</b> = 点开了某条播放链接。「从哪儿点的」说的是这一步发生在哪：
+      猜你想搜的海报、结果卡片的海报、还是详情面板里的线路。
+      {%- if cagg.by_kind %}（当前条件：{% for k in cagg.by_kind %}
+        <a href="{{ url_for('admin', kind=k.kind) }}">{{ kind_cn.get(k.kind, '观看地址') }}</a>
+        {{ k.n }} 条 / {{ k.ips }} 个 IP{% if not loop.last %}、{% endif %}{% endfor %}）{% endif %}
+      {%- if cagg.by_host %}；点得最多的站：{% for h in cagg.by_host[:5] %}
+        <a href="{{ url_for('admin', host=h.host) }}">{{ h.host }}</a> {{ h.n }}{% if not loop.last %}、{% endif %}{% endfor %}{% endif %}。
+      播放页是第三方的，点开就跳过去了，本站只知道"点开了"，不知道最后看不看得成。</p>
+    {% else %}
+    <p class="empty">这个条件下没人点过详情或观看地址。有人点开后，这里才会有记录。</p>
     {% endif %}
   </section>
 
@@ -376,32 +452,39 @@
 </main>
 {% if authed %}
 <script>
-/* 明细翻页：只换 #detail 这一块，不整页重载。
+/* 翻页只换这一块，不整页重载。
    整页重载会把滚动位置弹回顶部——翻一页就得重新滚下来，很难用。
-   没有 JS 时链接与表单本身仍是普通的 GET 请求，功能不坏，只是会回到页顶。 */
+   没有 JS 时链接与表单本身仍是普通的 GET 请求，功能不坏，只是会回到页顶。
+   明细(#detail)和观看点击(#clicks)两张表都要能原地翻页，所以这块按"区块"写：
+   每个区块自己决定翻页参数叫什么（page / cpage），点了谁的链接就换谁。 */
 (function () {
-  var detail = document.getElementById('detail');
-  if (!detail) return;
   var busy = false;
 
-  function render(html, url) {
+  // 区块 → 翻页参数名、总页数挂在哪个 data- 上
+  var SECTIONS = { detail: { ref: 'page', pages: 'pages' },
+                   clicks: { ref: 'cpage', pages: 'cpages' } };
+
+  function conf(root) { return SECTIONS[root.id] || SECTIONS.detail; }
+
+  function render(root, html, url) {
     var doc = new DOMParser().parseFromString(html, 'text/html');
-    var next = doc.getElementById('detail');
+    var next = doc.getElementById(root.id);
     if (!next) {                 // 会话过期/口令被引导去改：交回整页跳转，别把登录页塞进半截
       window.location.href = url;
       return;
     }
-    detail.innerHTML = next.innerHTML;
+    root.innerHTML = next.innerHTML;
     // data-pages 之类挂在外层，换 innerHTML 不会更新，得跟着新内容同步，
     // 否则跳到第 50 页的夹取上限还是旧页数
     Array.prototype.forEach.call(next.attributes, function (a) {
-      detail.setAttribute(a.name, a.value);
+      root.setAttribute(a.name, a.value);
     });
-    var pages = parseInt(detail.dataset.pages || '1', 10) || 1;
-    var inp = detail.querySelector('input[name=page]');
+    var c = conf(root);
+    var pages = parseInt(root.dataset[c.pages] || '1', 10) || 1;
+    var inp = root.querySelector('input[name=' + c.ref + ']');
     if (inp) inp.max = pages;
     if (window.history && history.replaceState) history.replaceState(null, '', url);
-    refold();                       // 明细换了内容，滚动框的高度要按新行重算
+    refold();                       // 内容换了，滚动框的高度要按新行重算
     // 页面本身一步都不滚：明细现在是个固定高度的滚动框，换进来的是全新的框元素，
     // scrollTop 天生就是 0，新页自然从第一行开始，外面停在哪儿就还停在哪儿。
   }
@@ -433,35 +516,41 @@
     folds.forEach(measure);
   }
 
-  function go(url) {
+  function go(root, url) {
     if (busy) return;
     busy = true;
     fetch(url, { credentials: 'same-origin' })
       .then(function (r) { return r.text(); })
-      .then(function (html) { render(html, url); })
+      .then(function (html) { render(root, html, url); })
       .catch(function () { window.location.href = url; })   // 断网等：退回普通跳转
       .then(function () { busy = false; });
   }
 
-  detail.addEventListener('click', function (e) {
-    var a = e.target.closest('a[data-page]');
-    if (!a) return;
-    e.preventDefault();
-    go(a.getAttribute('href'));
-  });
+  ['detail', 'clicks'].forEach(function (id) {
+    var root = document.getElementById(id);
+    if (!root) return;
+    var c = conf(root);
 
-  // submit 会冒泡，所以换完内容后新表单仍受这个监听器管
-  detail.addEventListener('submit', function (e) {
-    var f = e.target.closest('.jumpform');
-    if (!f) return;
-    e.preventDefault();
-    var q = new URLSearchParams(new FormData(f));
-    var pages = parseInt(detail.dataset.pages || '1', 10) || 1;
-    var n = parseInt(q.get('page') || '1', 10);
-    if (!isFinite(n) || n < 1) n = 1;
-    if (n > pages) n = pages;
-    q.set('page', String(n));
-    go('{{ url_for("admin") }}?' + q.toString());
+    root.addEventListener('click', function (e) {
+      var a = e.target.closest('a[data-page], a[data-cpage]');
+      if (!a) return;
+      e.preventDefault();
+      go(root, a.getAttribute('href'));
+    });
+
+    // submit 会冒泡，所以换完内容后新表单仍受这个监听器管
+    root.addEventListener('submit', function (e) {
+      var f = e.target.closest('.jumpform');
+      if (!f) return;
+      e.preventDefault();
+      var q = new URLSearchParams(new FormData(f));
+      var pages = parseInt(root.dataset[c.pages] || '1', 10) || 1;
+      var n = parseInt(q.get(c.ref) || '1', 10);
+      if (!isFinite(n) || n < 1) n = 1;
+      if (n > pages) n = pages;
+      q.set(c.ref, String(n));
+      go(root, '{{ url_for("admin") }}?' + q.toString());
+    });
   });
 
   refold();                       // 表格在文档流里，脚本放末尾时布局已完成，能直接量到

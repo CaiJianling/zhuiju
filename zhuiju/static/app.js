@@ -14,6 +14,9 @@
   const state = { kw: '', page: 1, category: '', tab: 'vod', abort: null, cache: {},
                   catalogLoaded: false, deepLoaded: false,
                   cloudKw: null, cloudData: null, cloudLoading: false };
+  // 线路数据留在内存里按 id 取，展开哪条才把那一行的集数插进 DOM（见 linesHTML）
+  const lineStore = {};
+  let lineSeq = 0;
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const stars = (n) => '★'.repeat(Math.max(0, Math.min(5, n | 0))) +
@@ -268,7 +271,8 @@
 
     const srcs = (r.sources || []).map((s) =>
       '<button class="srcbtn" data-i="' + i + '" data-sid="' + esc(s.id) + '" data-vid="' +
-      esc(s.vid || '') + '" data-title="' + esc(r.title) + '">' + esc(s.name) +
+      esc(s.vid || '') + '" data-sname="' + esc(s.name) + '" data-title="' + esc(r.title) + '">' +
+      esc(s.name) +
       (s.remarks ? '·' + esc(s.remarks) : '') + '</button>').join('');
 
     // 纯 API 源（首页 403/500）不显示"打开站点"，否则会跳到拦截页
@@ -317,31 +321,101 @@
     if (!vid) { slot.innerHTML = '<div class="lines"><div class="loading">该源未提供影片 ID，无法取线路。</div></div>'; return; }
 
     const key = sid + ':' + vid;
-    if (state.cache[key]) { slot.innerHTML = linesHTML(state.cache[key]); return; }
+    const ctx = { kw: state.kw || title, title: title, src: sid,
+                  src_name: btn.dataset.sname || '', vid: vid, place: 'card' };
+    if (state.cache[key]) { slot.innerHTML = linesHTML(state.cache[key], ctx); return; }
     slot.innerHTML = '<div class="lines"><div class="loading">正在读取「' +
       esc(btn.textContent) + '」的播放线路…</div></div>';
     try {
       const d = await getJSON('/api/detail?src=' + encodeURIComponent(sid) +
         '&vid=' + encodeURIComponent(vid) + '&t=' + encodeURIComponent(title));
       state.cache[key] = d;
-      slot.innerHTML = linesHTML(d);
+      slot.innerHTML = linesHTML(d, ctx);
     } catch (err) {
       slot.innerHTML = '<div class="lines"><div class="loading">读取失败：' + esc(err.message) + '</div></div>';
     }
   });
 
-  function linesHTML(d) {
+  function linesHTML(d, ctx) {
     if (!d || !d.lines || !d.lines.length) {
       return '<div class="lines"><div class="loading">' +
         esc((d && d.error) || '该源没有返回可播放的线路') + '</div></div>';
     }
-    return '<div class="lines">' + d.lines.map((ln) =>
-      '<div class="line"><div class="lname">' + esc(ln.from) + ' · ' + ln.episodes.length + ' 条</div>' +
-      '<div class="eps">' + ln.episodes.slice(0, 120).map((ep) =>
-        '<a href="' + esc(ep.url) + '" target="_blank" rel="noopener noreferrer">' +
-        esc(ep.name || '播放') + '</a>').join('') + '</div></div>'
-    ).join('') + '</div>';
+    // 默认只列线路名，集数等点了再插进 DOM：一部 120 集的剧一次铺出来会有
+    // 上百个 <a>，面板和卡片都会被撑成长条，而且绝大多数没人点
+    const id = 'L' + (++lineSeq);
+    lineStore[id] = d.lines;
+    return '<div class="lines" data-ls="' + id + '" data-ctx="' +
+      esc(JSON.stringify(ctx || {})) + '">' +
+      d.lines.map((ln, li) =>
+        '<div class="line" data-line="' + esc(ln.from) + '">' +
+        '<button class="lhead" type="button" data-li="' + li + '" aria-expanded="false">' +
+        '<span>' + esc(ln.from) + ' · ' + ln.episodes.length + ' 条</span><i>展开</i></button>' +
+        '<div class="lbody" hidden></div></div>').join('') + '</div>';
   }
+
+  function epsHTML(ln) {
+    const eps = (ln && ln.episodes) || [];
+    if (!eps.length) return '<div class="loading">这条线路没给可播放的地址</div>';
+    return '<div class="eps">' + eps.slice(0, 120).map((ep) =>
+      '<a href="' + esc(ep.url) + '" target="_blank" rel="noopener noreferrer" data-ep="' +
+      esc(ep.name || '播放') + '">' + esc(ep.name || '播放') + '</a>').join('') + '</div>';
+  }
+
+  /* 展开/收起某条线路。事件委托在 document 上：卡片里的线路和详情面板里的线路
+     是两处渲染，行为要一样，而且面板换内容后新按钮也得管得到。 */
+  document.addEventListener('click', (e) => {
+    const h = e.target.closest('.lhead');
+    if (!h) return;
+    const box = h.closest('.lines'), body = h.parentNode.querySelector('.lbody');
+    if (!box || !body) return;
+    const open = !body.hidden;
+    body.hidden = open;
+    h.setAttribute('aria-expanded', open ? 'false' : 'true');
+    h.parentNode.classList.toggle('open', !open);
+    const caret = h.querySelector('i');
+    if (caret) caret.textContent = open ? '展开' : '收起';
+    if (!open && !body.dataset.filled) {
+      body.innerHTML = epsHTML((lineStore[box.dataset.ls] || [])[+h.dataset.li]);
+      body.dataset.filled = '1';
+    }
+  });
+
+  /* ---------------- 观看点击：点了哪条播放地址，落库给后台看 ----------------
+     播放页是第三方的，点完浏览器直接跳走，本站不知道他最后看不看得成；
+     这一列回答的是"搜完之后有没有人真去看、从哪条线路看的"。
+     用 sendBeacon：链接本身照常打开，不让埋点把跳转卡住；它不阻塞页面，
+     新标签页打开时原来的页面也已经不需要等这个请求。 */
+  function sendClick(p) {
+    try {
+      const body = JSON.stringify(p);
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/click', new Blob([body], { type: 'application/json' }));
+        return;
+      }
+      fetch('/api/click', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: body, keepalive: true, credentials: 'same-origin'
+      });
+    } catch (err) { /* 埋点失败绝不能影响人家点开播放 */ }
+  }
+
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('.eps a[href]');
+    if (!a) return;
+    const box = a.closest('.lines');
+    if (!box) return;
+    let ctx = {};
+    try { ctx = JSON.parse(box.dataset.ctx || '{}'); } catch (err) { ctx = {}; }
+    const line = a.closest('.line');
+    sendClick({
+      kind: 'play',
+      kw: ctx.kw || '', title: ctx.title || '', src: ctx.src || '',
+      src_name: ctx.src_name || '', vid: ctx.vid || '',
+      line: (line && line.dataset.line) || '', ep: a.dataset.ep || '',
+      url: a.href, place: ctx.place || 'card'
+    });
+  });
 
   /* ---------------- 直达链接 ---------------- */
   function renderDeep(d) {
@@ -416,11 +490,15 @@
     // 不能像以前那样整张卡片是个 <a>：按钮嵌在链接里是无效 HTML，点了也会顺带跳转。
     // 缓存里那些老条目没留 src/vid，这时详情走"按片名查"那条路，
     // 服务端要并发检索一轮（所以更要点开才查）。
+    // data-srcs 是「换源看」的依据：猜你想搜每一行都带着"每个源里这部片的 ID"，
+    // 少了它就只能看这一个源的详情。
     const dAttrs = ' data-detail data-title="' + esc(x.title) +
       '" data-pic="' + esc(x.pic || '') + '" data-year="' + esc(x.year || '') +
       '" data-type="' + esc(x.type || '') + '" data-remarks="' + esc(x.remarks || '') +
       '" data-src="' + esc(x.src || '') + '" data-vid="' + esc(x.vid || '') +
-      '" data-n="' + (x.n_sources || 0) + '"';
+      '" data-n="' + (x.n_sources || 0) +
+      '" data-srcs="' + esc(JSON.stringify((x.sources || []).map((s) =>
+        ({ id: s.id, name: s.name, vid: s.vid || '' })))) + '"';
     const dbtn = '<button class="dbtn" type="button" aria-label="查看《' + esc(x.title) +
       '》的详情"' + dAttrs + '>详情</button>';
     const cover = '<span class="hcover">' + (x.pic
@@ -506,12 +584,12 @@
     if (document.querySelector('.hotgrid[data-kind="' + kind + '"]')) showHotPage(kind, 0);
   });
 
-  /* ---------------- 海报右下角「详情」→ 影片信息（点开才查，绝不预取） ----------------
+  /* ---------------- 海报右下角「详情」→ 影片信息 + 观看地址（点开才查，绝不预取） ------
      两条来路：搜索结果卡片每个来源都带影片 ID，一次 ac=detail 就够；
      猜你想搜那些（以及没留 ID 的旧缓存）只有片名，服务端要先并发检索一轮才知道 ID。
      两种都只在点了「详情」之后才发请求 —— 列表渲染时一个都不发。
-     面板只给影片信息：请求带 meta=1，本站连播放线路都不发给前端，要看线路仍然得
-     点片名进页面、或在卡片里点来源名展开。 */
+     面板里给观看地址，但一行一条线路、集数点了才铺：这一版是"点开就能去看"，
+     只是不把整页线路一次性塞进 DOM。 */
   const dpEl = $('dpanel'), dpTitle = $('dp-title'), dpBody = $('dp-body'), dpClose = $('dp-close');
   const dcache = {};                  // key -> 已取到的详情：来回开关不重复请求
   const dpending = {};                // key -> 在途请求：连点两次只发一次
@@ -523,14 +601,15 @@
     try { srcs = JSON.parse(d.srcs || '[]'); } catch (e) { srcs = []; }
     return { title: d.title || '', year: d.year || '', area: d.area || '', type: d.type || '',
              remarks: d.remarks || '', actor: d.actor || '', pic: d.pic || '',
-             src: d.src || '', vid: d.vid || '', n: +d.n || 0, srcs: srcs };
+             src: d.src || '', vid: d.vid || '', n: +d.n || 0, srcs: srcs,
+             // 这张海报来自哪儿：后台要分得清"猜你想搜里点的详情"和"搜索结果里点的详情"
+             from: el.closest('.hotcard') ? 'hot' : 'card' };
   }
   const dkey = (s) => (s.src && s.vid ? s.src + ':' + s.vid : 'kw:' + s.title);
-  // meta=1：让后端把 lines 剥掉，前端拿不到也就渲染不出播放链接
   const detailURL = (s) => (s.src && s.vid
     ? '/api/detail?src=' + encodeURIComponent(s.src) + '&vid=' + encodeURIComponent(s.vid) +
-      '&t=' + encodeURIComponent(s.title) + '&meta=1'
-    : '/api/detail?kw=' + encodeURIComponent(s.title) + '&meta=1');
+      '&t=' + encodeURIComponent(s.title)
+    : '/api/detail?kw=' + encodeURIComponent(s.title));
 
   /* 入口就是海报上那颗按钮。触屏上它只有 ~28px，拇指按不准，所以顺带把整张海报
      也当命中区（海报本身不是链接，不会像以前那样误跳转）；桌面仍只认按钮。 */
@@ -542,17 +621,25 @@
     openDetail(specOf(btn));
   });
 
+  // 「换源看 / 来源」那一排。只有一个源也要显示：这一行说的是"这条详情是哪个源给的"，
+  // 少了它就得去页脚那句话里找，而且源数一变整排的有无都不一样，看着像坏了。
+  // 单个源时标签改成「来源」——"换"字本来就得有得换才说得通。
+  function chipsRow(srcs, cur) {
+    if (!srcs || !srcs.length) return '';
+    // vid 从接口来是数字、从 data-* 读回来是字符串，比的时候两边都要当字符串，
+    // 否则选中态永远点不亮
+    return '<div class="dpchips"><span class="dplbl">' +
+      (srcs.length > 1 ? '换源看' : '来源') + '</span>' +
+      srcs.map((x, i) => '<button class="dchip' +
+        (String(x.id) === String(cur.src) && String(x.vid) === String(cur.vid) ? ' on' : '') +
+        '" type="button" data-i="' + i + '">' + esc(x.name || x.id) + '</button>').join('') +
+      '</div>';
+  }
+
   function headHTML(s) {
     const tags = [s.type, s.year, s.area, s.remarks].filter(Boolean)
       .map((t) => '<span class="tag">' + esc(t) + '</span>').join('');
-    const chips = (s.srcs || []).length > 1
-      ? '<div class="dpchips"><span class="dplbl">换源看</span>' + s.srcs.map((x, i) =>
-          // vid 从接口来是数字、从 data-* 读回来是字符串，比的时候两边都要当字符串，
-          // 否则选中态永远点不亮
-          '<button class="dchip' + (String(x.id) === String(s.src) &&
-          String(x.vid) === String(s.vid) ? ' on' : '') +
-          '" type="button" data-i="' + i + '">' + esc(x.name) + '</button>').join('') + '</div>'
-      : '';
+    const chips = chipsRow(s.srcs, s);
     return '<div class="dpcover">' + (s.pic
         ? '<img src="' + esc(s.pic) + '" alt="" onerror="this.remove()">' : '') + '</div>' +
       (tags ? '<div class="dptags">' + tags + '</div>' : '') +
@@ -583,12 +670,22 @@
                   ['年份', d.year || s.year], ['地区', d.area || s.area],
                   ['类型', d.type || s.type],
                   ['更新', d.notes || d.remarks || s.remarks]].filter((r) => r[1]);
+    // 按片名兜底那条路（猜你想搜的老缓存行）进来时前端不知道是哪个源，srcs 是空的。
+    // 详情回来之后知道了，就把这一排补上 —— 不然那种面板就是唯一没有「来源」行的那种。
+    if (!dpBody.querySelector('.dpchips') && d.source) {
+      box.insertAdjacentHTML('beforebegin', chipsRow(
+        [{ id: d.source, name: d.source_name || d.source, vid: s.vid }], { src: d.source, vid: s.vid }));
+    }
     box.innerHTML =
       (rows.length ? '<dl class="dpmeta">' + rows.map((r) =>
         '<dt>' + esc(r[0]) + '</dt><dd>' + esc(String(r[1])) + '</dd>').join('') + '</dl>' : '') +
       (d.blurb ? '<p class="dpblurb">' + esc(d.blurb) + '</p>' : '') +
-      // 这里不放任何播放链接：面板只是"这部片是什么"，"去哪儿看"仍然得点进去
-      '<p class="dpgoto">要看播放线路：点片名进这部片的页面，或在结果卡片「来源」那一行点某个源名展开。</p>' +
+      // 观看地址就在面板里，一行一条线路，点某条才铺集数。
+      // 这些是第三方的播放页，点开就直接跳过去，本站不代理也不校验它还在不在。
+      '<p class="dplines-h">观看地址 <span class="dim">· ' +
+      ((d.lines || []).length) + ' 条线路，点开看分集</span></p>' +
+      linesHTML(d, { kw: state.kw || s.title, title: s.title, src: s.src || d.source || '',
+                     src_name: d.source_name || '', vid: s.vid || '', place: 'panel' }) +
       '<p class="dpfoot">以上信息来自 ' + esc(d.source_name || '该源') +
       (d.via === 'kw' ? '（按片名定位到的）' : '（按影片 ID 直取）') +
       '，第三方接口随时可能失效。' +
@@ -598,6 +695,12 @@
 
   function openDetail(s) {
     const key = dkey(s), token = ++dpToken;
+    // 点了「详情」本身就记一笔：只记查询数的话，"搜完看了一眼就走"和"真去看了"分不开。
+    // 换源看也是又打开一次另一条详情，同样记 —— 后台按 (片名, 源) 数得出来。
+    const self = (s.srcs || []).find((x) => String(x.id) === String(s.src)) || {};
+    sendClick({ kind: 'detail', kw: state.kw || s.title || '', title: s.title || '',
+                src: s.src || '', src_name: self.name || '', vid: s.vid || '',
+                place: s.from || 'card' });
     if (!dpBack) dpBack = document.activeElement;
     dpTitle.textContent = s.title || '详情';
     dpBody.innerHTML = headHTML(s);
@@ -608,7 +711,11 @@
     Array.prototype.forEach.call(dpBody.querySelectorAll('.dchip'), (b) => {
       b.onclick = () => {
         const x = (s.srcs || [])[+b.dataset.i];
-        if (x) openDetail(Object.assign({}, s, { src: x.id, vid: x.vid }));
+        if (!x) return;
+        // 点的就是当前这个源（只有一个源时那颗按钮永远是这样）：不重开、也不再上报一条，
+        // 否则"看了一次详情"会被记成好几次
+        if (String(x.id) === String(s.src) && String(x.vid) === String(s.vid)) return;
+        openDetail(Object.assign({}, s, { src: x.id, vid: x.vid }));
       };
     });
     if (dcache[key]) { fillDetail(s, dcache[key]); return; }

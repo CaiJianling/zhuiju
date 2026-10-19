@@ -11,17 +11,20 @@
   不开长连接、不跨线程共享 connection。
 
 隐私
-  这张表记的是"谁的 IP 在什么时候搜了什么"。默认只监听 127.0.0.1，全部 IP 都是
-  127.0.0.1；只有配合 --host 0.0.0.0 或 nginx 反代才会有多个客户端 IP。
+  这两张表记的是"谁的 IP 在什么时候搜了什么、点开了哪条播放地址"。默认只监听
+  127.0.0.1，所以全部 IP 都是 127.0.0.1；只有配合 --host 0.0.0.0 或 nginx 反代
+  才会有多个客户端 IP。
   所以 stats.db 连同 admin.json 一起进了 .gitignore，不在版本库里分发。
 """
 from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import sqlite3
 import threading
 import time
+import urllib.parse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -68,6 +71,30 @@ CREATE TABLE IF NOT EXISTS queries (
 CREATE INDEX IF NOT EXISTS idx_queries_day ON queries(day);
 CREATE INDEX IF NOT EXISTS idx_queries_ip  ON queries(ip);
 CREATE INDEX IF NOT EXISTS idx_queries_kw  ON queries(kw);
+
+-- 行为日志：点开详情、点开某条观看地址。单独一张表：一次查询可以点好几条，
+-- 塞进 queries 要么覆盖要么得改主键语义。
+CREATE TABLE IF NOT EXISTS clicks (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts      TEXT NOT NULL,
+  day     TEXT NOT NULL,
+  ip      TEXT NOT NULL,
+  kind    TEXT NOT NULL DEFAULT 'play',  -- play=点开观看地址 / detail=点了「详情」按钮
+  kw      TEXT,                 -- 从哪个关键词来的（前端带，可能为空）
+  title   TEXT,                 -- 点的是哪部片
+  src     TEXT,                 -- 采集源 id
+  src_name TEXT,                -- 采集源名字，后台直接显示
+  vid     TEXT,                 -- 影片 ID
+  line    TEXT,                 -- 线路名，如 "新浪线路"
+  ep      TEXT,                 -- 集名/选集名，如 "第03集"
+  url     TEXT,                 -- 目标播放地址（截断）
+  host    TEXT,                 -- 它的域名：按站聚合比整条 URL 有用
+  place   TEXT,                 -- panel=海报详情面板 / card=卡片里展开的线路
+  bot     INTEGER,
+  ua      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_clicks_day ON clicks(day);
+CREATE INDEX IF NOT EXISTS idx_clicks_kw  ON clicks(kw);
 """
 
 # 老库没有这两列，加列要在建表之后单独补一次（CREATE TABLE IF NOT EXISTS 不会改已有表）
@@ -80,6 +107,8 @@ GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"),
 AGENT_COLUMNS = (("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"),
                  ("bot", "INTEGER"), ("ua", "TEXT"),
                  ("ref", "TEXT"), ("ref_kind", "TEXT"), ("ref_label", "TEXT"))
+# 老库里的 clicks 没有 kind 这一列，补上并把已有行标成 play（它们确实是观看点击）
+CLICK_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT 'play'"),)
 
 # 「认不出来」在库里只能有一种写法。补列之前那批行这三列是 NULL（那时根本没存 UA），
 # 现在的写法是 browser/device 存 "未知"、os 存 ''（见 record()）。两套写法混在一张表里，
@@ -132,6 +161,11 @@ def ensure_schema() -> None:
             # 老行的 browser/device/os 是 NULL，和新写的 '未知'/'' 是同一个意思，
             # 不归一就会在面板上占两行
             normalize_agent(con)
+            # clicks 也是后加的表：已经建过的库里它没有 kind，补列并把老行标成 play
+            ccols = {r["name"] for r in con.execute("PRAGMA table_info(clicks)")}
+            for name, typ in CLICK_COLUMNS:
+                if name not in ccols:
+                    con.execute(f"ALTER TABLE clicks ADD COLUMN {name} {typ}")
             con.commit()
             _ready = True
             MIGRATE_ERROR = ""
@@ -139,6 +173,9 @@ def ensure_schema() -> None:
                 _last_prune[0] = time.time()
                 cutoff = (date.today() - timedelta(days=KEEP_DAYS)).isoformat()
                 con.execute("DELETE FROM queries WHERE day < ?", (cutoff,))
+                # 点击表和查询表一起过期：只清一张的话，另一张会一直长，
+                # 而且留下的点击对不上已经被清掉的搜索，看着像凭空多了些人
+                con.execute("DELETE FROM clicks WHERE day < ?", (cutoff,))
                 con.commit()
         except sqlite3.Error as exc:
             # 记下来给后台页面显示，别让它只表现为"归属地一直是空的"
@@ -244,6 +281,65 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
             con.close()
     except Exception:  # noqa: BLE001 - 没盘、库被锁之类，都不该影响用户搜索
         return
+
+
+# 行为日志的两个种类：点开观看地址 / 点了「详情」按钮
+CLICK_KINDS = ("play", "detail")
+# 从哪儿点的。观看地址只有 panel（详情面板里）与 card（卡片展开的线路里）；
+# hot 只出现在 kind='detail' 上，表示那张海报来自「猜你想搜」
+CLICK_PLACES = ("panel", "card", "hot")
+CLICK_MAX_URL = 300          # 播放地址常常带一串 token 参数，截断后仍然能认出是哪个站
+
+
+def click_host(url: str) -> str:
+    """取播放地址的域名。聚合按域名看"都点了哪些站"，整条 URL 太碎没法看。"""
+    try:
+        netloc = urllib.parse.urlsplit(url).netloc
+    except ValueError:                       # 畸形 URL 会在 urlsplit 里抛，不能带崩埋点
+        return ""
+    return netloc.lower()[:120]
+
+
+def record_click(ip: str, *, url: str = "", kind: str = "play", kw: str = "", title: str = "",
+                 src: str = "", src_name: str = "", vid: str = "", line: str = "", ep: str = "",
+                 place: str = "card", ua: str = "") -> bool:
+    """记一次行为：`play` = 点开了某条观看地址，`detail` = 点了海报上的「详情」按钮。
+
+    `play` 只收 http(s)：这一列的值由前端写，进库后要在后台页面上当链接用，
+    `javascript:`/`data:` 混进来就是自己给自己留 XSS。`detail` 本来就没有地址，
+    不给 url 是正常情况，不是漏传。长度全部截断，字段没给就留空，不猜。
+    写失败不该影响用户点开播放或看到详情 —— 和 record() 一样把异常吞掉。
+    """
+    kind = kind if kind in CLICK_KINDS else "play"
+    url = (url or "").strip()[:CLICK_MAX_URL]
+    if kind == "play" and not re.match(r"^https?://", url, re.I):
+        return False
+    try:
+        if not _ready:
+            ensure_schema()
+        from . import agent, geoip
+        a = agent.parse_ua(ua)
+        r = geoip.locate(clean_ip(ip) or "")
+        now = datetime.now()
+        con = connect()
+        try:
+            con.execute(
+                "INSERT INTO clicks (ts, day, ip, kind, kw, title, src, src_name, vid,"
+                " line, ep, url, host, place, bot, ua) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now.strftime("%Y-%m-%d %H:%M:%S"), now.date().isoformat(),
+                 clean_ip(ip) or "unknown", kind, (kw or "").strip()[:60],
+                 (title or "").strip()[:80], (src or "").strip()[:32],
+                 (src_name or "").strip()[:40], (vid or "").strip()[:32],
+                 (line or "").strip()[:40], (ep or "").strip()[:40], url,
+                 click_host(url), place if place in CLICK_PLACES else "card",
+                 1 if a["bot"] else 0, a["ua"][:200]))
+            con.commit()
+        finally:
+            con.close()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
 
 
 # 过滤条件白名单：列名要拼进 SQL，只允许这几个值，其余一律拒绝
@@ -364,6 +460,150 @@ def list_queries(f: dict, page: int = 1, per: int = 50) -> dict:
         con.close()
     return {"total": total, "page": page, "per": per, "pages": pages,
             "items": [dict(r) for r in rows]}
+
+
+# 观看点击能过滤的列。名字要拼进 SQL，同样只允许白名单里的这几个
+_CLICK_COLUMNS = {
+    "ip": "ip = ?",
+    "kw": "kw LIKE ?",
+    "title": "title LIKE ?",
+    "src": "src = ?",
+    "host": "host = ?",
+    "place": "place = ?",
+    "kind": "kind = ?",
+    "day_from": "day >= ?",
+    "day_to": "day <= ?",
+}
+
+
+def _where_clicks(f: dict) -> tuple[str, list]:
+    """clicks 表的过滤条件。与查询明细共用同一份表单值：
+    按某个 IP 或某天筛的时候，两张表筛的是同一批人同一件事，口径得一致。"""
+    conds, params = [], []
+    for key, sql in _CLICK_COLUMNS.items():
+        val = (f.get(key) or "").strip() if isinstance(f.get(key), str) else f.get(key)
+        if val in (None, ""):
+            continue
+        if key in ("kw", "title"):
+            conds.append(sql)
+            params.append(f"%{val}%")
+        elif key in ("day_from", "day_to"):
+            d = _norm_date(val)
+            if not d:
+                continue
+            conds.append(sql)
+            params.append(d)
+        elif key == "ip":
+            ip = clean_ip(val)
+            if ip:
+                conds.append(sql)
+                params.append(ip)
+        elif key in ("place", "kind"):
+            # 认不出的值当没填（静默命中零行比忽略更难查）
+            if val not in (CLICK_PLACES if key == "place" else CLICK_KINDS):
+                continue
+            conds.append(sql)
+            params.append(val)
+        else:
+            conds.append(sql)
+            params.append(str(val)[:80])
+    return (" AND ".join(conds) or "1=1"), params
+
+
+def list_clicks(f: dict, page: int = 1, per: int = 30) -> dict:
+    """按条件分页取观看点击。与 list_queries 同形状，模板里的翻页控件可以直接复用。"""
+    if not _ready:
+        ensure_schema()
+    where, params = _where_clicks(f)
+    page = max(1, min(MAX_PAGE, int(page or 1)))
+    per = max(1, min(200, int(per or 30)))
+    con = connect()
+    try:
+        total = con.execute(f"SELECT COUNT(*) FROM clicks WHERE {where}", params).fetchone()[0]
+        pages = max(1, -(-total // per))
+        page = min(page, pages)
+        rows = con.execute(
+            f"SELECT * FROM clicks WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + [per, (page - 1) * per]).fetchall()
+    finally:
+        con.close()
+    return {"total": total, "page": page, "per": per, "pages": pages,
+            "items": [dict(r) for r in rows]}
+
+
+def click_stats(f: dict, top: int = 10) -> dict:
+    """观看点击的聚合：总量、独立 IP、按目标域名、按线路来源。"""
+    if not _ready:
+        ensure_schema()
+    where, params = _where_clicks(f)
+    con = connect()
+    try:
+        agg = con.execute(
+            f"SELECT COUNT(*) AS n, COUNT(DISTINCT ip) AS ips,"
+            f" COUNT(DISTINCT title) AS titles, MIN(ts) AS first_ts, MAX(ts) AS last_ts"
+            f" FROM clicks WHERE {where}", params).fetchone()
+        by_host = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(host,'') AS host, COUNT(*) AS n,"
+            f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT title) AS titles,"
+            f" MAX(day) AS last_day"
+            f" FROM clicks WHERE {where} GROUP BY COALESCE(host,'')"
+            f" ORDER BY n DESC LIMIT ?", params + [int(top)])]
+        by_place = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(place,'card') AS place, COUNT(*) AS n"
+            f" FROM clicks WHERE {where} GROUP BY COALESCE(place,'card')", params)]
+        by_src = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(src_name,'') AS name, COUNT(*) AS n,"
+            f" COUNT(DISTINCT title) AS titles"
+            f" FROM clicks WHERE {where} GROUP BY COALESCE(src_name,'')"
+            f" ORDER BY n DESC LIMIT ?", params + [int(top)])]
+        # 种类分布（详情 / 观看）单独一份：后台要看的就是这个漏斗 ——
+        # 多少人点了详情，其中多少又真去点了观看地址
+        by_kind = [dict(r) for r in con.execute(
+            f"SELECT COALESCE(kind,'play') AS kind, COUNT(*) AS n,"
+            f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT title) AS titles"
+            f" FROM clicks WHERE {where} GROUP BY COALESCE(kind,'play')", params)]
+    finally:
+        con.close()
+    kinds = {k["kind"]: k["n"] for k in by_kind}
+    return {"count": agg["n"] or 0, "ips": agg["ips"] or 0,
+            "titles": agg["titles"] or 0, "first_ts": agg["first_ts"],
+            "last_ts": agg["last_ts"], "by_host": by_host,
+            "by_place": by_place, "by_src": by_src, "by_kind": by_kind,
+            "detail": kinds.get("detail", 0), "play": kinds.get("play", 0)}
+
+
+def click_counts(f: dict) -> dict:
+    """当前过滤条件下，每个 (ip, 关键词) 点了多少次详情、点开了多少条观看地址。
+    返回 `{(ip, kw): {"detail": n, "play": m}}`。
+
+    明细表一行一次查询会打 N 次 SQL，这里一次 GROUP BY 全拿，页面里查表；
+    日期范围沿用明细的过滤条件，不然"筛了今天却显示出上个月的点击"对不上。
+    """
+    if not _ready:
+        ensure_schema()
+    conds, params = [], []
+    for key, sql, val in (("day_from", "day >= ?", _norm_date((f or {}).get("day_from"))),
+                          ("day_to", "day <= ?", _norm_date((f or {}).get("day_to")))):
+        if val:
+            conds.append(sql)
+            params.append(val)
+    ip = clean_ip((f or {}).get("ip") or "")
+    if ip:
+        conds.append("ip = ?")
+        params.append(ip)
+    where = " AND ".join(conds) or "1=1"
+    con = connect()
+    try:
+        rows = con.execute(
+            f"SELECT ip, kw,"
+            f" SUM(CASE WHEN COALESCE(kind,'play') = 'detail' THEN 1 ELSE 0 END) AS detail,"
+            f" SUM(CASE WHEN COALESCE(kind,'play') = 'play' THEN 1 ELSE 0 END) AS play"
+            f" FROM clicks WHERE {where} GROUP BY ip, kw", params).fetchall()
+    finally:
+        con.close()
+    # 老库里可能整列都是 NULL（kind 是后补的），COALESCE 兜成 play
+    return {(r["ip"], r["kw"]): {"detail": r["detail"] or 0, "play": r["play"] or 0}
+            for r in rows}
 
 
 def summary(f: dict, top: int = 15) -> dict:

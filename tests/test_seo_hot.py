@@ -154,8 +154,33 @@ check("行里带 vid（数字转字符串）", row["vid"] == "456", row)
 made = app_mod.hot_mod._mk("某剧", {"type": "电影", "year": "2026", "vid": 789, "source": "hongniu"}, "douban")
 check("豆瓣回查那条路记的是条目自己的源，不是占位词 douban", made["probe"][0] == "hongniu",
       made["probe"])
+check("_mk 同时把这对 (源, ID) 记进 vids，换源看才有得换",
+      made["vids"] == {"hongniu": "789"}, made)
 check("改造前的旧条目没有 probe 时不炸，src/vid 留空",
       app_mod.hot_mod.pack_row({"title": "旧", "kind": "movie", "year": "", "type": "", "remarks": "",
                     "pic": "", "updated": "", "sources": set()}, {})["src"] == "")
+
+# 猜你想搜那一行以前只留 probe 那一对，面板上就没有「换源看」——每行的每个源各自记 ID
+b = {"title": "某剧", "kind": "tv", "year": "2026", "type": "国产剧", "remarks": "更新至第2集",
+     "pic": "http://c/1.jpg", "updated": "2026-10-01", "sources": {"red", "huya", "hongniu"},
+     "probe": ("red", "456"), "vids": {"red": "456", "huya": "789", "hongniu": "1011"}}
+r = app_mod.hot_mod.pack_row(b, {}, {"red": "红牛资源", "huya": "虎牙资源"})
+check("行里的 sources 是「每个源 + 它自己的影片 ID」",
+      [(s["id"], s["vid"]) for s in r["sources"]] == [("red", "456"), ("huya", "789"), ("hongniu", "1011")],
+      r["sources"])
+check("源名带上，按钮上显示的是名字不是代号",
+      r["sources"][0]["name"] == "红牛资源", r["sources"][0])
+check("probe 那个源排在最前（面板打开时选中的就是它）",
+      r["sources"][0]["id"] == r["src"] == "red", (r["src"], r["sources"][0]))
+check("源改名/停用后没名字可用时退回显示 id，不留空按钮",
+      app_mod.hot_mod.pack_row(b, {})["sources"][2]["name"] == "hongniu",
+      app_mod.hot_mod.pack_row(b, {})["sources"][2])
+check("vids 里没 ID 的源不进按钮（点了也查不到）",
+      all(s["vid"] for s in app_mod.hot_mod.pack_row(
+          {**b, "vids": {"red": "456", "x": ""}}, {})["sources"]))
+check("旧缓存里那些没有 vids 的行不炸，仍给出 probe 那一个源",
+      app_mod.hot_mod.pack_row({k: v for k, v in b.items() if k != "vids"}, {})["sources"]
+      == [{"id": "red", "name": "red", "vid": "456"}],
+      app_mod.hot_mod.pack_row({k: v for k, v in b.items() if k != "vids"}, {})["sources"])
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
