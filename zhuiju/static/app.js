@@ -554,11 +554,30 @@
         const d = await getJSON('/api/hot?kind=' + encodeURIComponent(kind) +
           '&offset=' + offset + '&limit=' + cols);
         items = d.items || [];
-        st.total = d.total;
+        const pages = Math.max(1, Math.ceil((d.total || 0) / cols));
+        // 这份缓存是后台每 6 小时重建一次的，正看着页面也可能从 36 条变成 25 条，
+        // 于是页数跟着变小 —— 那是对的；错的是停在"第 5 页 / 共 4 页"这种一行都没有的页上。
+        // 夹到最后一页重取一次（st.page 一定在变小，不会来回递归）。
+        if (!items.length && st.page >= pages) {
+          noteHotChange(kind, st.total, d.total || 0);
+          st.total = d.total || 0;
+          return showHotPage(kind, pages - 1);
+        }
+        noteHotChange(kind, st.total, d.total || 0);
+        st.total = d.total || 0;
       }
       grid.innerHTML = items.map(hotCard).join('');
       paintHotNav(kind);
     } catch (e) { /* 保持已渲染内容不动 */ }
+  }
+
+  // 条数在眼皮底下变了却不说明，人只会觉得是翻页算错了：把它写出来
+  function noteHotChange(kind, from, to) {
+    const el = document.getElementById('hotupd-' + kind);
+    if (!el) return;
+    if (to && from && to !== from) {
+      el.textContent = '列表刚更新过：' + from + ' → ' + to + ' 条';
+    }
   }
 
   document.addEventListener('click', (e) => {

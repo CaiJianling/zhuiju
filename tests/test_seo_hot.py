@@ -182,5 +182,43 @@ check("旧缓存里那些没有 vids 的行不炸，仍给出 probe 那一个源
       app_mod.hot_mod.pack_row({k: v for k, v in b.items() if k != "vids"}, {})["sources"]
       == [{"id": "red", "name": "red", "vid": "456"}],
       app_mod.hot_mod.pack_row({k: v for k, v in b.items() if k != "vids"}, {})["sources"])
+print("\n10) 列表在眼皮底下变短时，不许停在空页")
+# 缓存每 6 小时后台重建一次，条目数会变（实测过 36 → 25）。页数按新总数算是对的，
+# 但人正停在第 6 页 —— 再翻就落到一行都没有的 offset 上，页码还会写成"7 / 4"。
+js = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+page_js = js[js.index("async function showHotPage"):js.index("function noteHotChange")]
+check("每次翻页都按接口回来的总数重算页数", "Math.ceil((d.total || 0) / cols)" in page_js,
+      re.findall(r"Math\.ceil\([^\n]+", page_js))
+check("取回空的一页且已经超出页数时，夹到最后一页重取一次",
+      "if (!items.length && st.page >= pages)" in page_js
+      and "return showHotPage(kind, pages - 1)" in page_js,
+      re.findall(r"if \(!items\.length[^\n]*\n[^\n]*\n[^\n]*", page_js))
+check("夹页这条一定终止（st.page 只会变小，不会来回弹）",
+      page_js.count("return showHotPage(") == 1)
+check("条数变了要当场写出来，不然人只会以为翻页算错了",
+      "列表刚更新过：" in js and re.search(r"if \(to && from && to !== from\)", js) is not None,
+      re.findall(r"列表刚更新过[^\n]*", js))
+check("提示挂在两组的组标题上（电影、电视剧各一个）",
+      'id="hotupd-{{ sec }}"' in (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8"),
+      None)
+check("提示不是 nowrap（窄屏上会把标题那行顶出容器）",
+      ".hotupd { font-size: var(--fs-sm); color: var(--warn); }" in css and
+      "white-space: nowrap" not in css[css.index(".hotupd {"):css.index(".hotupd {") + 90],
+      css[css.index(".hotupd"):css.index(".hotupd") + 160])
+# 后端这一侧：越界的 offset 就是返回空列表 + 真实总数，前端靠这两个数才能夹页
+_fake_short = {"movie": [{"title": f"电影{i}", "kind": "movie", "year": "", "type": "",
+                          "remarks": "", "pic": "", "updated": "2026-10-15 10:00:00",
+                          "url": "/s/m"} for i in range(25)], "tv": []}
+_real_get = app_mod.hot_mod.get
+app_mod.hot_mod.get = lambda *a, **k: dict(_fake_short)
+try:
+    client = app_mod.create_app().test_client()
+    over = json.loads(client.get("/api/hot?kind=movie&offset=28&limit=7").get_data())
+finally:
+    app_mod.hot_mod.get = _real_get
+check("越界那一页：items 是空的，但 total 给的是真实条数",
+      over["items"] == [] and over["total"] == 25 and over["has_more"] is False,
+      {k: over.get(k) for k in ("total", "has_more")} | {"n": len(over["items"])})
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

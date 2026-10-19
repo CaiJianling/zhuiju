@@ -139,6 +139,8 @@
       <div class="hotgroup">
         <div class="grouptitle"><span>{{ label }}</span><i class="rule"></i>
           <span class="pageof" id="pageof-{{ sec }}"></span>
+          {# 条数在后台重建时会变，变了就在这里说一句，别让人以为翻页算错了 #}
+          <span class="hotupd" id="hotupd-{{ sec }}"></span>
           <button class="pbtn prev" type="button" data-kind="{{ sec }}" data-dir="-1" disabled>‹ 上一页</button>
           <button class="pbtn next" type="button" data-kind="{{ sec }}" data-dir="1"
                   {% if total <= rows | length %}disabled{% endif %}>下一页 ›</button>

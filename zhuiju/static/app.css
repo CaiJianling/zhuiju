@@ -712,6 +712,9 @@ code {
 }
 
 .pageof { font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* "列表刚更新过：36 → 25 条"。放在组标题里但要能折行，
+   不像 .pageof 那样 nowrap，否则窄屏上会把这一行顶出容器 */
+.hotupd { font-size: var(--fs-sm); color: var(--warn); }
 
 /* 更新进度 */
 .prog { margin: 8px 0 0; }
