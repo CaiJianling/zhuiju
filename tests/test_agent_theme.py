@@ -485,9 +485,9 @@ check("窄屏网格项允许缩到 0（否则一长串命令就把页面顶得�
 check("长命令用 overflow-wrap:anywhere 断行（break-word 不参与 min-content，等于没断）",
       re.search(r"\.atip[^{]*code[^{]*\{[^}]*overflow-wrap: anywhere", tail) is not None
       or "overflow-wrap: anywhere" in tail, re.findall(r"[^}]*overflow-wrap: anywhere[^}]*\}", tail))
-check("表格、翻页与说明文字里的链接都用「内边距 + 等量负外边距」撑高，不改变行高",
-      re.search(r"\.table a, \.pager a, \.atip a \{ padding: (\d+)px 3px; margin: -\1px -3px; \}",
-                tail) is not None,
+check("表格、翻页、说明文字与网盘站卡片里的链接都用「内边距 + 等量负外边距」撑高，不改变行高",
+      re.search(r"\.table a, \.pager a, \.atip a, \.creason a \{"
+                r" padding: (\d+)px 3px; margin: -\1px -3px; \}", tail) is not None,
       re.findall(r"\.table a[^;]*;[^;]*;", tail))
 check("提交按钮的文字不许折行（320 上「进入」被 flex 压成 42×51 的两行）",
       re.search(r"\.gobtn[^{]*\{[^}]*white-space: nowrap", tail) is not None,

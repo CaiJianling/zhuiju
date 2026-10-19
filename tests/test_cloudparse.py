@@ -63,5 +63,69 @@ check("相对链接补全为绝对地址",
 check("去重：同一链接只出现一次", len(links) == len(set(links)), links)
 check("空关键词不返回任何结果", parse_results(HTML, base, "") == [], parse_results(HTML, base, ""))
 
+print("\n没有关键词时的站点清单（cloudsearch.site_rows）")
+from zhuiju import catalog as catalog_mod          # noqa: E402
+from zhuiju import cloudsearch                     # noqa: E402
+
+_real_get = cloudsearch.requests.get
+
+
+def _boom(*a, **k):
+    raise AssertionError("清单不该发网络请求")
+
+
+cloudsearch.requests.get = _boom
+try:
+    rows = cloudsearch.site_rows()
+finally:
+    cloudsearch.requests.get = _real_get
+check("这份清单一个请求都不发（把 requests.get 换成抛错也照常返回）", len(rows) > 0, len(rows))
+check("只收网盘与磁力两类",
+      all(r["category"] in cloudsearch.SOURCE_CATS for r in rows),
+      {r["category"] for r in rows})
+rec = [r["recommended"] for r in rows]
+check("推荐指数高的排在前面（排序键与真去抓时一致）",
+      rec == sorted(rec, reverse=True), rec[:10])
+check("每行都有名字/分类/状态/首页地址",
+      all(r["name"] and r["category"] and r["status"] and r["home"].startswith("http") for r in rows),
+      rows[0])
+check("can_query 的判据与 query_site 一致：kind 必须是 site_search",
+      all((r["can_query"] == (r["kind"] == "site_search")) for r in rows),
+      {(r["name"], r["kind"], r["can_query"]) for r in rows[:5]})
+# 给某个站配一条已验证模板，它就该翻成"本站能直接搜出结果"，并把模板地址摊出来
+victim = rows[0]["id"]
+tpl = catalog_mod.templates()
+_real_tpl = dict(tpl)
+tpl[victim] = "https://tpl.test/s/{kw}"
+try:
+    one = [r for r in cloudsearch.site_rows() if r["id"] == victim][0]
+    # 关键词进去应当被编码进模板 URL（和真去抓时同一个拼法）
+    two = [r for r in cloudsearch.site_rows("庆余年") if r["id"] == victim][0]
+finally:
+    tpl.clear()
+    tpl.update(_real_tpl)
+check("有已验证模板的站翻成 can_query，并摊出模板地址",
+      one["can_query"] is True and "{kw}" in one["search_url"], one)
+check("带上关键词时模板里的 {kw} 被编码替换（与 query_site 的拼法一致）",
+      two["search_url"].startswith("https://tpl.test/s/") and "%E5" in two["search_url"],
+      two["search_url"])
+
+print("\n/api/cloud 不带关键词时的契约")
+from zhuiju.app import create_app                  # noqa: E402
+from zhuiju import stats as stats_mod              # noqa: E402
+cl = create_app().test_client()
+n_before = stats_mod.summary({})["count"]
+r = cl.get("/api/cloud")
+d = r.get_json()
+check("不带关键词回 200 的清单，不再是 400", r.status_code == 200 and d["mode"] == "sites",
+      (r.status_code, d.get("mode")))
+check("清单里给了站点数与「本站能直接搜」的个数",
+      d["total_sites"] == len(d["sites"]) and d["can_query"] == sum(1 for s in d["sites"] if s["can_query"]),
+      (d["total_sites"], d["can_query"]))
+check("这一条路径不写统计（没真的搜过任何东西）",
+      stats_mod.summary({})["count"] == n_before, (n_before, stats_mod.summary({})["count"]))
+check("关键词太短仍然是 400，不被当成「没填」",
+      cl.get("/api/cloud?kw=x").status_code == 400, cl.get("/api/cloud?kw=x").status_code)
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

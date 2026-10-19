@@ -404,9 +404,21 @@ def create_app() -> Flask:
 
     @app.get("/api/cloud")
     def api_cloud():
-        """网盘 / 磁力查询：服务端抓取各站搜索结果页并解析条目。"""
-        kw = _kw()
-        if kw is None:
+        """网盘 / 磁力查询：服务端抓取各站搜索结果页并解析条目。
+
+        不带关键词时不查询、也不抓站，返回这一页会覆盖的站点清单（`mode="sites"`），
+        页面因此不必空着；这条路径不写统计 —— 没真的搜过任何东西。
+        """
+        kw = (request.args.get("kw") or "").strip()[:MAX_KW]
+        if not kw:
+            rows = cloudsearch.site_rows()
+            n = sum(1 for r in rows if r["can_query"])
+            return jsonify({"keyword": "", "mode": "sites", "sites": rows,
+                            "total_sites": len(rows), "can_query": n,
+                            "with_results": 0, "entries": 0,
+                            "note": f"{len(rows)} 个网盘 / 磁力站，其中 {n} 个有已验证的 GET 搜索模板，"
+                                    f"本站能直接抓出结果；其余只能在浏览器里打开该站自己搜。"})
+        if len(kw) < MIN_KW:
             return jsonify({"error": f"关键词至少需要 {MIN_KW} 个字符"}), 400
         started = time.perf_counter()
         out = cloudsearch.search(kw)

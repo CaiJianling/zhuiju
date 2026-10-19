@@ -481,6 +481,8 @@ a.openlink:hover { color: var(--brand-ink); }
 .csite.none { background: var(--surface-2); box-shadow: none; }
 .csite.none .chead { margin-bottom: 4px; }
 .creason { font-size: 12px; color: var(--dim); }
+/* 已验证的搜索模板单独一行摊开，让人能核对本站到底会去抓哪个地址 */
+.creason .code.url { display: block; margin: 4px 0 0; overflow-wrap: anywhere; }
 .creason a { color: var(--brand-ink); text-decoration: none; white-space: nowrap; }
 .creason a:hover { text-decoration: underline; }
 
@@ -1387,7 +1389,7 @@ code {
   .atip, .atip code { overflow-wrap: anywhere; }
   /* 表格里那些筛选/翻页链接命中的只有 17px 高的文字盒，拇指按不准。
      加内边距再配等量负外边距：可点区域撑到 ~29px，视觉位置和行高一点不动。 */
-  .table a, .pager a, .atip a { padding: 7px 3px; margin: -7px -3px; }
+  .table a, .pager a, .atip a, .creason a { padding: 7px 3px; margin: -7px -3px; }
   /* 统计格里的数字现在能点（观看点击跳到下面那块），行内链接的命中区得跟着补一点 */
   .stat b a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 6px; }
   .pager a { display: inline-flex; align-items: center; }

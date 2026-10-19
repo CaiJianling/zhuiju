@@ -13,7 +13,7 @@
   const boot = JSON.parse($('boot-data').textContent);
   const state = { kw: '', page: 1, category: '', tab: 'vod', abort: null, cache: {},
                   catalogLoaded: false, deepLoaded: false,
-                  cloudKw: null, cloudData: null, cloudLoading: false };
+                  cloudKw: null, cloudData: null, cloudLoading: false, cloudSites: null };
   // 线路数据留在内存里按 id 取，展开哪条才把那一行的集数插进 DOM（见 linesHTML）
   const lineStore = {};
   let lineSeq = 0;
@@ -55,10 +55,16 @@
   /* 网盘查询：只在点进标签页时才发请求，搜索本身不等它 */
   function ensureCloud() {
     if (!state.kw) {
+      // 没有关键词时不再是一句"先搜索"的死胡同：把这一页会用到的站点先列出来。
+      // 这条路径只读目录与已验证模板，一个站都不去抓。
+      if (state.cloudSites) { renderCloudSites(state.cloudSites); return; }
       cloudbar.innerHTML = '';
-      cloudEl.innerHTML = '<div class="empty"><b>先搜索一个片名</b>' +
-        '<div>网盘查询要用影片名作为关键词，请在上方搜索后再点这个标签页。</div>' +
-        '<div class="tip">查询是点击标签页时才发出的，不点就不占网络。</div></div>';
+      cloudEl.innerHTML = '<div class="skel">正在列这一页会用到的站点（只读目录，不联网）…</div>';
+      getJSON('/api/cloud').then((d) => { state.cloudSites = d; renderCloudSites(d); })
+        .catch((e) => {
+          cloudEl.innerHTML = '<div class="empty"><b>站点清单读不出来</b><div>' +
+            esc(e.message) + '</div></div>';
+        });
       return;
     }
     if (state.cloudKw === state.kw && state.cloudData) { renderCloud(state.cloudData); return; }
@@ -75,6 +81,37 @@
         cloudEl.innerHTML = '<div class="empty"><b>查询失败</b><div>' + esc(e.message) + '</div></div>';
       })
       .finally(() => { state.cloudLoading = false; });
+  }
+
+  /* 没有关键词时的那份站点清单。分组只看 `can_query`，判据和后端真去抓时完全一致：
+     目录里有已验证的 GET 搜索模板才算"本站能直接搜出结果"。空的那一组不渲染标题，
+     顶着一个"本站能直接抓"却底下一行都没有，看着像坏了。 */
+  function renderCloudSites(d) {
+    const sites = d.sites || [];
+    const q = sites.filter((s) => s.can_query), nq = sites.filter((s) => !s.can_query);
+    cloudbar.innerHTML = '还没输入片名 · 先列出这一页会用到的 <b>' + sites.length +
+      '</b> 个站，本站能直接搜出结果的是 <b>' + q.length + '</b> 个';
+    const row = (s) =>
+      '<div class="csite none"><div class="chead"><b>' + esc(s.name) + '</b>' +
+      '<span class="ct">' + esc(s.category) + '</span>' +
+      '<span class="cnum">' + stars(s.recommended) + '</span></div>' +
+      '<div class="creason">' +
+      (s.can_query
+        ? '有已验证的 GET 搜索模板，输入片名后本站会直接抓它的结果页。'
+        : (s.status && s.status !== '可访问'
+            ? '该站状态是「' + esc(s.status) + '」，服务端抓不动，只能在浏览器里打开它自己搜。'
+            : '搜索是 POST 表单或 JS 提交，服务端抓不到结果，只能打开该站自行搜索。')) +
+      ' <a href="' + esc(s.home) + '" target="_blank" rel="noopener noreferrer">打开该站 ↗</a>' +
+      (s.can_query ? '<div class="code url">' + esc(s.search_url) + '</div>' : '') +
+      '</div></div>';
+    cloudEl.innerHTML =
+      (q.length ? '<div class="grouphead">本站能直接搜出结果</div><div class="clist">' +
+        q.map(row).join('') + '</div>' : '') +
+      '<div class="grouphead">只能打开该站自己搜</div><div class="clist">' +
+      nq.map(row).join('') + '</div>' +
+      '<p class="hotnote">这份清单不联网：站与状态都来自资源站目录，"能不能直接搜"按有没有' +
+      '已验证的 GET 搜索模板判断，点这个标签页不会去抓这 ' + sites.length +
+      ' 个站。想在这一页看到结果，在上面搜一个片名再进来。</p>';
   }
 
   function renderCloud(d) {

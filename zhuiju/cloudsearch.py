@@ -108,6 +108,32 @@ def query_site(item: dict, kw: str) -> dict:
     return row
 
 
+def site_rows(kw: str = "") -> list[dict]:
+    """这个标签页覆盖的站点清单：只读目录与已验证模板，**一个请求都不发**。
+
+    没有关键词时页面不该空着让人"先搜索"，也不该顺手去并发抓 20 个站；这里给的就是
+    "这一页会用到哪些站、各自能不能在本站直接搜出结果"。`can_query` 的判据和
+    `query_site()` 完全一致（只有目录里有已验证的 GET 搜索模板才算），所以清单和
+    真搜起来的行为不会两张皮。
+    """
+    items = [it for it in catalog_mod.catalog().get("items", [])
+             if it["category_cn"] in SOURCE_CATS]
+    items.sort(key=lambda x: (-x["recommended"], x["category_cn"], x["name"]))
+    rows = []
+    for it in items:
+        deep = catalog_mod.link_for(it, kw)
+        can = deep.get("kind") == "site_search"
+        # 没关键词时摊出来的是模板本身（留着 {kw}），不是"把空串填进去"的那种地址：
+        # `https://x/s/` 看着像个能开的页面，其实是个搜了空词的废链接
+        shown = ((deep.get("url") or "") if kw
+                 else (catalog_mod._entry_template(it) or ""))
+        rows.append({"id": it["id"], "name": it["name"], "category": it["category_cn"],
+                     "status": it["status"], "recommended": it["recommended"],
+                     "home": it.get("url") or "", "kind": deep.get("kind"),
+                     "search_url": shown, "can_query": can})
+    return rows
+
+
 def search(kw: str, budget: float = BUDGET) -> dict:
     items = [it for it in catalog_mod.catalog().get("items", [])
              if it["category_cn"] in SOURCE_CATS]

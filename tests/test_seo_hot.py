@@ -220,5 +220,23 @@ check("越界那一页：items 是空的，但 total 给的是真实条数",
       over["items"] == [] and over["total"] == 25 and over["has_more"] is False,
       {k: over.get(k) for k in ("total", "has_more")} | {"n": len(over["items"])})
 
+print("\n11) 网盘查询标签页：没有关键词时也铺得满")
+js = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+ec = js[js.index("function ensureCloud"):js.index("function renderCloudSites")]
+check("没关键词时去要那份清单，不再是「先搜索一个片名」的死胡同",
+      "if (!state.kw)" in ec and "getJSON('/api/cloud')" in ec
+      and "先搜索一个片名" not in js, re.findall(r"先搜索[^\n]{0,30}", js))
+check("清单只在没关键词时取，取到就复用（切标签页不重复请求）",
+      "if (state.cloudSites) { renderCloudSites(state.cloudSites); return; }" in ec)
+rs = js[js.index("function renderCloudSites"):js.index("function renderCloud(")]
+check("空的那一组不渲染标题（顶着「本站能直接搜出结果」却一行都没有，看着像坏了）",
+      "q.length ? " in rs and rs.count("grouphead") == 2, re.findall(r"grouphead", rs))
+check("每一行都给了打开该站的链接与推荐指数",
+      "打开该站 ↗" in rs and "stars(s.recommended)" in rs)
+check("说清这份清单不联网、以及为什么有的站只能自己打开",
+      "这份清单不联网" in rs and "已验证的 GET 搜索模板" in rs)
+check("搜索完再进这个标签页走的仍是真查询",
+      "fetch('/api/cloud?kw='" in js and "state.cloudKw = state.kw" in js)
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
