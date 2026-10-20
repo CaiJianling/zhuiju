@@ -752,15 +752,19 @@ def summary(f: dict, top: int = 15) -> dict:
 
 # 少于这个搜索次数谈不上"节奏"，报了也是 noise；点开比同理
 BEHAVIOR_MIN_Q = 3
-# 判读理由：key 给 CSS 与测试用，text 给人看。每条都必须可以用页面上那一列的数复核，
-# 不做"综合可疑度打分"那种说不清来源的数字。
+# 判读理由分两种来源：`ua` 是 UA 自己报的（明细每一行已经有三档徽章，别再重复一遍），
+# `act` 是从时间/跳转/点开算出来的行为 —— 往明细的 IP 上挂的只有 `act` 这一类
+BEHAVIOR_UA_KEYS = ("ua-bot", "ua-none")
+# 判读理由：key 给 CSS 与测试用，text 给人看（行为那一节用全称，因为那节要解释阈值），
+# short 给明细的 IP 上挂的小徽章用（那一格里挤不下整句话）。
+# 每条都必须可以用页面上那一列的数复核，不做"综合可疑度打分"那种说不清来源的数字。
 BEHAVIOR_REASONS = {
-    "ua-bot": "UA 自己报了爬虫/脚本",
-    "ua-none": "有一批请求根本没留 UA，判断不了",
-    "burst": "秒级连发（最快间隔 ≤ 1 秒）",
-    "metronome": "间隔稳得像节拍器（标准差 / 平均值 ≤ 0.25）",
-    "no-ref": "从来不带站内跳转（没有上一页就从没搜过）",
-    "no-click": "搜了但从没点开过详情或播放地址",
+    "ua-bot": ("UA 自报脚本", "UA 自己报了爬虫/脚本"),
+    "ua-none": ("没留 UA", "有一批请求根本没留 UA，判断不了"),
+    "burst": ("秒级连发", "秒级连发（最快间隔 ≤ 1 秒）"),
+    "metronome": ("节拍器", "间隔稳得像节拍器（标准差 / 平均值 ≤ 0.25）"),
+    "no-ref": ("无站内跳转", "从来不带站内跳转（没有上一页就从没搜过）"),
+    "no-click": ("从没点开", "搜了但从没点开过详情或播放地址"),
 }
 
 
@@ -844,7 +848,9 @@ def behavior(f: dict, limit: int = 40) -> list[dict]:
             reasons.append("no-ref")
         if d["n"] >= BEHAVIOR_MIN_Q and not d["click_n"]:
             reasons.append("no-click")
-        d["reasons"] = [{"key": k, "text": BEHAVIOR_REASONS[k]} for k in reasons]
+        d["reasons"] = [{"key": k, "short": BEHAVIOR_REASONS[k][0],
+                         "text": BEHAVIOR_REASONS[k][1],
+                         "src": "ua" if k in BEHAVIOR_UA_KEYS else "act"} for k in reasons]
         out.append(d)
     # 排序按"能举出几条理由"再按条数：理由多的排前面，但都摆着数让人自己复核
     out.sort(key=lambda d: (-len(d["reasons"]), -(d["n"] or 0), d["ip"]))

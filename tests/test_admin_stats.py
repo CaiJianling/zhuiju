@@ -1049,5 +1049,35 @@ check("说了判读只是提示、不是判决（别让人把它当结论）",
 check("说清了什么情况下这几列看不出来（老实带 Referer 的脚本）",
       "想真正钉死只能给首页发一个匿名会话" in page, None)
 
+check("说了这些理由也挂在明细的 IP 旁边（翻明细不用回头对照）",
+      "明细每一行的 IP 旁边" in page, None)
+r2 = b2["reasons"][0]
+check("每条理由都带 key / 短文 / 全文 / 来源，模板按来源决定挂哪几种",
+      {"key", "short", "text", "src"} <= set(r2) and
+      {x["src"] for x in b2["reasons"]} == {"act"}, r2)
+check("UA 自报那两种标成 ua（明细行上已有三档徽章，不重复挂）",
+      {x["src"] for x in beh["8.151.3.3"]["reasons"] if x["key"] in ("ua-bot", "ua-none")} == {"ua"},
+      beh["8.151.3.3"]["reasons"])
+act = c3.get("/admin?ip=8.151.2.2").get_data(as_text=True)
+act_body = act[act.index('id="detail"'):act.index('class="logout"')]
+check("节拍器那位：明细每一行的 IP 边上都挂到了行为胶囊",
+      act_body.count('class="behflag"') >= 10 and "节拍器" in act_body
+      and "无站内跳转" in act_body and "从没点开" in act_body,
+      act_body.count('class="behflag"'))
+check("挂的是短文，整句话与那三个数在 title 里（一格里挤不下长句）",
+      'title="这个 IP 的行为特征：间隔稳得像节拍器' in act_body
+      and re.search(r'class="behflag"[^>]*>节拍器</span>', act_body) is not None,
+      re.findall(r'<span class="behflag"[^>]{0,40}', act_body)[:2])
+ua_page = c3.get("/admin?ip=8.151.3.3").get_data(as_text=True)
+ua_body = ua_page[ua_page.index('id="detail"'):ua_page.index('class="logout"')]
+check("UA 自报脚本的那位：行上有三档徽章，IP 边上不再挂行为胶囊（同一件事不说两遍）",
+      'class="who who-bot"' in ua_body and 'UA 自报脚本' not in ua_body
+      and 'class="behflag"' not in ua_body,
+      [ua_body.count('class="who who-bot"'), ua_body.count('class="behflag"')])
+clean = c3.get("/admin?ip=8.151.1.1").get_data(as_text=True)
+clean_body = clean[clean.index('id="detail"'):clean.index('class="logout"')]
+check("没被挑出行为毛病的那位，IP 边上干干净净",
+      'class="behflag"' not in clean_body, clean_body.count('class="behflag"'))
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

@@ -305,6 +305,8 @@
       <b>判读只是提示，不是判决</b>：真人用浏览器插件批量搜、或者几个人共用一个出口，都会落进同一行；
       反过来，脚本只要老老实实带上 Referer、按秒休息，这几列就看不出来 —— UA 是客户端自由发挥，
       想真正钉死只能给首页发一个匿名会话 token（那是另一个决定，涉及加 cookie）。
+      这些理由同时挂在<b>明细每一行的 IP 旁边</b>（虚线小胶囊，鼠标放上去看整句话和那三个数），
+      翻明细时不用回到这张表上来对照；UA 自报的那两种不重复挂 —— 明细每一行右边本来就有三档徽章。
       「说不清」那一档是补 UA 列之前的老记录，库里 <b>{{ agg.by_who | selectattr('who','equalto','unknown') | map(attribute='n') | sum }}</b> 条，
       它们既不算人也不算脚本，别当成 0 忽略掉。</p>
     {% else %}
@@ -338,7 +340,18 @@
            挂在搜索行底下就等于一条都看不见（实测 15 条点击能对上搜索的是 0 条） #}
         {% if r.type == 'click' %}<tr class="crow">{% else %}<tr>{% endif %}
           <td class="dim">{{ r.ts }}</td>
-          <td><a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a></td>
+          <td>
+            <a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a>
+            {# 这个 IP 的行为特征挂在这儿：翻明细时不用回到上面那一节去对照。
+               只挂行为那一类（秒级连发 / 节拍器 / 无站内跳转 / 从没点开）—— UA 自报的
+               两种每一行右边已经有三档徽章了，重复一遍只会更吵。 #}
+            {%- set bh = beh_map.get(r.ip) %}
+            {%- if bh %}
+              {%- for x in bh.reasons if x.src == 'act' %}
+                <span class="behflag" title="这个 IP 的行为特征：{{ x.text }}（搜 {{ bh.n }} 次、站内跳转占 {{ (bh.site_n * 100 // bh.n) if bh.n else 0 }}%、点开 {{ bh.click_n }} 次）">{{ x.short }}</span>
+              {%- endfor %}
+            {%- endif %}
+          </td>
           <td>
             {# 这里必须用 `or ''` 不是 `default('')`：Jinja 的 default 只管"没这个键"，
                管不了值是 None，而归属地没回填成的老行 iso 正是 NULL —— 那样这一页直接 500 #}

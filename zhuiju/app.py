@@ -552,8 +552,12 @@ def create_app() -> Flask:
         rows = stats_mod.list_activity(flt, page=page, per=per, scope=scope)
         agg = stats_mod.summary(flt)
         cagg = stats_mod.click_stats(flt)
-        # 行为特征：UA 三档只是"它自己说的"，这一节按 IP 看节奏、跳转与点开比
-        beh = stats_mod.behavior(flt)
+        # 行为特征：UA 三档只是"它自己说的"，这一节按 IP 看节奏、跳转与点开比。
+        # 多取一些再截前 40 行给表格里看，整份留给明细挂 IP 徽章 —— 明细那一页可能
+        # 出现的 IP 未必排得进前 40，不能因为"表格没显示它"就不给它挂徽章。
+        beh_all = stats_mod.behavior(flt, limit=200)
+        beh = beh_all[:40]
+        beh_map = {b["ip"]: b for b in beh_all}
         geo_info = geoip.available()
         markers = _markers(agg["by_geo"]) if geo_info["points"] else []
         base = geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}, "error": "没有底图文件"}
@@ -577,7 +581,7 @@ def create_app() -> Flask:
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
             place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
             who_cn={k: stats_mod.who_label(k) for k in
-                    ("human", "bot", "unknown", "mixed")}, beh=beh,
+                    ("human", "bot", "unknown", "mixed")}, beh=beh, beh_map=beh_map,
             day_all=day_all, day_window=DEFAULT_WINDOW,
             keep_days=stats_mod.KEEP_DAYS, keep_args=keep_args,
             flt={**flt, "per": rows["per"]},
