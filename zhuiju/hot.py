@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
-"""猜你想搜：空搜索框时展示的「电影 / 电视剧」近期条目（最近半年）。
+"""猜你想搜：空搜索框时展示的「电影 / 电视剧」近期条目（最近一年）。
 
 为什么是两个池子（都是实测出来的约束）：
   - 采集接口的全局"最近更新"流里 limit 被硬限 20 条，内容又被 中国动漫/内地剧 占满
     （虎牙 20 条里 11 条是中国动漫），电影在这里天然稀少；而带 t=分类ID 只返回 0~2 条，
     所以"按分类列最新"这条路不通。
   - 因此：电视剧走 CMS 最新流（能拿到多源覆盖度），电影再补一批豆瓣「热门/新片」候选。
-  - "最近半年"一律用 CMS 的 vod_time / vod_year 判定：豆瓣的 j/search_subjects 不返回
+  - "最近一年"一律用 CMS 的 vod_time / vod_year 判定：豆瓣的 j/search_subjects 不返回
     上映日期，只用来出候选、评分和海报；豆瓣候选还要回查 CMS 命中才算数，
     这样点进去一定有结果。
+  - 两类都**不截条数**：池子里有多少就存多少，页面按页取（`page(kind, offset, limit)`
+    一次只给一行宽的量）。以前每类截 60 条，实测把 287 条电视剧直接砍掉了 227 条，
+    而"多几页"本来是靠翻页加载的，不需要在缓存里预先裁。
 
 缓存 data/cache/hot.json，默认 6 小时重建；重建失败沿用旧缓存并标注 stale。
 """
@@ -33,7 +36,9 @@ requests.packages.urllib3.disable_warnings()
 
 CACHE = Path(__file__).resolve().parent / "data" / "cache" / "hot.json"
 TTL = 6 * 3600
-HALF_YEAR_DAYS = 183
+# 时间窗口。以前是 183 天（半年），实测那样电影只有 38 条、电视剧被 60 条的上限砍掉大半；
+# 放宽到一年之后池子明显变大，重建请求数不变（窗口是本地过滤，不多发一次抓取）。
+WINDOW_DAYS = 365
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -71,10 +76,31 @@ def kind_of(type_name: str) -> str:
     return ""
 
 
+def row_kind(b: dict, d: dict | None) -> str:
+    """一行最终算哪一类：CMS 的 type 优先，认不出来时退到豆瓣那条的 type。
+
+    单独拆成函数是因为这个兜底以前**走不到**：pack_row 里写着
+    `b["kind"] or (豆瓣 type)`，可 build() 是 `if b["kind"]` 先过滤，
+    kind 空的行根本进不到 pack_row。实测有一行 CMS 给的是"现代都市"（两边词表都不认）、
+    豆瓣明确标了 tv，就这么无声丢掉了。
+    豆瓣自己也没标类型的（比如只在 CMS 池里出现过、type 又不认识）返回空 —— 宁可不显示，
+    也不猜一个类别把人导到错的分组里。
+    """
+    if b.get("kind"):
+        return b["kind"]
+    dt = (d or {}).get("douban_type")
+    return dt if dt in ("movie", "tv") else ""
+
+
 def _recent(item: dict, since: date) -> bool:
-    """最近半年：更新时间在窗口内，或年份是今年。"""
+    """窗口内：更新时间在 since 之后；更新时间读不出来时，退到"年份落在窗口那一年"。
+
+    第二判用 since.year 而不是 today.year：半年窗口时 since.year 就是今年，两条判据等价；
+    换成一年窗口后，去年的片子更新时间常常缺字段（各源给不给 vod_time 不一致），
+    只认"今年"就会把一整年 2025 的东西全否掉，那正是这次要放宽的东西。
+    """
     d = _date(item.get("updated"))
-    return bool(d and d >= since) or _year(item.get("year")) >= date.today().year
+    return bool(d and d >= since) or _year(item.get("year")) >= since.year
 
 
 def _mk(title: str, item: dict, src_id: str) -> dict:
@@ -189,7 +215,7 @@ def douban_lists(timeout: float = 8.0) -> dict:
 
 
 def verify_pool(cands: list[dict], sources: list[Source], since: date) -> dict:
-    """豆瓣候选回查采集源：既确认点进去搜得到，也从返回的 vod_year/vod_time 落实最近半年。"""
+    """豆瓣候选回查采集源：既确认点进去搜得到，也从返回的 vod_year/vod_time 落实窗口。"""
     if not cands:
         return {}
     probes = sources[:VERIFY_SOURCES]
@@ -248,7 +274,7 @@ def pack_row(b: dict, d: dict, names: dict | None = None) -> dict:
             srcs.append({"id": sid, "name": names.get(sid, sid), "vid": str(svid)})
     return {
         "title": b["title"],
-        "kind": b["kind"] or ("movie" if d.get("douban_type") == "movie" else "tv"),
+        "kind": row_kind(b, d),
         "year": b["year"], "type": b["type"], "remarks": b["remarks"],
         "pic": pic, "rate": d.get("rate", ""),
         "douban": bool(d), "updated": b["updated"], "n_sources": len(b["sources"]),
@@ -260,9 +286,15 @@ def pack_row(b: dict, d: dict, names: dict | None = None) -> dict:
     }
 
 
-def build(limit_each: int = 60) -> dict:
+def build() -> dict:
+    """出一批候选并按类排好，两类都**不截条数**。
+
+    以前这里有个 `limit_each=60`：实测半年窗口下电视剧池子有 287 条，直接被砍掉 227 条，
+    而"多几页"本来就是 `page()` 按 offset/limit 一页一页取的事，缓存里没有预先裁的理由。
+    现在池子多大就存多大（一年窗口下也就几百行 JSON），每页照旧只发一行宽的量。
+    """
     today = date.today()
-    since = today - timedelta(days=HALF_YEAR_DAYS)
+    since = today - timedelta(days=WINDOW_DAYS)
     sources = [s for s in load_sources() if s.enabled]
 
     buckets = feed_pool(sources, since)
@@ -286,18 +318,30 @@ def build(limit_each: int = 60) -> dict:
         return (updated, y.group(0) if y else "0", x["n_sources"],
                 float(x["rate"] or 0))
 
-    rows = [pack(k, b) for k, b in buckets.items() if b["kind"]]
+    # 归类要先在这里算完再筛（见 row_kind：那句豆瓣类型兜底以前根本走不到）
+    by_kind: dict[str, list] = {"movie": [], "tv": []}
+    dropped = 0
+    for k, b in buckets.items():
+        kk = row_kind(b, douban.get(k))
+        if not kk:
+            dropped += 1            # 认不出类别的（实测是足球/篮球这类体育节目），丢掉是对的
+            continue
+        r = pack(k, b)                      # pack_row 里用的就是 row_kind，类别只此一处
+        by_kind[kk].append(r)
+
     return {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "since": since.isoformat(),
+        "window_days": WINDOW_DAYS,
         "sources_ok": len(sources), "sources_total": len(load_sources()),
         "douban_candidates": len(douban), "douban_added": len(verified),
         "pics_filled": filled,
         "candidates": len(buckets),
-        "movie": sorted([r for r in rows if r["kind"] == "movie"], key=sort_key,
-                        reverse=True)[:limit_each],
-        "tv": sorted([r for r in rows if r["kind"] == "tv"], key=sort_key,
-                     reverse=True)[:limit_each],
+        # 标题要写的就是这几个数：候选池多大、每类成品多少、丢了几条认不出类别的。
+        # 只写"候选 346 条"会让人以为能翻出 346 条来（那是归类之前的池子数）。
+        "dropped_kind": dropped,
+        "movie": sorted(by_kind["movie"], key=sort_key, reverse=True),
+        "tv": sorted(by_kind["tv"], key=sort_key, reverse=True),
     }
 
 
@@ -353,7 +397,7 @@ _building = {"at": 0.0}
 
 
 def _since() -> date:
-    return date.today() - timedelta(days=HALF_YEAR_DAYS)
+    return date.today() - timedelta(days=WINDOW_DAYS)
 
 
 def _read_cache():

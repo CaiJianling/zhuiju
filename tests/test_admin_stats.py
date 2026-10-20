@@ -760,11 +760,13 @@ merged = stats_mod.list_activity({"ip": q0["ip"], "kw": q0["kw"]}, per=200)
 kinds = [x["type"] for x in merged["items"]]
 check("同一个 IP 同一个词：搜索行与点开行合在一张列表里",
       kinds.count("query") == 1 and kinds.count("click") == 3, kinds)
-check("合流按时间倒序（种子里那条搜索的时间比点击晚，所以它在上头）",
+check("合流按时间倒序",
       [x["ts"] for x in merged["items"]] ==
       sorted([x["ts"] for x in merged["items"]], reverse=True)
-      and merged["items"][0]["type"] == "query",
+      and merged["items"][0]["ts"] == max(x["ts"] for x in merged["items"]),
       [(x["type"], x["ts"]) for x in merged["items"]])
+# 这里不断言"第一行是搜索还是点开"：种子数据那条搜索写的是固定时刻 12:00:00，
+# 而点击用的是真实当前时间 —— 过了中午点击反而更晚，哪种都在理，测的是倒序不是谁在上头。
 check("点开行带的就是那一行该带的：片名、线路、集、域名、从哪儿点的",
       all(x["title"] == "测试片" for x in merged["items"] if x["type"] == "click")
       and any(x["line"] == "新浪线路" and x["ep"] == "第01集" and x["host"] == "k.test"

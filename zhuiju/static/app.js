@@ -4,7 +4,7 @@
 
   const $ = (id) => document.getElementById(id);
   const form = $('form'), input = $('kw'), goBtn = $('go');
-  const statline = $('statline'), meta = $('meta'), srcbar = $('sources');
+  const meta = $('meta'), srcbar = $('sources');
   const resultsEl = $('results'), deepEl = $('deeplist');
   const dirEl = $('dirlist'), filtersEl = $('filters'), placeholder = $('placeholder');
   const cloudEl = $('cloudlist'), cloudbar = $('cloudbar');
@@ -25,6 +25,42 @@
   // 后端给的是 emoji 状态，前端统一渲染成 CSS 圆点，颜色与整站一致
   const DOT_CLASS = { '🟢': 's-ok', '🟡': 's-restricted', '🔴': 's-bad', '⚪': '' };
   const dotEl = (emoji) => '<i class="dot ' + (DOT_CLASS[emoji] || '') + '" aria-hidden="true"></i>';
+
+  /* 海报淡入的开关：给刚插进 DOM 的图打上 .loaded，CSS 那边从透明淡上来。
+     只有"这一张海报本来还没落地"才值得淡一次：
+     - 这次浏览已经见过它（shownPics），或浏览器已经解码好（complete && naturalWidth，
+       命中缓存的图 src 一赋值就 complete，load 根本不再发）-> 再加一个 .noanim 直接显示。
+       来回翻页走的就是这条：不然每翻一页整行海报各自再淡一次，看着像在重新加载。
+     - 真·第一次要等网络的 -> 等 load 淡一次，并把地址记下来。
+     dataset.shown 是去重用的：同一棵子树被反复 reveal 时不重复挂监听。 */
+  const shownPics = new Set();
+  const PICS_MAX = 3000;      // 记到这张数为止：开一整天的标签页不该无限攒
+  function revealIn(root) {
+    if (!root) return;
+    root.querySelectorAll('.cover img, .hcover img, .dpcover img').forEach((im) => {
+      if (im.dataset.shown) return;
+      im.dataset.shown = '1';
+      const src = im.getAttribute('src') || '';
+      if (shownPics.has(src) || (im.complete && im.naturalWidth)) {
+        im.classList.add('loaded', 'noanim');
+        return;
+      }
+      im.addEventListener('load', () => {
+        // 只在真加载完的那天才记账：启动时服务端那 12 张和 JS 重铺的新节点是同一批 src，
+        // 新节点会复用同一个在途请求、到货后淡一次（本来就只该淡一次）。
+        // 若在"开始等"时就记，那第一批海报就变成没有淡入的突然出现。
+        if (shownPics.size < PICS_MAX) shownPics.add(src);
+        im.classList.add('loaded');
+      }, { once: true });
+      // 图挂了会走 onerror 把自己 remove 掉，但也要防"永不 complete 也永不 error"
+      //（被拦截的连接有时候就卡在那），兜一个 8 秒：到点还什么都没有就直接显示，
+      // 至少比一片空白好；也不再淡这一次——没人等的动画比不动更烦。
+      setTimeout(() => im.classList.add('loaded', 'noanim'), 8000);
+    });
+  }
+
+  // 系统要求"减少动态效果"时不放动画（翻页滑动与淡入都归它管，CSS 里也各挡了一次）
+  const noMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   /* ---------------- tabs ---------------- */
   document.querySelectorAll('.tab').forEach((t) => {
@@ -166,7 +202,11 @@
     resultsEl.innerHTML = ''; deepEl.innerHTML = ''; dirEl.innerHTML = '';
     $('sources').innerHTML = ''; cloudbar.innerHTML = '';
     document.getElementById('cloudlist').innerHTML = '';
-    statline.hidden = true;
+    // 标签栏没有跟着 hidden 一起藏起来过：CSS 里 `.statline { display: flex }` 压掉了
+    // 浏览器自带的 [hidden]（现在全局那条 !important 修好了这个）。这里顺势把它定成"一直在"——
+    // 没有关键词时也要能切到「网盘查询」「资源站目录」，那两个本来就不需要词。
+    // 要清的只是它右边那行"命中 N 部…"。
+    meta.textContent = '';
     pager.hidden = true;
     placeholder.hidden = false;
     const ssr = document.getElementById('ssr');
@@ -188,16 +228,18 @@
   async function run(rawKw, page) {
     const kw = (rawKw || '').trim();
     if (!kw) {
-      const hot = document.getElementById('hot');
-      if (hot) hot.hidden = false;
-      input.focus();
+      // 没关键词就等于"不要结果了"：走和「首页」那颗按钮完全一样的重置。
+      // 早先这里只是把猜你想搜显出来、输入框聚焦，结果面板、统计条和
+      // 「上一页 / 下一页」都还留在页面上 —— 输入框明明空着，下一页还能点，
+      // 点了又把上一个词的翻页请求发出去了（state.kw 还是旧词）。
+      goHome();
       return;
     }
     page = Math.max(1, page || 1);
     state.kw = kw; state.page = page;
     state.cloudKw = null; state.cloudData = null;   // 换了关键词，网盘查询结果作废
     if (state.tab === 'cloud') ensureCloud();
-    placeholder.hidden = true; statline.hidden = false;
+    placeholder.hidden = true;      // 标签栏不再跟着搜索一起开关（它一直是入口，见 goHome）
     const hot = document.getElementById('hot');
     if (hot) hot.hidden = true;
 
@@ -209,6 +251,9 @@
     srcbar.innerHTML = '';
     meta.textContent = '正在查询 ' + kw + ' …';
     resultsEl.innerHTML = '<div class="skel">正在并发查询 ' + boot.sources.length + ' 个采集接口…</div>';
+    // 结果已经被换成了骨架屏，上一个词留下的翻页条也就没有了主人：先收起来，
+    // 数据回来由 renderPager() 重新决定要不要挂上。留着它只会让人在等待那几秒点错。
+    pager.hidden = true;
     deepEl.innerHTML = ''; dirEl.innerHTML = '';
 
     const t0 = performance.now();
@@ -232,6 +277,7 @@
       } else {
         resultsEl.innerHTML = emptyCard('检索接口无响应', '请检查本机网络，或稍后重试。第三方公开接口可能临时失效。');
         meta.textContent = '查询失败 · 用时 ' + ms + 'ms';
+        pagerOnFail(page);          // 这次搜索什么都没拿到，翻页条不该还挂着
       }
       if (dr.status === 'fulfilled') renderDeep(dr.value);
       if (cr.status === 'fulfilled') renderCatalog(cr.value);
@@ -239,6 +285,7 @@
     } catch (e) {
       if (e.name === 'AbortError') return;
       resultsEl.innerHTML = emptyCard('出错了', esc(e.message));
+      pagerOnFail(page);
     } finally {
       goBtn.disabled = false;
     }
@@ -278,6 +325,7 @@
       return;
     }
     resultsEl.innerHTML = d.results.map((r, i) => card(r, i)).join('');
+    revealIn(resultsEl);
     state.cache = {};
     d.results.forEach((r, i) => { state.cache[i] = r; });
   }
@@ -339,6 +387,18 @@
     pagemark.textContent = '第 ' + d.page + ' 页';
     prevBtn.disabled = d.page <= 1;
     nextBtn.disabled = !hasMore;
+  }
+
+  /* 这次搜索没成功时翻页条怎么处置。renderPager() 只在拿到数据时才被叫到，
+     所以失败那条路以前什么都不动 —— 上一个词留下的「上一页 / 下一页」就一直挂在
+     空结果上面，下一页还亮着，点下去用的是 state.kw（还是旧词）。
+     规则：第 1 页失败就整条收掉（没有上一页可回，留着只会让人以为还能翻）；
+     深层页失败时留着，那是回上一页 / 重试的出口，但下一页先按住（有没有得翻都不知道）。 */
+  function pagerOnFail(page) {
+    pager.hidden = page <= 1;
+    pagemark.textContent = '第 ' + page + ' 页';
+    prevBtn.disabled = page <= 1;
+    nextBtn.disabled = true;
   }
 
   /* 展开某个源的播放线路 */
@@ -573,13 +633,80 @@
     grid.dataset.per = st.cols;
   }
 
+  /* 铺过的页留着那批 DOM 节点，翻回来时直接搬回去：不重新发 /api/hot、不重新解码海报、
+     也不会再各自淡一次——"翻页像把海报重新加载了一遍"就是这么来的。
+     按列数作废：窗口变宽一页装哪几条跟着变，旧节点自然不算数。
+     条目上限就是这一类的海报数（60 条 / 每页列数），不会无限攒，所以不再另设淘汰。
+     缓存 6 小时重建导致内容变了时，已经看过的那一页仍显示当时看到的那一批——
+     这正是"翻回来的页不许变"，没看过的页照常取新的（并且会在标题上写条数变了）。 */
+  const hotCache = {};
+  function hotCacheFor(kind, cols) {
+    let box = hotCache[kind];
+    if (!box || box.cols !== cols) box = hotCache[kind] = { cols: cols, map: {} };
+    return box.map;
+  }
+
+  /* 一次真正的左右推入：旧行往一边退场，新行从另一边顶进来，两边的位移量都是"一整行宽"，
+     所以两行始终正好挨着，看上去是一条连续的海报带在横移。
+     上一版只动新行（旧行直接没了），看着就是"原来那行突然不见、新的凭空插进来"——那正是"假"。
+     做法：新行留在正常流里占住盒子高度（所以进场时区块高度不跳），旧行那批节点搬进一个
+     绝对定位、盖在原位置上的 .ghost，动效跑完直接把 ghost 摘掉；那批节点只剩缓存里的引用，
+     翻回来时 replaceChildren 会再把它们搬回来。
+     dir=0（同一页重铺、首屏第一次铺）不推，直接换。 */
+  const pushing = {};          // kind -> 收尾函数（连点时先把上一次结掉，别叠两层 ghost）
+  function swapRow(grid, kind, fill, dir) {
+    if (pushing[kind]) pushing[kind]();
+    const old = Array.prototype.slice.call(grid.children);
+    fill(grid);
+    if (!dir || noMotion() || !old.length) return;
+    const group = grid.closest('.hotgroup') || grid.parentNode;
+    const ghost = document.createElement('div');
+    ghost.className = 'hotgrid ghost';
+    ghost.style.top = grid.offsetTop + 'px';     // 相对 .hotgroup —— 它是 grid 的 offsetParent
+    group.insertBefore(ghost, grid);
+    ghost.replaceChildren.apply(ghost, old);
+    void ghost.offsetWidth;       // 强制重排：同名 class 第二次才播得动，否则只有第一下会动
+    ghost.classList.add(dir > 0 ? 'out-left' : 'out-right');
+    grid.classList.add(dir > 0 ? 'in-right' : 'in-left');
+    let timer = 0, gone = false;
+    const done = () => {
+      if (gone) return;              // animationend / onfinish / 定时器都会来收这个尾，只认第一次
+      gone = true;
+      clearTimeout(timer);
+      delete pushing[kind];
+      grid.classList.remove('in-right', 'in-left');
+      ghost.remove();
+    };
+    pushing[kind] = done;
+    ghost.addEventListener('animationend', done, { once: true });
+    grid.addEventListener('animationend', done, { once: true });
+    // Web Animations 的 onfinish 比 animationend 更可靠（动画被快进或直接跳到末尾时也会回来）
+    const an = ghost.getAnimations ? ghost.getAnimations()[0] : null;
+    if (an) an.onfinish = done;
+    // animationend 不一定来（元素中途被隐藏、合成器不推帧、CSS 那边因 reduced-motion
+    // 根本没动画），不兜一层的话 ghost 会一直盖在这一组上面挡住新行。
+    // 动画本身 .32s，所以 480ms 是"肯定结束了"的那个点；真卡住的场合也就是 480ms 后收尾。
+    timer = setTimeout(done, 480);
+  }
+
   async function showHotPage(kind, page) {
     const grid = document.querySelector('.hotgrid[data-kind="' + kind + '"]');
     if (!grid) return;
     const cols = hotCols(grid);
     const st = hotState[kind] || (hotState[kind] = { page: 0, cols: cols, total: +grid.dataset.total || 0 });
+    const prev = st.page;          // 换页方向要在改 st.page 之前记住：0 表示"同一页重铺"，不推
     st.cols = cols;
     st.page = Math.max(0, page);
+    const moving = st.page - prev;
+    const cache = hotCacheFor(kind, cols);
+    const seen = cache[st.page];
+    if (seen) {
+      // replaceChildren 是"搬"不是"复制"：数组里那些元素同时只在一个 grid 里，
+      // 而数组本身还留着引用，所以下一次翻回来还有得搬。
+      swapRow(grid, kind, (g) => g.replaceChildren.apply(g, seen), moving);
+      paintHotNav(kind);
+      return;
+    }
     const offset = st.page * cols;
     try {
       // 首屏那 12 条已经在页面里，第 0 页直接切片，不用再发一次请求
@@ -603,7 +730,10 @@
         noteHotChange(kind, st.total, d.total || 0);
         st.total = d.total || 0;
       }
-      grid.innerHTML = items.map(hotCard).join('');
+      const html = items.map(hotCard).join('');
+      swapRow(grid, kind, (g) => { g.innerHTML = html; }, moving);
+      cache[st.page] = Array.prototype.slice.call(grid.children);
+      revealIn(grid);
       paintHotNav(kind);
     } catch (e) { /* 保持已渲染内容不动 */ }
   }
@@ -636,6 +766,10 @@
     }, 250);
   });
 
+  // 服务端渲染的首屏那 12 条已经带图在页面上了：先给它们补一次淡入开关。
+  // 下面的重铺正常会把它们换掉，但 /api/hot 挂了时是"保持已渲染内容不动"，
+  // 那时候要是没人打过 .loaded，海报就成一片透明了。
+  revealIn(document);
   ['movie', 'tv'].forEach((kind) => {
     if (document.querySelector('.hotgrid[data-kind="' + kind + '"]')) showHotPage(kind, 0);
   });
@@ -760,6 +894,7 @@
     if (!dpBack) dpBack = document.activeElement;
     dpTitle.textContent = s.title || '详情';
     dpBody.innerHTML = headHTML(s);
+    revealIn(dpBody);               // 面板是点开才建的，海报同样要淡入而不是蹦出来
     dpEl.hidden = false;
     dpEl.classList.add('on');
     document.body.classList.add('dp-open');

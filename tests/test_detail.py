@@ -310,7 +310,11 @@ check("换源/切条目后旧请求回来不会填新面板（token 校验）",
 check("失败有重试入口，且会清掉缓存里的失败结果",
       "dpretry" in js and "delete dcache[dkey(s)]" in js)
 check("Esc 关面板", "e.key === 'Escape' && !dpEl.hidden" in js)
-check("hidden 真能盖掉 .dpanel 的 flex", ".dpanel[hidden] { display: none; }" in css)
+check("hidden 真的能盖住 flex/block：全站一条 [hidden]，带 !important",
+      "[hidden] { display: none !important; }" in css,
+      re.findall(r"\[hidden\][^\n]{0,60}", css)[:3])
+check("不再各打各的补丁（那正是漏掉一个元素就复发的写法）",
+      ".dpanel[hidden]" not in css and ".homebtn[hidden]" not in css, None)
 check("显隐只用 hidden 表达，不写死 aria-hidden",
       'aria-hidden' not in html[html.index('<aside class="dpanel"'):html.index("</main>")])
 check("面板滑入动画与骨架屏闪动在减少动效时都关掉",
@@ -340,6 +344,47 @@ check("点当前这个源不重开、也不再上报一条（不然一次查看�
       "if (String(x.id) === String(s.src) && String(x.vid) === String(s.vid)) return;" in js)
 check("用法说明改成了详情按钮，不再提右键",
       "详情" in html and "右键" not in html[html.index('<div class="placeholder"'):html.index("</main>")])
+
+print("\n7) 海报淡入：不是一片张着等，也不是一片透明")
+fade = css[css.index("html.hasjs .cover img"):css.index("@media (prefers-reduced-motion: reduce)",
+                                                     css.index("html.hasjs .cover img"))]
+check("三种海报盒（结果卡片、猜你想搜、详情面板）都在淡入范围内",
+      ".cover img" in fade and ".hcover img" in fade and ".dpcover img" in fade, fade[:200])
+check("默认透明、加载完淡上来，时长在 .4s 以内（比这长就像幻灯片）",
+      "opacity: 0" in fade and "transition: opacity .34s ease" in fade
+      and "opacity: 1 }" in css[css.index(".cover img.loaded"):css.index("@media (prefers-reduced-motion",
+                                                                        css.index(".cover img.loaded"))],
+      None)
+check("第二次见这张图直接显示、不走过渡（.noanim）——翻页翻回来就是这条",
+      "html.hasjs .cover img.noanim" in css and "transition: none" in
+      css[css.index("html.hasjs .cover img.noanim"):
+          css.index("@media (prefers-reduced-motion: reduce)", css.index("html.hasjs .cover img.noanim"))],
+      None)
+check("闸门挂在 html.hasjs 上：禁用 JS 与爬虫拿不到 .loaded，也不能把海报变成一片空白",
+      "html.hasjs" in fade and (BASE / "zhuiju" / "templates" / "_theme.html").read_text(encoding="utf-8")
+      .count("classList.add('hasjs')") == 1, None)
+theme = (BASE / "zhuiju" / "templates" / "_theme.html").read_text(encoding="utf-8")
+check("这个标记和主题一样在样式表之前的内联脚本里打，晚一帧就是先看见图再看见它变透明",
+      theme.index("hasjs") < theme.index("dataset.theme"), None)
+rev = js[js.index("function revealIn(root)"):js.index("const noMotion")]
+check("已经缓存好的图当场显示（load 事件早发过了，只等事件就永远透明）",
+      "(im.complete && im.naturalWidth)" in rev and "classList.add('loaded', 'noanim')" in rev, None)
+check("第二次见到同一张海报不再淡：翻回来的那页不该像重新加载",
+      "shownPics.has(src)" in rev and "im.classList.add('loaded')" in rev
+      and "shownPics.add(src)" in rev, None)
+check("记下的地址有上限（开一整天的标签页不能无限攒）",
+      "PICS_MAX = 3000" in js and "shownPics.size < PICS_MAX" in rev, None)
+check("同一棵子树重复 reveal 不重复挂监听", "if (im.dataset.shown) return;" in rev, None)
+check("兜一个超时：卡在既不 load 也不 error 的连接上时，宁可显示也别留空白，而且不再淡",
+      "setTimeout(() => im.classList.add('loaded', 'noanim'), 8000)" in rev, None)
+for anchor in ("revealIn(resultsEl);", "revealIn(grid);", "revealIn(dpBody);", "revealIn(document);"):
+    check("渲染点都调了它：" + anchor, anchor in js, None)
+check("服务端渲染那 12 条不再靠 inline onload（缓存图根本不触发它）",
+      'onload="this.closest' not in html, re.findall(r"<img[^>]{0,120}", html)[:2])
+check("暗色主题不再用 opacity 压海报，否则和淡入抢同一个属性",
+      "[data-theme=\"dark\"] img { filter: brightness(.94); }" in css
+      and "dark\"] img, [data-theme=\"dark\"] .hcover img { opacity" not in css,
+      re.findall(r'\[data-theme="dark"\] img[^\n]{0,60}', css)[:2])
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

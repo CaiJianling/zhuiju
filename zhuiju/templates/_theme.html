@@ -1,6 +1,10 @@
 {# 主题预置：必须在样式表之前、且内联（不能 defer），否则暗色用户每次刷新都会闪一下白。 #}
 <script>
 (function () {
+  // 顺带打上"JS 在跑"的标记：海报淡入（opacity:0 -> .loaded -> 淡上来）只在有 JS 时成立，
+  // 不这么闸门，爬虫与禁用 JS 的浏览器会拿到 opacity:0 却等不到 .loaded，整片海报是空的。
+  // 和主题一样，这个也必须在这张样式表之前打在 <html> 上，晚一帧就是先看见图再看见它变透明。
+  document.documentElement.classList.add('hasjs');
   var m = "auto";
   try { m = localStorage.getItem("zhuiju_theme") || "auto"; } catch (e) {}
   var d = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;

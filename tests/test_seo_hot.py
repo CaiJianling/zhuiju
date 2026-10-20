@@ -3,6 +3,7 @@
 
     python tests/test_seo_hot.py
 """
+import inspect
 import json
 import sys
 from datetime import date, timedelta
@@ -31,17 +32,25 @@ check("国产动漫 → tv", hot.kind_of("国产动漫") == "tv", hot.kind_of("�
 check("大陆综艺 → tv", hot.kind_of("大陆综艺") == "tv", hot.kind_of("大陆综艺"))
 check("无法归类返回空", hot.kind_of("") == "", hot.kind_of(""))
 
-print("\n2) 最近半年判定")
+print("\n2) 最近一年判定（以前是半年 183 天）")
 today = date.today()
-since = today - timedelta(days=hot.HALF_YEAR_DAYS)
+check("窗口是一年，不是半年", hot.WINDOW_DAYS == 365, hot.WINDOW_DAYS)
+check("旧常量名已经不在了（改名比改数值更容易发现漏改的地方）",
+      not hasattr(hot, "HALF_YEAR_DAYS"), None)
+since = today - timedelta(days=hot.WINDOW_DAYS)
 check("窗口内更新时间算新", hot._recent({"updated": (today - timedelta(days=30)).isoformat(),
                                        "year": ""}, since) is True)
 check("窗口外且无年份 → 不算新",
       hot._recent({"updated": (today - timedelta(days=400)).isoformat(), "year": ""}, since) is False)
 check("今年年份即算新（更新时间缺失时兜底）",
       hot._recent({"updated": "", "year": str(today.year)}, since) is True)
+check("去年年份也算新：第二判跟着 since 那一年走，不再写死「今年」",
+      hot._recent({"updated": "", "year": str(today.year - 1)}, since) is True, None)
+check("前年就出窗了", hot._recent({"updated": "", "year": str(today.year - 2)}, since) is False, None)
 check("vod_time 非法字符串不崩", hot._recent({"updated": "N/A", "year": "2020"}, since) is False)
 check("vod_year 为 None 不崩", hot._year(None) == 0, hot._year(None))
+check("窗口跟着 since 而不是 today.year：半年窗口下这两判等价，一年窗口才有区别",
+      hot._recent({"updated": "", "year": str((today - timedelta(days=200)).year)}, since) is True, None)
 
 print("\n3) SEO 关键词清洗与落地页地址")
 check("去掉尖括号等危险字符", seo.clean_kw("<script>x</script>") == "scriptxscript",
@@ -87,7 +96,13 @@ css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
 grid_css = css[css.index(".hotgrid {"):css.index(".hotcard {")]
 check("热榜网格改成网格布局而非 flex 横滚", "display: grid" in grid_css, grid_css)
 check("列数走 --hot-cols 变量", "--hot-cols" in grid_css and "repeat(var(--hot-cols" in grid_css)
-check("没有横向滚动条", "overflow-x" not in grid_css and "scrollbar-width" not in grid_css, grid_css)
+# 注释里会出现 "auto" 这类词（解释为什么用 clip 不用 hidden），要看的是声明不是散文
+grid_rules = re.sub(r"/\*.*?\*/", "", grid_css, flags=re.S)
+check("没有横向滚动条（翻页不是横拖）：这一带只许 clip，不许 auto/scroll",
+      not re.search(r"overflow[^:]*:\s*[^;}]*(auto|scroll)", grid_rules)
+      and "scrollbar-width" not in grid_rules
+      and "overflow-x: clip" in grid_rules,      # 推入时进场那一行裁在这组里，不外溢
+      re.findall(r"overflow[^;}]{0,26}", grid_rules))
 
 fake = {
     "since": "2026-04-01", "candidates": 99, "stale": False, "cached": True,
@@ -121,8 +136,10 @@ check("总数写在 data-total 上", 'data-total="30"' in html and 'data-total="
 check("上一页按钮初始禁用",
         all('class="pbtn prev" type="button" data-kind="%s" data-dir="-1" disabled' % k in html
             for k in ("movie", "tv")))
-check("翻页时整行替换而非追加", "innerHTML = items.map(hotCard)" in
-      (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8"))
+js7 = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+check("翻页时整行替换而非追加", "const html = items.map(hotCard).join('');" in js7
+      and "(g) => { g.innerHTML = html; }" in js7,
+      re.findall(r"items\.map\(hotCard\)[^\n]{0,40}", js7)[:2])
 check("首屏卡片共 24 张", html.count('class="hotcard"') == 24, html.count('class="hotcard"'))
 
 print("\n8) /api/hot 分页接口：按 offset/limit 切片，越界不报错")
@@ -237,6 +254,119 @@ check("说清这份清单不联网、以及为什么有的站只能自己打开"
       "这份清单不联网" in rs and "已验证的 GET 搜索模板" in rs)
 check("搜索完再进这个标签页走的仍是真查询",
       "fetch('/api/cloud?kw='" in js and "state.cloudKw = state.kw" in js)
+
+print("\n12) 猜你想搜翻页动画、海报不许重复加载，与「没有搜索时不挂翻页」")
+hot = js[js.index("const hotCache = {};"):js.index("function noteHotChange")]
+check("翻页是两行互推：新行从右边顶进来、旧行往左边退场（上一页反过来）",
+      "const moving = st.page - prev;" in hot
+      and "dir > 0 ? 'out-left' : 'out-right'" in hot
+      and "dir > 0 ? 'in-right' : 'in-left'" in hot,
+      re.findall(r"'(out-\w+|in-\w+)'", hot))
+check("方向在改 st.page 之前记住（不然永远算出 0）",
+      hot.index("const prev = st.page;") < hot.index("st.page = Math.max(0, page)"), None)
+check("旧行是搬进 ghost 而不是直接消失（凭空插进来就是从这里来的）",
+      "const old = Array.prototype.slice.call(grid.children);" in hot
+      and "ghost.replaceChildren.apply(ghost, old);" in hot, None)
+check("ghost 定位在 grid 原来的位置上，新行留在正常流里占高度（进场时区块高度不跳）",
+      "ghost.className = 'hotgrid ghost'" in hot
+      and "ghost.style.top = grid.offsetTop" in hot, None)
+check("强制重排一次，同名 class 第二次才播得动", "void ghost.offsetWidth;" in hot, None)
+check("同一页重铺（窗口变宽）与首屏不推：dir=0 或系统要求减少动效时直接换",
+      "if (!dir || noMotion() || !old.length) return;" in hot, None)
+check("连点两次不能叠两层 ghost：新的推入先把上一次收尾",
+      "if (pushing[kind]) pushing[kind]();" in hot and "pushing[kind] = done;" in hot, None)
+check("animationend 不一定来，所以三路收尾（两边的 animationend + onfinish + 定时器兜底）",
+      "ghost.addEventListener('animationend', done, { once: true });" in hot
+      and "grid.addEventListener('animationend', done, { once: true });" in hot
+      and "an.onfinish = done;" in hot and "timer = setTimeout(done, 480);" in hot, None)
+check("收尾只认第一次（三条路都会来，重复执行会把下一次推入的登记删掉）",
+      "if (gone) return;" in hot and "let timer = 0, gone = false;" in hot, None)
+check("兜底时间比动画本身长一点但不拖太久（动画 .32s → 480ms 收尾）",
+      ".32s ease-out both" in css and "setTimeout(done, 480)" in hot, None)
+check("铺过的页留着那批 DOM 节点，翻回来直接搬回去：不重新解码海报、也不再各自淡一次",
+      "(g) => g.replaceChildren.apply(g, seen)" in hot
+      and "cache[st.page] = Array.prototype.slice.call(grid.children);" in hot, None)
+check("翻回来那一页连 /api/hot 都不该再发：缓存在取数之前就判",
+      hot.index("if (seen) {") < hot.index("const offset = st.page * cols;"),
+      (hot.index("if (seen) {"), hot.index("const offset = st.page * cols;")))
+check("列数一变旧节点就作废（一页装哪几条跟着变）",
+      "if (!box || box.cols !== cols) box = hotCache[kind]" in hot, None)
+check("搬回来的页同样要走一次推入（不然看着像没反应）",
+      hot.count("swapRow(grid, kind, (g)") == 2, re.findall(r"swapRow\([^\n]{0,40}", hot))
+css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
+kf = css[css.index("@keyframes hotOutLeft"):css.index(".hotcard {")]
+check("CSS 里进退场两组关键帧都在，位移量是一整行宽（100%）",
+      "@keyframes hotOutLeft" in kf and "@keyframes hotInRight" in kf
+      and "translate3d(-100%, 0, 0)" in kf and "translate3d(100%, 0, 0)" in kf, kf[:140])
+check("时长 .4s 以内，且没有任何 opacity 参与（半透明的行进场就是上一版被说闪的原因）",
+      ".32s ease-out both" in kf and "opacity" not in kf, None)
+check("进场的那一行要被裁在组里，不能压到下面「电视剧」那一组",
+      ".hotgroup { position: relative; overflow-x: clip; }" in css,
+      re.findall(r"\.hotgroup \{[^}]*\}", css)[:2])
+check("用 clip 而不是 hidden：hidden 会把纵向也强行变成 auto，聚焦框会被裁",
+      "overflow-x: clip" in css and ".hotgroup { position: relative; overflow: hidden" not in css, None)
+check("系统要求减少动态效果时不播（CSS 与 JS 各挡一次）",
+      "@media (prefers-reduced-motion: reduce)" in kf
+      and "prefers-reduced-motion: reduce" in js, None)
+check("动效挂在整行容器上而不是每张卡上（一次合成，九张卡不会各自错开拍）",
+      ".hotgrid.in-right" in kf and ".hotcard.in-" not in kf, None)
+runf = js[js.index("async function run(rawKw, page)"):js.index("async function getJSON(")]
+check("空关键词走和「首页」那颗按钮同一套重置，不是只把猜你想搜显出来",
+      "if (!kw) {" in runf and "goHome();" in runf.split("if (!kw) {")[1][:200],
+      re.findall(r"if \(!kw\) \{.{0,120}", runf, re.S)[:1])
+gh = js[js.index("function goHome()"):js.index("$('examples')")]
+check("这套重置会把结果与上一页/下一页一起收掉",
+      "pager.hidden = true" in gh and "resultsEl.innerHTML = ''" in gh, None)
+check("标签栏不跟着搜索一起藏了：只清那一行「命中 N 部…」",
+      "statline.hidden" not in js and "meta.textContent = '';" in gh, None)
+html_tabs = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
+check("模板里 #statline 不再有 hidden（没有关键词也要能切到网盘查询 / 资源站目录）",
+      'id="statline"' in html_tabs and 'id="statline" hidden' not in html_tabs
+      and '<section class="statline" id="statline">' in html_tabs,
+      re.findall(r'<section class="statline"[^>]*>', html_tabs))
+check("落地页上清空关键词提交要真的跳回 /，否则 URL 停在一个没内容的关键词页",
+      "if (boot.kw) { location.href = '/'; return; }" in gh, None)
+check("开始查新词时结果已经换成骨架屏，上一个词的翻页条同时收掉",
+      "pager.hidden = true;" in runf.split("class=\"skel\"")[1][:220],
+      re.findall(r"class=\"skel\".{0,160}", runf, re.S)[:1])
+pf = js[js.index("function pagerOnFail(page)"):js.index("function linesHTML")]
+check("搜索没成功时翻页条自己收：第 1 页整条没了，深层页只留「上一页」这条退路",
+      "pager.hidden = page <= 1;" in pf and "nextBtn.disabled = true;" in pf
+      and "prevBtn.disabled = page <= 1;" in pf, pf[:200])
+check("两条失败出口都调了它（接口无响应与抛异常），不靠 renderPager 兜",
+      js.count("pagerOnFail(page);") == 2 and "AbortError" in runf, js.count("pagerOnFail(page);"))
+
+print("\n13) 候选池 → 页面：每类不截条数，类别兜底要走得到")
+# 这个文件后半段把 `hot` 这个名字先后用成了一个字典和一个字符串切片（第 7、12 节的
+# 局部变量），所以这里重新引一次模块本体，不去动那两处——它们各自被十几行断言引用着。
+from zhuiju import hot as hotlib  # noqa: E402
+mk = hotlib.row_kind
+check("CMS 的 type 认得时就用它", mk({"kind": "movie"}, {"douban_type": "tv"}) == "movie", None)
+check("CMS 认不出但豆瓣标了 tv → 救回来（以前这种行直接丢）",
+      mk({"kind": ""}, {"douban_type": "tv"}) == "tv", None)
+check("豆瓣标 movie 的同样救得回来", mk({"kind": ""}, {"douban_type": "movie"}) == "movie", None)
+check("两边都认不出 → 留空，宁可不显示也不猜类别",
+      mk({"kind": ""}, None) == "" and mk({"kind": ""}, {}) == "", None)
+bsrc = inspect.getsource(hotlib.build)
+check("每类不再截 60 条（实测 287 条电视剧被砍掉 227 条）",
+      "[:limit_each]" not in bsrc and "limit_each" not in inspect.signature(hotlib.build).parameters,
+      str(inspect.signature(hotlib.build)))
+check("旧的那道 `if b[\"kind\"]` 过滤器没了：兜底必须在它之前生效",
+      'if b["kind"]' not in bsrc, re.findall(r'.*b\["kind"\].*', bsrc)[:2])
+check("丢掉几条要记下来（标题那句要说，不能悄悄少一批）",
+      '"dropped_kind": dropped' in bsrc and '"window_days": WINDOW_DAYS' in bsrc, None)
+pg = inspect.getsource(hotlib.page)
+check("翻页仍然一次只给一页的量：全量只存在缓存里，不整包发给浏览器",
+      "limit = max(1, min(30, int(limit)))" in pg and "rows[offset:offset + limit]" in pg, None)
+head_html = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
+sub = head_html[head_html.index('class="hotsub"'):head_html.index("</h2>", head_html.index('class="hotsub"'))]
+check("标题写的是成品数，不再只写「共 N 条候选」",
+      "候选 {{ seo.hot.candidates }} 条 →" in sub and "seo.hot.movie_total" in sub
+      and "seo.hot.tv_total" in sub, sub)
+check("认不出类别丢掉几条也写在标题上", "dropped_kind" in sub and "丢掉" in sub, None)
+check("「最近一年/半年」跟着缓存里的 window_days 走，旧缓存不会提前说新话",
+      "seo.hot.window_days or 0" in sub and ">= 365" in sub, None)
+check("起算日期仍然写出来（窗口放宽了多少天，看这个数就知道）", "seo.hot.since" in sub, None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

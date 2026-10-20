@@ -77,7 +77,9 @@
     </div>
   </form>
 
-  <section class="statline" id="statline" hidden>
+  {# 标签栏一直在：网盘查询、资源站目录这两件事本来就不需要关键词。
+     它右边那行 #meta（命中 N 部…）才是随搜索有无开关的。 #}
+  <section class="statline" id="statline">
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="vod">影视资源</button>
       <button class="tab" data-tab="cloud">网盘查询</button>
@@ -130,7 +132,14 @@
 
   {% if not seo.kw and (seo.hot.movie or seo.hot.tv) %}
   <section class="hot" id="hot" aria-label="猜你想搜">
-    <h2>猜你想搜 <span class="hotsub">最近半年 · 截至 {{ seo.hot.since }} 起算 · 共 {{ seo.hot.candidates }} 条候选</span></h2>
+    {# 这里写的是"成品数"，不是候选池大小。以前只写「共 346 条候选」，人当然要问
+       "那怎么翻页只有 40 部 + 60 部"：346 是归类之前的池子，后面还要过类别这一关，
+       页面上真能翻到的是电影 / 电视剧各自的条数。丢掉的那几条也写出来，别说瞎话。
+       "最近一年 / 半年"跟着 window_days 走 —— 缓存可能是上一版窗口建的，标签不能提前说新话。 #}
+    <h2>猜你想搜 <span class="hotsub">最近{% if (seo.hot.window_days or 0) >= 365 %}一年{% else %}半年{% endif %}
+      · 截至 {{ seo.hot.since }} 起算 · 候选 {{ seo.hot.candidates }} 条 →
+      电影 {{ seo.hot.movie_total or 0 }} / 电视剧 {{ seo.hot.tv_total or 0 }}
+      {%- if seo.hot.dropped_kind %}（认不出类别丢掉 {{ seo.hot.dropped_kind }} 条）{% endif %}</span></h2>
     {% for sec, label in (('movie', '电影'), ('tv', '电视剧')) %}
       {% set rows = seo.hot[sec] %}
       {# rows 已经是首屏那一行，能不能翻页要看总数 total（由 _first_row 写入），不是 len(rows) #}
@@ -153,8 +162,9 @@
              详情的数据都在按钮自己的 data-* 上，点开才发请求。 #}
           <div class="hotcard">
             <span class="hcover">
+              {# 淡入不靠这里的 inline onload：app.js 的 revealIn() 统一处理
+                 （缓存图不发 load 事件，inline onload 那种写法对它们永远不会触发） #}
               {%- if x.pic %}<img loading="lazy" decoding="async" src="{{ x.pic }}" alt=""
-                                     onload="this.closest('.hcover').classList.add('loaded')"
                    onerror="this.remove()">{% endif %}
               <button class="dbtn" type="button" data-detail aria-label="查看《{{ x.title }}》的详情"
                       data-title="{{ x.title }}" data-pic="{{ x.pic }}"

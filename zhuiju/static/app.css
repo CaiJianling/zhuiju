@@ -64,6 +64,15 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性必须真的能藏住东西 —— 浏览器自带的 `[hidden] { display: none }` 是 UA 样式，
+   作者样式表里任何一条 `display:` 都压得过它。本站就踩过：`.pager { display: flex }` 一写，
+   `#pager.hidden = true` 完全没用，首页没有搜索也摆着「上一页 / 下一页」；`.statline`、
+   `.dpanel` 同理（那两条当时是各别打补丁的）。这种 bug 从 JS 侧看一切正常 —— 读出来的
+   `el.hidden` 就是 true，量不出来的一直是"它到底显不显示"。所以这里给一条全局的，
+   带 !important（作者规则的 display 五花八门，靠特异性追不完），
+   以后新增"用 hidden 控制显隐"的元素不需要再各打一份补丁。 */
+[hidden] { display: none !important; }
+
 html { -webkit-text-size-adjust: 100%; }
 
 body {
@@ -167,7 +176,6 @@ main { padding: 18px 0 44px; }
 .homebtn svg { width: 20px; height: 20px; fill: currentColor; }
 .homebtn:hover { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
 .homebtn:active { transform: translateY(1px); }
-.homebtn[hidden] { display: none; }
 .field input {
   flex: 1;
   min-width: 0;
@@ -697,6 +705,28 @@ code {
 @media (max-width: 960px)  { .hotgrid { --hot-cols: 4; } }
 @media (max-width: 720px)  { .hotgrid { --hot-cols: 3; } }
 @media (max-width: 520px)  { .hotgrid { --hot-cols: 2; } }
+/* 猜你想搜的翻页是"两行互相推开"，不是"新行自己挪进来"。
+   旧行留在原地、往一边退场，新行从另一边顶进来，两行始终正好挨着（位移量都是 100% 行宽），
+   所以看上去是一条连续的海报带在横移 —— 只动新行的话，旧行是"啪"地消失的，
+   新行再凭空插进来，那个就是"假"。
+   实现：换内容时先把旧行那批节点搬进一个 .ghost（绝对定位在 grid 原来的位置上），
+   新行仍留在正常流里占住盒子高度；两边各跑一条动画，跑完把 ghost 摘掉。
+   溢出必须裁在这一组里：不然新行进场时有一半压在下面的「电视剧」上。
+   用 `overflow-x: clip` 而不是 `hidden`：clip 才允许纵向保持 visible（hidden 会把
+   另一轴也强行变成 auto，卡片聚焦框和下沿的阴影会被横着那条裁掉）。 */
+.hotgroup { position: relative; overflow-x: clip; }
+.hotgrid.ghost { position: absolute; left: 0; width: 100%; margin: 0; z-index: 1; }
+@keyframes hotOutLeft { to { transform: translate3d(-100%, 0, 0) } }
+@keyframes hotOutRight { to { transform: translate3d(100%, 0, 0) } }
+@keyframes hotInRight { from { transform: translate3d(100%, 0, 0) } to { transform: none } }
+@keyframes hotInLeft { from { transform: translate3d(-100%, 0, 0) } to { transform: none } }
+.ghost.out-left { animation: hotOutLeft .32s ease-out both }
+.ghost.out-right { animation: hotOutRight .32s ease-out both }
+.hotgrid.in-right { animation: hotInRight .32s ease-out both }
+.hotgrid.in-left { animation: hotInLeft .32s ease-out both }
+@media (prefers-reduced-motion: reduce) {
+  .ghost.out-left, .ghost.out-right, .hotgrid.in-right, .hotgrid.in-left { animation: none }
+}
 .hotcard {
   display: flex;
   flex-direction: column;
@@ -1097,7 +1127,10 @@ code {
 /* 主题切换按钮：放在标题旁，文字由 theme.js 写（当前配色 + 当前模式） */
 .themebtn { font-size: var(--fs-sm); font-weight: 400; margin-left: 8px; vertical-align: 2px; }
 [data-theme="dark"] body { -webkit-font-smoothing: auto; }
-[data-theme="dark"] img, [data-theme="dark"] .hcover img { opacity: .94; }
+/* 暗色下海报压暗一点，别在深底上刺眼。原来写的是 opacity:.94，
+   那是半透明——会把底下的卡片色透上来，而且和"淡入"用的 opacity 抢同一个属性
+   （未加载的图会被它顶成半可见）。改成 brightness，与淡入互不干涉。 */
+[data-theme="dark"] img { filter: brightness(.94); }
 
 /* 主题切换的过渡：只在切换那 ~0.3s 挂 .theme-anim，之后立刻摘掉。
    若把它写成常驻的 * 规则，hover/focus 原有的短过渡会被拖成 300ms，
@@ -1176,7 +1209,6 @@ code {
   transform: translateX(calc(100% + 20px));
   transition: transform .26s ease;
 }
-.dpanel[hidden] { display: none; }
 .dpanel.on { transform: none; }
 .dphead {
   display: flex;
@@ -1237,6 +1269,30 @@ code {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* ---------------- 海报淡入 ----------------
+   海报是现经 /img 取回再回传的，比卡片本身晚半拍到；直接显示就是"啪"一下蹦出来，
+   九张陆续蹦完看着像整页在闪。所以有 JS 时先透明，加载完了再淡上来。
+   .loaded 由 app.js 的 revealIn() 加：已经缓存好的图插进 DOM 时 load 事件早发过了，
+   那时必须当场补一次，否则永远透明。
+   挂在 html.hasjs 下是必须的：这个内联标记在 _theme.html 里、样式表之前打上，
+   爬虫和禁用 JS 的浏览器拿不到 .loaded，若不设这道闸海报就整片是空的 🎬 占位。
+   加载失败走 img 的 onerror="this.remove()"，图没了，占位自然露出来，不用额外处理。 */
+html.hasjs .cover img, html.hasjs .hcover img, html.hasjs .dpcover img {
+  opacity: 0;
+  transition: opacity .34s ease;
+}
+html.hasjs .cover img.loaded,
+html.hasjs .hcover img.loaded,
+html.hasjs .dpcover img.loaded { opacity: 1 }
+/* 已经见过一次的海报（翻页翻回来、或浏览器早就解码好）不给过渡：
+   淡入只在"第一次真去取这张图"时有意义，来回翻页每张再淡一次看着就像海报在重新加载。 */
+html.hasjs .cover img.noanim,
+html.hasjs .hcover img.noanim,
+html.hasjs .dpcover img.noanim { transition: none }
+@media (prefers-reduced-motion: reduce) {
+  html.hasjs .cover img, html.hasjs .hcover img, html.hasjs .dpcover img { transition: none }
 }
 .dptags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .dprow { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-2); }
