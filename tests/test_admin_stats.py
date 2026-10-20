@@ -113,7 +113,9 @@ check("聚合：独立 IP 数", agg["ips"] == 3, agg["ips"])
 check("聚合：独立关键词数", agg["kws"] == 4, agg["kws"])
 check("聚合：零结果数", agg["empty"] == 1, agg["empty"])
 check("聚合：按天分桶", len(agg["by_day"]) == 3, agg["by_day"])
-check("聚合：按天是时间正序", [d["day"] for d in agg["by_day"]] == sorted(d["day"] for d in agg["by_day"]))
+check("聚合：按天最新的一天在最上面（后台先看的是「今天有没有人用」）",
+      [d["day"] for d in agg["by_day"]] == sorted((d["day"] for d in agg["by_day"]), reverse=True),
+      [d["day"] for d in agg["by_day"]])
 check("聚合：热门关键词第一名", agg["top_kw"][0]["kw"] == "庆余年" and agg["top_kw"][0]["n"] == 2,
       agg["top_kw"][:1])
 check("聚合：活跃 IP 统计了首末次", agg["top_ip"][0]["first_day"] <= agg["top_ip"][0]["last_day"])
@@ -643,7 +645,8 @@ print("\n19) 区块顺序与明细翻页控件")
 dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)
 ids = [m for m in re.findall(r'<section class="asect" id="(\w+)"', dash)]
 check("明细在归属地之前（归属地垫底）", ids[-1] == "geo" and "detail" in ids, ids)
-check("观看点击紧跟明细，归属地仍然垫底", ids == ["detail", "clicks", "geo"], ids)
+check("带 id 的区块只有明细与归属地（观看点击已并进明细，不再单开一节）",
+      ids == ["detail", "geo"], ids)
 pager = dash[dash.index('class="pager"'):dash.index("</div>", dash.index('class="pager"'))]
 check("翻页区有跳转表单", 'class="jumpform"' in pager)
 check("跳转框是 number 且带 min/max",
@@ -669,14 +672,19 @@ check("也就不需要给 #detail 留滚动避让了",
 check("换页后重算框高；整块换 innerHTML 等于换个新滚动框，自然从第一行起",
       "root.innerHTML = next.innerHTML" in dash and "refold();" in dash)
 # 两张表都要能原地翻页，而它们的页码参数不能抢同一个名字
-check("明细用 page、观看点击用 cpage",
-      'name="page"' in dash and 'data-cpage' in dash and "cpage" in dash)
-check("翻页区块按 id 找自己那一块，不写死 #detail",
-      "doc.getElementById(root.id)" in dash and "SECTIONS" in dash,
-      re.findall(r"var SECTIONS = \{[^;]*", dash))
+check("明细的翻页控件仍只有 page 一套（cpage 那套随独立面板一起撤了）",
+      'name="page"' in dash and "data-cpage" not in dash and 'name="cpage"' not in dash
+      and "args_cnext" not in dash,
+      re.findall(r'name="(c?\w*page)"|data-(cpage)', dash))
+check("只剩明细一个区块要原地翻页，脚本就写死它自己那一块",
+      "doc.getElementById(root.id)" in dash and "SECTIONS" not in dash
+      and "getElementById('detail')" in dash,
+      re.findall(r"getElementById\([^)]*\)", dash)[:4])
 
-print("\n20) 观看点击：接口收什么、后台怎么列、明细那列怎么算")
-ct = lambda: stats_mod.list_clicks({})["total"]     # noqa: E731
+print("\n20) 观看点击：接口收什么、明细合流以后长什么样")
+ct = lambda f={}: stats_mod.click_stats(f)["count"]        # noqa: E731
+def ev(f={}, scope="click"):     # 合流列表：默认只看点开那一半
+    return stats_mod.list_activity(f, per=200, scope=scope)["items"]
 base = {"kw": "庆余年", "title": "庆余年 第一季", "src": "hhzy", "src_name": "火狐资源",
         "vid": "123", "line": "新浪线路", "ep": "第03集", "place": "panel"}
 n0 = ct()
@@ -688,29 +696,27 @@ check("javascript: 这类地址不进库（这一列进后台是要当链接点�
       r.status_code == 204 and ct() == n0 + 1, ct() - n0)
 r = c3.post("/api/click", json={**base, "url": ""})
 check("空地址不进库", r.status_code == 204 and ct() == n0 + 1, ct() - n0)
-row = {k: v for k, v in stats_mod.list_clicks({})["items"][0].items()}
+row = ev({"kw": "庆余年"})[0]
 check("存下来的是哪条：域名单独一列，聚合才按得住",
       row["host"] == "v.example.com" and row["place"] == "panel" and row["ep"] == "第03集", row)
 big = "T" * 500
 c3.post("/api/click", json={"url": "https://x.test/a?token=" + big, "kw": "K" * 200,
                             "title": "J" * 300, "line": "L" * 200, "ep": "E" * 200,
                             "src": "S" * 200, "vid": "V" * 200})
-row2 = stats_mod.list_clicks({"kw": "K" * 60})["items"][0]
+row2 = ev({"kw": "K" * 60})[0]
 check("字段一律截断，长度封顶",
       len(row2["url"]) <= stats_mod.CLICK_MAX_URL and len(row2["kw"]) <= 60
       and len(row2["title"]) <= 80 and len(row2["line"]) <= 40
       and len(row2["src"]) <= 32 and len(row2["vid"]) <= 32,
       {k: len(row2[k] or "") for k in ("url", "kw", "title", "line", "src", "vid")})
 c3.post("/api/click", json={"url": "https://y.test/b", "place": "bu-cun-zai"})
-row3 = stats_mod.list_clicks({"kw": ""})["items"][0]
 check("place 不在枚举里退回卡片线路，不写一个没人认识的值",
-      any(x["place"] == "card" and x["host"] == "y.test"
-          for x in stats_mod.list_clicks({})["items"]), None)
+      any(x["place"] == "card" and x["host"] == "y.test" for x in ev()), None)
 r = c3.post("/api/click", data=json.dumps({"url": "https://z.test/c", "kw": "正文"}),
             content_type="text/plain")
 check("sendBeacon 有时按 text/plain 发，正文照样解析",
-      r.status_code == 204 and stats_mod.list_clicks({"host": "z.test"})["total"] == 1,
-      stats_mod.list_clicks({"host": "z.test"})["total"])
+      r.status_code == 204 and stats_mod.click_stats({"host": "z.test"})["count"] == 1,
+      stats_mod.click_stats({"host": "z.test"})["count"])
 r = c3.post("/api/click", data="这不是 JSON", content_type="application/json")
 check("正文不是 JSON 也不 500（埋点不能把点击请求变成错误）", r.status_code == 204, r.status_code)
 r = c3.post("/api/click", json={"url": "https://w.test/d;1=1) OR 1=1 --", "kw": "' OR 1=1 --"})
@@ -726,8 +732,8 @@ try:
     app_mod.CLICK_MAX = 3
     got = [c3.post("/api/click", json={"url": f"https://r.test/{i}"}).status_code for i in range(6)]
     check("公开接口按 IP 限流：超过上限的丢掉、但仍然回 204（回 4xx 只会让前端重试）",
-          set(got) == {204} and stats_mod.list_clicks({"host": "r.test"})["total"] == 3,
-          stats_mod.list_clicks({"host": "r.test"})["total"])
+          set(got) == {204} and stats_mod.click_stats({"host": "r.test"})["count"] == 3,
+          stats_mod.click_stats({"host": "r.test"})["count"])
 finally:
     app_mod.CLICK_MAX, app_mod._click_rate = _max, _rate
 
@@ -742,52 +748,98 @@ stats_mod.record_click(q0["ip"], url="https://k.test/1", kw=q0["kw"], title="测
 stats_mod.record_click(q0["ip"], url="https://k.test/2", kw=q0["kw"], title="测试片",
                        place="card", ua="Mozilla/5.0")
 check("点详情按钮也落库，而且本来就没有播放地址",
-      stats_mod.list_clicks({"kind": "detail"})["total"] == 1 and
-      stats_mod.list_clicks({"kind": "detail"})["items"][0]["url"] == "",
-      stats_mod.list_clicks({"kind": "detail"})["items"][0])
+      stats_mod.click_stats({"kind": "detail"})["count"] == 1
+      and ev({"kind": "detail"})[0]["url"] == "",
+      ev({"kind": "detail"})[:1])
 s_kind = stats_mod.click_stats({})
 check("detail 与 play 分得开，而且两数加起来就是总数",
       s_kind["detail"] == 1 and s_kind["play"] == s_kind["count"] - 1
       and s_kind["detail"] + s_kind["play"] == s_kind["count"],
       {k: v for k, v in s_kind.items() if k in ("count", "detail", "play")})
-cnt = stats_mod.click_counts({}).get((q0["ip"], q0["kw"]), {})
-check("明细那一列按 (同一个 IP, 同一个词) 分开归并两种点击",
-      cnt == {"detail": 1, "play": 2}, cnt)
+merged = stats_mod.list_activity({"ip": q0["ip"], "kw": q0["kw"]}, per=200)
+kinds = [x["type"] for x in merged["items"]]
+check("同一个 IP 同一个词：搜索行与点开行合在一张列表里",
+      kinds.count("query") == 1 and kinds.count("click") == 3, kinds)
+check("合流按时间倒序（种子里那条搜索的时间比点击晚，所以它在上头）",
+      [x["ts"] for x in merged["items"]] ==
+      sorted([x["ts"] for x in merged["items"]], reverse=True)
+      and merged["items"][0]["type"] == "query",
+      [(x["type"], x["ts"]) for x in merged["items"]])
+check("点开行带的就是那一行该带的：片名、线路、集、域名、从哪儿点的",
+      all(x["title"] == "测试片" for x in merged["items"] if x["type"] == "click")
+      and any(x["line"] == "新浪线路" and x["ep"] == "第01集" and x["host"] == "k.test"
+              and x["place"] == "panel" for x in merged["items"])
+      and any(x["place"] == "hot" for x in merged["items"]), None)
+check("搜索行仍然带结果数，点开行这几列是 NULL 不是 0（0 会被读成「搜了没结果」）",
+      next(x for x in merged["items"] if x["type"] == "query")["results"] is not None
+      and all(x["results"] is None and x["ms"] is None
+              for x in merged["items"] if x["type"] == "click"), None)
 dash = c3.get("/admin?ip=" + q0["ip"] + "&kw=" + q0["kw"]).get_data(as_text=True)
-check("这一列在页面上是「详情 / 观看」两个数，各自能点进对应种类",
-      'title="点开了几次详情">1</a>' in dash and 'title="点开了几条观看地址">2</a>' in dash
-      and "kind=detail" in dash and "kind=play" in dash,
-      re.findall(r'title="点开了[^>]*>\d+</a>', dash))
-cpane = dash[dash.index('id="clicks"'):]
-check("面板列出时间/类型/IP/片名/线路/集/域名/来自",
-      "测试片" in cpane and "新浪线路" in cpane and "第01集" in cpane
-      and "k.test" in cpane and "海报详情" in cpane and "卡片线路" in cpane, cpane[:400])
-check("面板里那一行的类型写成人话，猜你想搜那种来源也认得",
-      re.search(r'kind=detail[^>]*>详情</a>', cpane) is not None and "猜你想搜" in cpane,
-      re.findall(r'href="/admin\?kind=\w+">[^<]+<', cpane)[:3])
+body = dash[dash.index('id="detail"'):dash.index('class="logout"')]
+check("页面上点开行有自己的标记 class，行里能直接看到片名/线路/集/域名",
+      body.count('<tr class="crow">') == 3 and "测试片" in body
+      and "新浪线路" in body and "第01集" in body and "k.test" in body,
+      body.count('<tr class="crow">'))
+check("从哪儿点的、点了什么都写成人话，猜你想搜那种来源也认得",
+      ">详情<" in body and "观看地址" in body and "海报详情" in body
+      and "卡片线路" in body and "猜你想搜" in body, None)
+check("展开开关那套（evbtn / evr / aria-expanded）整个撤了",
+      "evbtn" not in body and 'class="evr"' not in body
+      and "aria-expanded" not in body, re.findall(r"ev\w+", body)[:6])
+check("点开行的数字格是破折号而不是 0（一片 0 看着像坏了）",
+      re.search(r'<td class="num[^"]*">\s*—\s*</td>', body) is not None,
+      re.findall(r'<td class="num[^"]*">[^<]{0,8}<', body)[:6])
+check("破折号那一格不套「零结果」的红，否则看着像这个人搜了没搜到",
+      '<td class="num zero">—' not in body,
+      re.findall(r'<td class="num zero">[^<]{0,6}', body)[:4])
+check("独立的「详情与观看点击」表已经撤掉，事件不再单开一处",
+      'id="clicks"' not in dash and "data-cpage" not in dash and 'name="cpage"' not in dash,
+      re.findall(r'id="(\w+)"', dash))
+check("标题行给了「全部 / 只看搜索 / 只看点开」三个出口，当前那个标上 on",
+      'class="scope"' in dash and "只看搜索" in dash and "只看点开" in dash
+      and 'scope=click' in c3.get("/admin?scope=click").get_data(as_text=True), None)
+only_click = c3.get("/admin?scope=click&kw=" + q0["kw"]).get_data(as_text=True)
+oc_body = only_click[only_click.index('id="detail"'):only_click.index('class="logout"')]
+check("只看点开：这一页全是点开行，搜索行一条都不剩",
+      oc_body.count('<tr class="crow">') == 3 and '<tr class="">' not in oc_body
+      and "共 3 条" in oc_body, (oc_body.count('<tr class="crow">'),
+                               re.findall(r"共 (\d+) 条", oc_body)[:2]))
+only_query = c3.get("/admin?scope=query&kw=" + q0["kw"]).get_data(as_text=True)
+oq_body = only_query[only_query.index('id="detail"'):only_query.index('class="logout"')]
+check("只看搜索：回到原来的口径，一条点击都不掺", "crow" not in oq_body, None)
+none_here = c3.get("/admin?scope=click&kw=查无此词").get_data(as_text=True)
+check("范围里没东西时空态要说清是哪一半空，别让人以为整个库没记录",
+      "这个条件下没有记录" in none_here and "只看点开" in none_here
+      and "切回「全部」" in none_here, re.findall(r'class="empty">([^<]+)', none_here)[:2])
+check("换范围回到第 1 页：合流与单看两边条数不同，停在旧页码会看到空页",
+      all("page=" not in u for u in re.findall(r'<a href="(/admin\?[^"]*scope=[^"]*)"', dash)),
+      re.findall(r'<a href="(/admin\?[^"]*scope=[^"]*)"', dash)[:3])
 stats_mod.record("没人点过的词", "10.9.9.9", via="api", results=3, ua="Mozilla/5.0 (Windows NT 10.0) Chrome/124.0")
 quiet = c3.get("/admin?ip=10.9.9.9").get_data(as_text=True)
-check("没点过的行显示破折号而不是「0 / 0」（一片 0 看着像坏了）",
-      "点开了几次详情" not in quiet
-      and re.search(r'<td class="num"><span class="dim">—</span></td>', quiet) is not None,
-      re.findall(r'<td class="num">[^<]*<?a?[^>]{0,40}', quiet)[:6])
-check("域名和来源都是筛选入口",
-      "host=k.test" in cpane and "place=panel" in cpane,
-      re.findall(r'href="/admin\?[^"]*(?:host|place)=[^"]*"', cpane)[:3])
-check("按 host 筛：只剩那一条", stats_mod.list_clicks({"host": "k.test"})["total"] == 2,
-      stats_mod.list_clicks({"host": "k.test"})["total"])
+q_body = quiet[quiet.index('id="detail"'):quiet.index('class="logout"')]
+check("没点过的 IP：整页没有点开行，也不用留个空壳",
+      "crow" not in q_body and "evbtn" not in q_body, None)
+check("域名与来源仍是筛选入口（汇总那一行里）",
+      "host=k.test" in dash and "kind=detail" in dash,
+      re.findall(r'href="/admin\?[^"]*(?:host|kind)=[^"]*"', dash)[:3])
+check("按 host 筛：只剩那两条", stats_mod.click_stats({"host": "k.test"})["count"] == 2,
+      stats_mod.click_stats({"host": "k.test"})["count"])
 check("按 place 筛：panel 与 card 分得开",
-      stats_mod.list_clicks({"place": "panel"})["total"] >= 1
-      and stats_mod.list_clicks({"place": "card"})["total"] >= 1
-      and stats_mod.list_clicks({"place": "nope"})["total"] >= 0, None)
+      stats_mod.click_stats({"place": "panel"})["count"] >= 1
+      and stats_mod.click_stats({"place": "card"})["count"] >= 1, None)
 check("非法 place 当没填，不静默命中零行",
-      stats_mod.list_clicks({"place": "javascript:"})["total"] == ct(), None)
-c3.get("/admin?cper=1&cpage=2")
-check("点击表自己翻页（cpage/cper），不跟明细抢 page",
-      stats_mod.list_clicks({}, page=2, per=1)["page"] == 2
-      and stats_mod.list_clicks({}, page=999, per=1)["page"] == max(
-          1, stats_mod.list_clicks({}, page=1, per=1)["pages"]),
-      stats_mod.list_clicks({}, page=999, per=1)["page"])
+      stats_mod.click_stats({"place": "javascript:"})["count"] == ct(), None)
+check("两张表共用的筛选项也筛得到点击：按浏览器筛，点开行一起跟着筛",
+      stats_mod.list_activity({"browser": "Chrome"}, scope="click")["total"] == 2
+      and stats_mod.list_activity({"browser": "IE 1"}, scope="click")["total"] == 0,
+      stats_mod.list_activity({"browser": "Chrome"}, scope="click")["total"])
+check("没带 UA 的那条点击归进「未知」这一个桶，和搜索行同一套写法",
+      stats_mod.list_activity({"browser": "未知"}, scope="click")["total"] >= 1,
+      stats_mod.list_activity({"browser": "未知"}, scope="click")["total"])
+check("归属地与浏览器补进 clicks 之后，点击行自己就带这些列，不用回表查",
+      all(ev({"kw": q0["kw"]})[0][k] is not None
+          for k in ("browser", "os", "device", "geo", "iso")),
+      {k: ev({"kw": q0["kw"]})[0][k] for k in ("browser", "os", "device", "geo", "iso")})
 check("聚合给出总量、独立 IP、点了哪些站",
       stats_mod.click_stats({})["count"] == ct()
       and stats_mod.click_stats({})["ips"] >= 1
@@ -836,18 +888,18 @@ one = c3.get("/admin?day_from=" + old_day + "&day_to=" + old_day).get_data(as_te
 check("显式填了日期就照办的，默认值不许把人家的区间顶掉",
       "很久以前的词" in one and old_day in one, None)
 check("点击表同样吃这个区间",
-      stats_mod.list_clicks({"day_from": old_day, "day_to": old_day})["total"] == 1
-      and stats_mod.list_clicks({"day_from": today(), "day_to": today()})["total"] >= 1,
-      stats_mod.list_clicks({"day_from": old_day, "day_to": old_day})["total"])
+      stats_mod.click_stats({"day_from": old_day, "day_to": old_day})["count"] == 1
+      and stats_mod.click_stats({"day_from": today(), "day_to": today()})["count"] >= 1,
+      stats_mod.click_stats({"day_from": old_day, "day_to": old_day})["count"])
 check("归属地没回填成的老行（iso 是 NULL）不能把这页炸掉",
       "Internal Server Error" not in allp and "很久以前的词" in allp, allp[:120])
 check("默认区间可以从环境变量调",
       "ZHUIJU_ADMIN_DAYS" in (BASE / "zhuiju" / "app.py").read_text(encoding="utf-8"), None)
 
-print("\n23) 已经建过 clicks 的库：补 kind 列，老行认成 play")
+print("\n23) 已经建过 clicks 的库：补 kind 与归属地那几列，老行照样能筛")
 old4 = TMP / "oldclicks.db"
 oc = sqlite3.connect(str(old4))
-# 上一版的 clicks 长这样（没有 kind）
+# 上一版的 clicks 长这样（没有 kind，也没有归属地与浏览器）
 oc.executescript("""
 CREATE TABLE clicks (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, day TEXT NOT NULL,
   ip TEXT NOT NULL, kw TEXT, title TEXT, src TEXT, src_name TEXT, vid TEXT, line TEXT, ep TEXT,
@@ -864,19 +916,41 @@ try:
     stats_mod.ensure_schema()
     con = sqlite3.connect(str(old4))
     cols = [r[1] for r in con.execute("PRAGMA table_info(clicks)")]
-    got = [tuple(r) for r in con.execute("SELECT kind, url FROM clicks")]
+    got = [tuple(r) for r in con.execute("SELECT kind, url FROM clicks WHERE host = 'old.test'")]
     con.close()
     check("升级给 clicks 补上了 kind", "kind" in cols, cols)
+    check("归属地、浏览器、系统、设备这六列也一起补上（明细合流要靠它们对齐）",
+          {"iso", "country", "geo", "browser", "os", "device"} <= set(cols), cols)
     check("老行回填成 play，没有被当成详情", got == [("play", "https://old.test/1")], got)
+    old_row = next(x for x in stats_mod.list_activity({}, scope="click")["items"]
+                   if x["host"] == "old.test")
+    check("老点击行没存 UA，也归进「未知」这一个桶，不留 NULL",
+          old_row["browser"] == stats_mod.UNKNOWN and old_row["device"] == stats_mod.UNKNOWN
+          and old_row["os"] == "",
+          {k: old_row[k] for k in ("browser", "os", "device")})
+    if geoip.available()["xdb"]:
+        check("归属地顺手回填：公网 IP 补出国家码，按国家筛才筛得到老行",
+              (old_row["iso"] or "") != "" and (old_row["country"] or "") != "",
+              (old_row["iso"], old_row["country"], old_row["geo"]))
+    else:
+        check("归属地库不在就先不假装回填：country 留 NULL，等库到位再补一次",
+              old_row["country"] is None, old_row["country"])
+    check("按国家码筛点开行走的是同一份 WHERE，不报错且有整数条数",
+          isinstance(stats_mod.list_activity({"geo": "--"}, scope="click")["total"], int), None)
     s = stats_mod.click_stats({})
     check("聚合与筛选都认得补出来的那一列",
           s["play"] == 1 and s["detail"] == 0
-          and stats_mod.list_clicks({"kind": "play"})["total"] == 1
-          and stats_mod.list_clicks({"kind": "detail"})["total"] == 0,
+          and stats_mod.click_stats({"kind": "play"})["count"] == 1
+          and stats_mod.click_stats({"kind": "detail"})["count"] == 0,
           {k: v for k, v in s.items() if k in ("count", "play", "detail")})
     check("补列之后新写的详情仍然分得开",
           stats_mod.record_click("8.8.8.8", kind="detail", title="新详情", place="hot")
           and stats_mod.click_stats({})["detail"] == 1, stats_mod.click_stats({}))
+    con = sqlite3.connect(str(old4))
+    try:
+        check("归一是幂等的：再跑一次不改任何行", stats_mod.normalize_clicks(con) == 0, None)
+    finally:
+        con.close()
 finally:
     stats_mod.DB, stats_mod._ready = _real4, _ready4
     stats_mod.ensure_schema()

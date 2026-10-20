@@ -939,9 +939,21 @@ code {
 .atip { margin: 10px 0 0; font-size: var(--fs-sm); color: var(--dim); line-height: 1.6; }
 .atip code { font-size: var(--fs-min); background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
 .table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-/* 短而固定的列（时间、线路名、集名、来源）不折行：窄屏上表格本来就在自己的
-   滚动框里横滑，让这些列各占两三行反而把一行撑到 150px 高，一屏看不到两条 */
-.table .nw { white-space: nowrap; }
+/* 点开行（详情 / 观看地址）与搜索行排在同一张表里，得一眼分得开：
+   极浅的底 + 第一格左边一道竖条，比给每行加一个"类型"列省一格 */
+.crow { background: var(--surface-2); }
+.crow td:first-child { box-shadow: inset 2px 0 0 var(--brand); }
+/* 「全部 / 只看搜索 / 只看点开」：贴在明细标题那行的胶囊，换的是哪一半说得很直白 */
+.scope { margin-left: 6px; white-space: nowrap; }
+.scope a {
+  font-size: var(--fs-min);
+  color: var(--dim);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-right: 4px;
+}
+.scope a.on { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
 .table th {
   text-align: left;
   font-size: var(--fs-min);
@@ -1390,8 +1402,10 @@ code {
   /* 表格里那些筛选/翻页链接命中的只有 17px 高的文字盒，拇指按不准。
      加内边距再配等量负外边距：可点区域撑到 ~29px，视觉位置和行高一点不动。 */
   .table a, .pager a, .atip a, .creason a { padding: 7px 3px; margin: -7px -3px; }
-  /* 统计格里的数字现在能点（观看点击跳到下面那块），行内链接的命中区得跟着补一点 */
+  /* 统计格里的数字现在能点（详情 / 观看点击跳到明细的"只看点开"），行内链接的命中区得跟着补一点 */
   .stat b a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 6px; }
+  /* 标题行那三个胶囊：本来就是 1px 内边距的小圆条，拇指按不准，同样靠内边距撑 */
+  .scope a { padding: 7px 10px; }
   .pager a { display: inline-flex; align-items: center; }
   /* 「进入」「保存」这类提交按钮被 flex 压窄时会把两个字换成两行（320 上量到 42×51）。
      按钮文字不许折行；它旁边那一行（改口令的 保存 + 返回链接）允许折行，

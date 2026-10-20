@@ -48,6 +48,8 @@ _click_lock = threading.Lock()
 VIA_CN = {"api": "搜索", "seo": "落地页", "cloud": "网盘"}
 CLICK_PLACE_CN = {"panel": "海报详情", "card": "卡片线路", "hot": "猜你想搜"}
 CLICK_KIND_CN = {"play": "观看地址", "detail": "详情"}
+# 明细列表看哪一半：合流是默认，另外两个是给"只想数搜索"的人的出口
+SCOPE_CN = {"all": "全部", "query": "只看搜索", "click": "只看点开"}
 DEFAULT_WINDOW = int(os.environ.get("ZHUIJU_ADMIN_DAYS", "7"))   # 后台不选日期时看最近几天
 REF_KIND_CN = {"site": "站内上一页", "search": "搜索引擎", "out": "外部站点",
                "direct": "直接访问/无来源", "other": "无法解析"}
@@ -313,15 +315,20 @@ def create_app() -> Flask:
 
     @app.get("/img")
     def api_img():
-        """海报代理：给防盗链的图床补 Referer，并绕开自签证书。"""
+        """海报代理：给防盗链的图床补 Referer，并绕开自签证书。
+
+        `X-Img-Cache` 把这次是谁答的写出来（cache=内存 / disk=磁盘 / fetched=真去取了 /
+        拒绝原因），验证"重启后海报还快不快"就靠它，不用猜。
+        """
         url = (request.args.get("url") or "").strip()
         if not url:
             return "missing url", 400
-        status, ctype, body, _note = imgproxy.resolve(url)
+        status, ctype, body, note = imgproxy.resolve(url)
         resp = make_response(body, status)
         resp.headers["Content-Type"] = ctype
         resp.headers["Cache-Control"] = "public, max-age=86400"
         resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Img-Cache"] = note
         return resp
 
     @app.get("/api/hot")
@@ -534,20 +541,15 @@ def create_app() -> Flask:
             flt["day_from"] = (date.today() - timedelta(days=DEFAULT_WINDOW - 1)).isoformat()
         per = request.args.get("per", 50, type=int) or 50
         page = request.args.get("page", 1, type=int) or 1
-        rows = stats_mod.list_queries(flt, page=page, per=per)
+        # 「只看搜索 / 只看点开」：合流列表按时间排在一起最贴近"这个人当时做了什么"，
+        # 但只想数搜索的人不该被点击行掺进来，所以给一个显式的出口，而不是偷偷少一半
+        scope = (request.args.get("scope") or "all").strip()
+        if scope not in ("all", "query", "click"):
+            scope = "all"
+        flt["scope"] = scope
+        rows = stats_mod.list_activity(flt, page=page, per=per, scope=scope)
         agg = stats_mod.summary(flt)
-        # 观看点击：面板单独一张表，翻页用 cpage，免得和明细的 page 抢同一个参数
-        cper = request.args.get("cper", 30, type=int) or 30
-        cpage = request.args.get("cpage", 1, type=int) or 1
-        clicks = stats_mod.list_clicks(flt, page=cpage, per=cper)
         cagg = stats_mod.click_stats(flt)
-        # 明细里那一列"点了几次详情 / 几条观看"按 (ip, 关键词) 查表：一行一次 SQL 会把这页
-        # 打成几十次查询，一次 GROUP BY 全拿再在模板里查
-        ck = stats_mod.click_counts(flt)
-        for r in rows["items"]:
-            c = ck.get((r["ip"], r["kw"]), {})
-            r["clicks_detail"] = c.get("detail", 0)
-            r["clicks_play"] = c.get("play", 0)
         geo_info = geoip.available()
         markers = _markers(agg["by_geo"]) if geo_info["points"] else []
         base = geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}, "error": "没有底图文件"}
@@ -555,24 +557,26 @@ def create_app() -> Flask:
         # 翻页链接要把当前筛选条件一起带上，否则点了下一页筛选就丢了
         keep = {k: v for k, v in flt.items() if v}
         keep["per"] = rows["per"]
-        keepc = {k: v for k, v in flt.items() if v}
-        keepc["cper"] = clicks["per"]
         if day_all:
             # 日期被默认值顶掉了，不把这个标记带上，点一次"下一页"就悄悄回到最近一周
             keep["day"] = "all"
-            keepc["day"] = "all"
         # 「看全部历史」那个链接要留住除日期以外的筛选，否则一去看全部，筛的东西全丢了
         keep_args = {k: v for k, v in flt.items()
                      if v and k not in ("day_from", "day_to", "per", "page")}
+        # 「全部 / 只看搜索 / 只看点开」三个胶囊的地址在 Python 里拼好：
+        # Jinja 的字典字面量不认 `{**keep, ...}`（一渲染就是 unexpected '**'），
+        # 而换范围必须回到第 1 页——两边条数不一样，停在第 4 页看"只看点开"会是空的
+        args_scope = {s: {k: v for k, v in keep.items() if k != "page"} | {"scope": s}
+                      for s in SCOPE_CN}
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
-            place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN,
+            place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
             day_all=day_all, day_window=DEFAULT_WINDOW,
             keep_days=stats_mod.KEEP_DAYS, keep_args=keep_args,
             flt={**flt, "per": rows["per"]},
-            agg=agg, rows=rows, temp=False,
-            clicks=clicks, cagg=cagg,
+            agg=agg, rows=rows, temp=False, args_scope=args_scope,
+            cagg=cagg,
             geo=geo_info, map_paths=base["d"], map_active="".join(
                 base["by_iso"][i] for i in sorted(drawn)),
             geo_warn=stats_mod.MIGRATE_ERROR,
@@ -582,9 +586,7 @@ def create_app() -> Flask:
             notice="口令已更新，下次登录请用新口令" if request.args.get("set") else None,
             pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
             args_next={**keep, "page": rows["page"] + 1},
-            args_prev={**keep, "page": rows["page"] - 1},
-            args_cnext={**keepc, "cpage": clicks["page"] + 1},
-            args_cprev={**keepc, "cpage": clicks["page"] - 1})
+            args_prev={**keep, "page": rows["page"] - 1})
 
     @app.route("/admin/password", methods=("GET", "POST"))
     def admin_password():

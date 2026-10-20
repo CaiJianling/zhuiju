@@ -74,6 +74,9 @@ CREATE INDEX IF NOT EXISTS idx_queries_kw  ON queries(kw);
 
 -- 行为日志：点开详情、点开某条观看地址。单独一张表：一次查询可以点好几条，
 -- 塞进 queries 要么覆盖要么得改主键语义。
+-- 归属地、浏览器这几列 queries 有，clicks 也必须有一份：明细页把两张表合成
+-- 一张活动列表按时间排，缺哪一列那一行就只能空着，"谁在什么时候点了什么"
+-- 恰恰是最想按浏览器/归属地筛出来的部分。
 CREATE TABLE IF NOT EXISTS clicks (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   ts      TEXT NOT NULL,
@@ -89,7 +92,13 @@ CREATE TABLE IF NOT EXISTS clicks (
   ep      TEXT,                 -- 集名/选集名，如 "第03集"
   url     TEXT,                 -- 目标播放地址（截断）
   host    TEXT,                 -- 它的域名：按站聚合比整条 URL 有用
-  place   TEXT,                 -- panel=海报详情面板 / card=卡片里展开的线路
+  place   TEXT,                 -- panel=海报详情面板 / card=卡片里展开的线路 / hot=猜你想搜的海报
+  iso     TEXT,                 -- 下面六列与 queries 同口径，见 normalize_agent
+  country TEXT,
+  geo     TEXT,
+  browser TEXT,
+  os      TEXT,
+  device  TEXT,
   bot     INTEGER,
   ua      TEXT
 );
@@ -107,8 +116,11 @@ GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"),
 AGENT_COLUMNS = (("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"),
                  ("bot", "INTEGER"), ("ua", "TEXT"),
                  ("ref", "TEXT"), ("ref_kind", "TEXT"), ("ref_label", "TEXT"))
-# 老库里的 clicks 没有 kind 这一列，补上并把已有行标成 play（它们确实是观看点击）
-CLICK_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT 'play'"),)
+# 老库里的 clicks 没有这几列，补上：kind 把老行认成 play（它们确实是观看点击），
+# 归属地与浏览器六列由 normalize_clicks() 按留存的 ua / ip 回填一次
+CLICK_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT 'play'"),
+                 ("iso", "TEXT"), ("country", "TEXT"), ("geo", "TEXT"),
+                 ("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"))
 
 # 「认不出来」在库里只能有一种写法。补列之前那批行这三列是 NULL（那时根本没存 UA），
 # 现在的写法是 browser/device 存 "未知"、os 存 ''（见 record()）。两套写法混在一张表里，
@@ -128,6 +140,43 @@ def normalize_agent(con) -> int:
         return 0
     for col, val in (("browser", UNKNOWN), ("device", UNKNOWN), ("os", "")):
         con.execute(f"UPDATE queries SET {col} = ? WHERE {col} IS NULL", (val,))
+    return n
+
+
+def normalize_clicks(con) -> int:
+    """给 clicks 里补列之前的行回填归属地与浏览器，返回改了多少行。幂等。
+
+    这六列是后加的：老行只有 ip 与 ua，就地按现在写行的同一套办法解析一次
+    （parse_ua / geoip.locate），补出来的口径才和新行对得上——否则同一个浏览器
+    在明细里会一半有名字一半是空的，按浏览器筛还筛不到老行。
+    """
+    # 按位置解包而不是 r["na"]：调用方给的连接未必设了 row_factory=Row
+    # （ensure_schema 里的连接设了，测试与普通 sqlite3.connect 出来的没有），
+    # 依赖 row_factory 的函数没法被复用
+    rows = list(con.execute("SELECT id, ip, ua, browser IS NULL, country IS NULL FROM clicks"))
+    if not rows:
+        return 0
+    from . import agent, geoip
+    # 归属地库还没下载时这一半先不补：补了就把 country 写成非 NULL，
+    # 等库到位后再跑也认不出这些行是"没解析过"还是"解析成内网"了（backfill_geo 同理）
+    has_geo = geoip.available()["xdb"]
+    n = 0
+    for rid, ip, ua, na, ng in rows:
+        sets, vals = [], []
+        if na:
+            a = agent.parse_ua(ua)
+            sets += ["browser = ?", "os = ?", "device = ?"]
+            vals += [a["browser"] or UNKNOWN, a["os"] or "", a["device"] or UNKNOWN]
+        if ng and has_geo:
+            g = geoip.locate(clean_ip(ip) or "")
+            pub = g["kind"] == "public"
+            sets += ["iso = ?", "country = ?", "geo = ?"]
+            vals += [g["iso"] if pub else "", g["country"] if pub else "", g["label"]]
+        if not sets:
+            continue
+        vals.append(rid)
+        con.execute(f"UPDATE clicks SET {', '.join(sets)} WHERE id = ?", vals)
+        n += 1
     return n
 
 # 归属地的索引必须等列真的存在之后再建：把它写在 SCHEMA 里，
@@ -161,11 +210,13 @@ def ensure_schema() -> None:
             # 老行的 browser/device/os 是 NULL，和新写的 '未知'/'' 是同一个意思，
             # 不归一就会在面板上占两行
             normalize_agent(con)
-            # clicks 也是后加的表：已经建过的库里它没有 kind，补列并把老行标成 play
+            # clicks 也是后加的表：已经建过的库里它没有 kind 与归属地那几列，
+            # 补列之后按留存的 ip / ua 回填一次，新老行才是同一套口径
             ccols = {r["name"] for r in con.execute("PRAGMA table_info(clicks)")}
             for name, typ in CLICK_COLUMNS:
                 if name not in ccols:
                     con.execute(f"ALTER TABLE clicks ADD COLUMN {name} {typ}")
+            normalize_clicks(con)
             con.commit()
             _ready = True
             MIGRATE_ERROR = ""
@@ -320,18 +371,23 @@ def record_click(ip: str, *, url: str = "", kind: str = "play", kw: str = "", ti
         from . import agent, geoip
         a = agent.parse_ua(ua)
         r = geoip.locate(clean_ip(ip) or "")
+        pub = r["kind"] == "public"
         now = datetime.now()
         con = connect()
         try:
             con.execute(
                 "INSERT INTO clicks (ts, day, ip, kind, kw, title, src, src_name, vid,"
-                " line, ep, url, host, place, bot, ua) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " line, ep, url, host, place, iso, country, geo, browser, os, device, bot, ua)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (now.strftime("%Y-%m-%d %H:%M:%S"), now.date().isoformat(),
                  clean_ip(ip) or "unknown", kind, (kw or "").strip()[:60],
                  (title or "").strip()[:80], (src or "").strip()[:32],
                  (src_name or "").strip()[:40], (vid or "").strip()[:32],
                  (line or "").strip()[:40], (ep or "").strip()[:40], url,
                  click_host(url), place if place in CLICK_PLACES else "card",
+                 r["iso"] if pub else "", r["country"] if pub else "", r["label"],
+                 # 与 queries 同一套"认不出来"的写法（见 normalize_agent）
+                 a["browser"] or UNKNOWN, a["os"] or "", a["device"] or UNKNOWN,
                  1 if a["bot"] else 0, a["ua"][:200]))
             con.commit()
         finally:
@@ -361,12 +417,17 @@ _ENUMS = {
     "via": VIA,
     "device": ("手机", "平板", "桌面", "程序", "未知"),
     "ref_kind": ("direct", "site", "search", "out", "other"),
+    "place": CLICK_PLACES,
+    "kind": CLICK_KINDS,
 }
 
 
-def _where(f: dict) -> tuple[str, list]:
+def _where(f: dict, cols: dict | None = None) -> tuple[str, list]:
+    """按白名单把表单值拼成 WHERE。两张表共用这一份实现：
+    明细页现在把搜索与点开放在同一张列表里按时间排，两边的日期、IP、浏览器、
+    归属地必须是同一个口径算出来的，各写一份迟早会漂。"""
     conds, params = [], []
-    for key, sql in _COLUMNS.items():
+    for key, sql in (_COLUMNS if cols is None else cols).items():
         val = (f.get(key) or "").strip() if isinstance(f.get(key), str) else f.get(key)
         if val in (None, ""):
             continue
@@ -397,13 +458,8 @@ def _where(f: dict) -> tuple[str, list]:
                 continue
             conds.append(sql)
             params.append(ip)
-        elif key == "via":
-            # 认不出的入口就当没填：过滤条件静默命中零行，比忽略更难查
-            if val not in VIA:
-                continue
-            conds.append(sql)
-            params.append(val)
-        elif key in ("device", "ref_kind"):
+        elif key in _ENUMS:
+            # 认不出的取值当没填（静默命中零行比忽略更难查）
             if val not in _ENUMS[key]:
                 continue
             if key == "device" and val == UNKNOWN:
@@ -439,96 +495,33 @@ def _norm_date(val) -> str:
 
 
 def list_queries(f: dict, page: int = 1, per: int = 50) -> dict:
-    """按条件分页取明细。"""
-    if not _ready:
-        ensure_schema()
-    where, params = _where(f)
-    page = max(1, min(MAX_PAGE, int(page or 1)))
-    per = max(1, min(200, int(per or 50)))
-    con = connect()
-    try:
-        total = con.execute(f"SELECT COUNT(*) FROM queries WHERE {where}",
-                            params).fetchone()[0]
-        # 先把页码夹进真实范围再算 offset：否则"第 999 页"会显示成第 1 页却是空的，
-        # 页码和内容对不上
-        pages = max(1, -(-total // per))
-        page = min(page, pages)
-        rows = con.execute(
-            f"SELECT * FROM queries WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
-            params + [per, (page - 1) * per]).fetchall()
-    finally:
-        con.close()
-    return {"total": total, "page": page, "per": per, "pages": pages,
-            "items": [dict(r) for r in rows]}
+    """按条件分页取搜索明细（就是合流列表的"只看搜索"那一半，见 list_activity）。"""
+    return list_activity(f, page=page, per=per, scope="query")
 
 
-# 观看点击能过滤的列。名字要拼进 SQL，同样只允许白名单里的这几个
+# 点开行为能过滤的列。日期、IP、关键词、浏览器、系统、设备、归属地这一半
+# 与 queries 同名同写法（normalize_clicks 补的就是这几列），所以两张表用的是同一个表单
 _CLICK_COLUMNS = {
     "ip": "ip = ?",
     "kw": "kw LIKE ?",
+    "geo": "iso = ?",
+    "browser": "browser LIKE ?",
+    "os": "os LIKE ?",
+    "device": "device = ?",
+    "day_from": "day >= ?",
+    "day_to": "day <= ?",
     "title": "title LIKE ?",
     "src": "src = ?",
     "host": "host = ?",
     "place": "place = ?",
     "kind": "kind = ?",
-    "day_from": "day >= ?",
-    "day_to": "day <= ?",
 }
 
 
 def _where_clicks(f: dict) -> tuple[str, list]:
     """clicks 表的过滤条件。与查询明细共用同一份表单值：
     按某个 IP 或某天筛的时候，两张表筛的是同一批人同一件事，口径得一致。"""
-    conds, params = [], []
-    for key, sql in _CLICK_COLUMNS.items():
-        val = (f.get(key) or "").strip() if isinstance(f.get(key), str) else f.get(key)
-        if val in (None, ""):
-            continue
-        if key in ("kw", "title"):
-            conds.append(sql)
-            params.append(f"%{val}%")
-        elif key in ("day_from", "day_to"):
-            d = _norm_date(val)
-            if not d:
-                continue
-            conds.append(sql)
-            params.append(d)
-        elif key == "ip":
-            ip = clean_ip(val)
-            if ip:
-                conds.append(sql)
-                params.append(ip)
-        elif key in ("place", "kind"):
-            # 认不出的值当没填（静默命中零行比忽略更难查）
-            if val not in (CLICK_PLACES if key == "place" else CLICK_KINDS):
-                continue
-            conds.append(sql)
-            params.append(val)
-        else:
-            conds.append(sql)
-            params.append(str(val)[:80])
-    return (" AND ".join(conds) or "1=1"), params
-
-
-def list_clicks(f: dict, page: int = 1, per: int = 30) -> dict:
-    """按条件分页取观看点击。与 list_queries 同形状，模板里的翻页控件可以直接复用。"""
-    if not _ready:
-        ensure_schema()
-    where, params = _where_clicks(f)
-    page = max(1, min(MAX_PAGE, int(page or 1)))
-    per = max(1, min(200, int(per or 30)))
-    con = connect()
-    try:
-        total = con.execute(f"SELECT COUNT(*) FROM clicks WHERE {where}", params).fetchone()[0]
-        pages = max(1, -(-total // per))
-        page = min(page, pages)
-        rows = con.execute(
-            f"SELECT * FROM clicks WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
-            params + [per, (page - 1) * per]).fetchall()
-    finally:
-        con.close()
-    return {"total": total, "page": page, "per": per, "pages": pages,
-            "items": [dict(r) for r in rows]}
+    return _where(f, _CLICK_COLUMNS)
 
 
 def click_stats(f: dict, top: int = 10) -> dict:
@@ -572,38 +565,65 @@ def click_stats(f: dict, top: int = 10) -> dict:
             "detail": kinds.get("detail", 0), "play": kinds.get("play", 0)}
 
 
-def click_counts(f: dict) -> dict:
-    """当前过滤条件下，每个 (ip, 关键词) 点了多少次详情、点开了多少条观看地址。
-    返回 `{(ip, kw): {"detail": n, "play": m}}`。
+# 明细页的合流列表：两张表投影成同一套列名，谁没有哪一列就补 NULL。
+# 列的次序固定，两个 SELECT 用同一个列表生成，加一列只用改 _ACT_COLS 一处
+_ACT_COLS = (
+    # 两张表都有
+    ("id", "ts", "day", "ip", "kw", "iso", "country", "geo",
+     "browser", "os", "device", "bot", "ua"),
+    # 只有搜索有：结果数、耗时、入口、Referer
+    ("via", "results", "hits", "sources_ok", "sources_total", "ms",
+     "ref", "ref_kind", "ref_label"),
+    # 只有点开有：点了哪部片、哪条线路、哪个地址
+    ("kind", "title", "src", "src_name", "vid", "line", "ep", "url", "host", "place"),
+)
+_QUERY_HAS = frozenset(_ACT_COLS[0] + _ACT_COLS[1])
+_CLICK_HAS = frozenset(_ACT_COLS[0] + _ACT_COLS[2])
 
-    明细表一行一次查询会打 N 次 SQL，这里一次 GROUP BY 全拿，页面里查表；
-    日期范围沿用明细的过滤条件，不然"筛了今天却显示出上个月的点击"对不上。
+
+def _select_side(has: frozenset) -> str:
+    return ", ".join(c if c in has else f"NULL AS {c}" for c in sum(_ACT_COLS, ()))
+
+
+def list_activity(f: dict, page: int = 1, per: int = 50, scope: str = "all") -> dict:
+    """搜索记录与点开行为合成一条按时间倒序的活动列表，后台「明细」用的就是它。
+
+    为什么合流而不是「点某条搜索、展开它下面的点击」：点开行为的关键词是前端带的
+    片名，从「猜你想搜」的海报点进来的根本没人搜过它 —— 实测 15 条点击按
+    (ip, 关键词) 能对上搜索记录的有 0 条，挂在搜索行下面的写法等于一条都看不见。
+    两张表本来记的就是同一个人连续的动作，按时间排在一起才对得上。
+    `scope`：all=合流 / query=只看搜索 / click=只看点开。
     """
     if not _ready:
         ensure_schema()
-    conds, params = [], []
-    for key, sql, val in (("day_from", "day >= ?", _norm_date((f or {}).get("day_from"))),
-                          ("day_to", "day <= ?", _norm_date((f or {}).get("day_to")))):
-        if val:
-            conds.append(sql)
-            params.append(val)
-    ip = clean_ip((f or {}).get("ip") or "")
-    if ip:
-        conds.append("ip = ?")
-        params.append(ip)
-    where = " AND ".join(conds) or "1=1"
+    scope = scope if scope in ("all", "query", "click") else "all"
+    page = max(1, min(MAX_PAGE, int(page or 1)))
+    per = max(1, min(200, int(per or 50)))
+    parts, params = [], []
+    if scope in ("all", "query"):
+        where, wp = _where(f)
+        parts.append(f"SELECT {_select_side(_QUERY_HAS)}, 'query' AS type"
+                     f" FROM queries WHERE {where}")
+        params += wp
+    if scope in ("all", "click"):
+        where, wp = _where_clicks(f)
+        parts.append(f"SELECT {_select_side(_CLICK_HAS)}, 'click' AS type"
+                     f" FROM clicks WHERE {where}")
+        params += wp
+    body = " UNION ALL ".join(parts)
     con = connect()
     try:
+        total = con.execute(f"SELECT COUNT(*) FROM ({body})", params).fetchone()[0]
+        # 先把页码夹进真实范围再算 offset：否则"第 999 页"会显示成第 1 页却是空的
+        pages = max(1, -(-total // per))
+        page = min(page, pages)
         rows = con.execute(
-            f"SELECT ip, kw,"
-            f" SUM(CASE WHEN COALESCE(kind,'play') = 'detail' THEN 1 ELSE 0 END) AS detail,"
-            f" SUM(CASE WHEN COALESCE(kind,'play') = 'play' THEN 1 ELSE 0 END) AS play"
-            f" FROM clicks WHERE {where} GROUP BY ip, kw", params).fetchall()
+            f"SELECT * FROM ({body}) ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?",
+            params + [per, (page - 1) * per]).fetchall()
     finally:
         con.close()
-    # 老库里可能整列都是 NULL（kind 是后补的），COALESCE 兜成 play
-    return {(r["ip"], r["kw"]): {"detail": r["detail"] or 0, "play": r["play"] or 0}
-            for r in rows}
+    return {"total": total, "page": page, "per": per, "pages": pages,
+            "scope": scope, "items": [dict(r) for r in rows]}
 
 
 def summary(f: dict, top: int = 15) -> dict:
@@ -682,7 +702,7 @@ def summary(f: dict, top: int = 15) -> dict:
         "avg_ms": round(agg["avg_ms"]) if agg["avg_ms"] is not None else None,
         "first_ts": agg["first_ts"], "last_ts": agg["last_ts"],
         "span": [min(days), max(days)] if days else [],
-        "by_day": list(reversed(by_day)),      # 画趋势时按时间正序好看
+        "by_day": by_day,      # 最新的日期在最上面：后台是"今天有没有人用"先看，不是画年报
         "top_kw": top_kw, "top_ip": top_ip, "by_via": by_via, "by_geo": by_geo,
         "by_browser": by_browser, "by_ref": by_ref, "by_ref_src": by_ref_src,
     }

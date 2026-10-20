@@ -332,13 +332,21 @@ check("宽屏补了列数，不会一行 6 张右边空一大片",
 wide = {c for _, kind, c in ladder if kind == "min"}
 check("两条 min-width 断点互不重叠且都大于基础 6 列", wide == {9, 7} and min(wide) > 6, wide)
 
+def detail_only(html):
+    """只取 #detail 到 #geo 之间的片段。
+    之前用 split("明细") 会被归属地那块注释里的"明细"两个字切到最后一段，取到的不是表格。
+    按 <th>时间 定位也一样会跑偏：明细改了列，切过去可能量到归属地那张表的行。"""
+    return html[html.index('id="detail"'):html.index('id="geo"')]
+
+
 d2 = c.get("/admin").get_data(as_text=True)
-head = re.search(r"<thead><tr>(.*?)</tr>", d2[d2.index("<th>时间") - 40:], re.S).group(1)
-cols = re.findall(r"<th>([^<]+)</th>", head)
+dtail = detail_only(d2)
+head = re.search(r"<thead><tr>(.*?)</tr>", dtail, re.S).group(1)
+cols = re.findall(r"<th[^>]*>([^<]+)</th>", head)
 check("明细有独立的系统列", "系统" in cols, cols)
 check("系统列排在浏览器之后", cols.index("系统") == cols.index("浏览器") + 1, cols)
 i_os = cols.index("系统")
-row0 = re.search(r"<tbody>\s*<tr>(.*?)</tr>", d2[d2.index("<th>时间"):], re.S).group(1)
+row0 = re.search(r"<tbody>\s*<tr[^>]*>(.*?)</tr>", dtail, re.S).group(1)
 cells = [re.sub(r"<[^>]+>", " ", x).strip() for x in
          re.findall(r"<td[^>]*>(.*?)</td>", row0, re.S)]
 check("系统格里有真实系统名或未知", any(k in cells[i_os] for k in
@@ -347,11 +355,6 @@ check("系统格可点筛选", f'/admin?os=' in re.search(r"<td[^>]*>(.*?)</td>"
       re.findall(r"<td[^>]*>.*?</td>", row0, re.S)[i_os], re.S).group(1))
 check("筛选栏有系统输入框", 'name="os"' in d2)
 check("按系统筛选能用", "macOS" in c.get("/admin?os=macOS").get_data(as_text=True))
-def detail_only(html):
-    """只取 #detail 到 #geo 之间的片段。
-    之前用 split("明细") 会被归属地那块注释里的"明细"两个字切到最后一段，取到的不是表格。"""
-    return html[html.index('id="detail"'):html.index('id="geo"')]
-
 check("按系统前缀也能筛（输 Win 命中 Windows 10/11）",
       "Windows 10/11" in detail_only(c.get("/admin?os=Win").get_data(as_text=True)))
 bogus_html = c.get("/admin?os=" + "x' OR 1=1").get_data(as_text=True)
@@ -381,17 +384,16 @@ ah = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
 folded = [(m.group(1), re.search(r"<th>([^<]+)</th>", m.group(2)).group(1))
           for m in re.finditer(r'<div class="fold" data-fold data-rows="(\d+)">\s*<table[^>]*>'
                                r'\s*<thead><tr>(.*?)</tr>', ah, re.S)]
-check("七块表都包了滚动容器（关键词/IP/浏览器/来源/明细/观看点击/归属地）",
+check("七块表都包了滚动容器（按天/关键词/IP/浏览器/来源/明细/归属地）",
       len(folded) == 7, folded)
 check("每块包的都是预期那张表",
-      [t for _, t in folded] == ["关键词", "IP", "浏览器", "来源", "时间", "时间", "国家 / 地区"],
+      [t for _, t in folded] == ["日期", "关键词", "IP", "浏览器", "来源", "时间", "国家 / 地区"],
       [t for _, t in folded])
-check("前四块与归属地列表都是 5 行，明细与观看点击 10 行",
-      [n for n, _ in folded] == ["5", "5", "5", "5", "10", "10", "5"], [n for n, _ in folded])
-# 观看点击那张表列多，窄屏上让固定的几列各占两三行会把一行撑到 150px 高
-check("时间/线路/集/来源这几列不折行，行高交给表格自己横滚",
-      ".table .nw { white-space: nowrap; }" in css and ah.count('class="dim nw"') >= 2
-      and 'class="nw"' in ah, ah.count("nw"))
+check("除了明细是 10 行，其余六块都是 5 行",
+      [n for n, _ in folded] == ["5", "5", "5", "5", "5", "10", "5"], [n for n, _ in folded])
+# 表在滚动框里取自然宽度之后，行本身就不会被挤成竖排的字，不需要再逐列 nowrap
+check("明细表没有残留的 .nw（那是被 width:100% 挤出来的补丁，现在从根上修了）",
+      'class="nw"' not in ah and ".table .nw" not in css, ah.count('class="nw"'))
 # 说明文字必须在容器外：不然注意事项也跟着一起滚，第一眼看不到
 fold_spans = [(m.start(), ah.index("</table>", m.start())) for m in
               re.finditer(r'<div class="fold" data-fold', ah)]
