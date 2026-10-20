@@ -131,12 +131,19 @@ UNKNOWN = "未知"
 
 # 「这条像真人吗」只有三档，而且**不装得比实际更确定**：
 #   bot     —— UA 自己报了爬虫或脚本客户端（agent.BOTS 命中，写库时就是 bot=1）
-#   unknown —— 当初根本没存 UA，或 `bot` 这列是补列之前的 NULL：无从判断
-#   human   —— 存了浏览器 UA 且没报爬虫。**这不代表一定是人**：UA 是客户端随便写的，
+#   unknown —— 无从判断：当初没存 UA、`bot` 这列是补列之前的 NULL，
+#              或者**UA 根本不是浏览器的样子**（不以 `Mozilla/` 开头）
+#   human   —— UA 有浏览器骨架且没自报爬虫。**这不代表一定是人**：UA 是客户端随便写的，
 #              要往下分只能看行为（见 behavior()），或者上会话 token（那要加 cookie）
+# 「浏览器的样子」这一判是补上来的：以前只要 UA 里没写 curl 就落进 human，于是
+# `Werkzeug/3.1.9`（Flask 的 test_client 自带 UA，离线工具每跑一次就往真实库里写一行）
+# 被算成"像真人"，页面上那一行同时显示「浏览器 未知 + 像真人」，自相矛盾。
+# 为什么用 `Mozilla/` 开头而不是 `like Gecko`：Chrome/Edge/Safari/微信/QQ/UC/夸克/ Firefox
+# 全都以 `Mozilla/5.0` 开头，而 Firefox 的 UA 里是 `Gecko/20100101`、没有 `like Gecko`，
+# 用后者会把真 Firefox 判成说不清（实测过：这一判加上去前后，非 Mozilla/ 的 27 条全是 Werkzeug）。
 # 这段 SQL 是唯一口径：三档徽章、筛选、聚合都从这里出，别在模板里再拼一份 CASE。
 WHO_SQL = ("CASE WHEN COALESCE(bot, 0) = 1 THEN 'bot'"
-           " WHEN ua IS NULL OR ua = '' OR bot IS NULL THEN 'unknown'"
+           " WHEN ua IS NULL OR bot IS NULL OR ua NOT LIKE 'Mozilla/%' THEN 'unknown'"
            " ELSE 'human' END")
 WHO_VALUES = ("human", "bot", "unknown")
 

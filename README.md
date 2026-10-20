@@ -670,11 +670,21 @@ UA），现在的写法是 `未知` / `''`；两套混在一张表里，「浏�
 而且明说每一层的边界。
 
 **第一层是三档徽章（`stats.WHO_SQL`，一个 SQL 表达式，全站唯一口径）**：
-`bot` = 写库时 `agent.BOTS` 命中（curl / wget / python-requests / python-urllib / go-http-client / okhttp /
-scrapy / headlesschrome / 各家搜索引擎爬虫…）；`unknown` = **当初没存 UA**，或 `bot` 是补列之前的 NULL ——
-这一档必须存在，否则 `SUM(bot)` 把 NULL 当 0 吃掉，"含程序 N"会被系统性低估；`human` = 有浏览器 UA 且没报爬虫，
-**这不代表确认是人**。筛选栏的「像谁」、汇总第一排那一格 `89 / 9 / 7`、明细每行的徽章、`summary.by_who`
-全都走同一个表达式，不会出现"面板合成一行、点进去少几行"（那是「认不出来」那一节踩过的同一个坑）。
+`bot` = 写库时 `agent.BOTS` 命中（curl / wget / python-requests / python-urllib / python-httpx /
+go-http-client / okhttp / scrapy / headlesschrome / werkzeug / 各家搜索引擎爬虫…）；
+`unknown` = **无从判断**：当初没存 UA、`bot` 是补列之前的 NULL，或者 UA 根本不长浏览器的样子
+（不以 `Mozilla/` 开头）；`human` = UA 有浏览器骨架且没自报爬虫，**这不代表确认是人**。
+第三档那两条判据各管一头：`SUM(bot)` 会把 NULL 当 0 吃掉，不写"说不清"这一档"含程序 N"就被系统性低估；
+而只靠"UA 里没写 curl 就算人"会漏 —— 实测有 27 条 `Werkzeug/3.1.9`（Flask test_client 自带 UA，
+离线工具 `check_autoupdate.py` 每跑一次往真实库里写一行）顶着"浏览器 未知"被判成"像真人"，
+页面上一行里自相矛盾。用 `Mozilla/` 开头而不是 `like Gecko` 判骨架，是因为 **Firefox 的 UA 里是
+`Gecko/20100101`、没有 `like Gecko`**，写后者会把真 Firefox 冤枉成说不清。
+同一行的另一件事要分清：**「浏览器 未知」只代表我们的词表没命中**，不等于不是真人（有 `Mozilla/5.0`
+骨架就仍算像真人）；反过来认得出 Chrome 也不保证是人。
+筛选栏的「像谁」、汇总第一排那一格、明细每行的徽章、`summary.by_who` 全都走同一个表达式，
+不会出现"面板合成一行、点进去少几行"（那是「认不出来」那一节踩过的同一个坑）。
+`tools/check_autoupdate.py` 也和它对状态文件做的一样，把 `stats.DB` 指到 `.probe/` 下，
+离线工具从此不再往真实统计库里写测试记录（改完实测：跑前 106 条、跑后仍 106 条）。
 
 **行为那一节的判读理由会同时挂到明细每一行的 IP 旁边**（`.behflag`，虚线琥珀色小胶囊，写的是短文
 「秒级连发 / 节拍器 / 无站内跳转 / 从没点开」，整句话连同那三个数在 `title` 里）。为什么值得挂两处：

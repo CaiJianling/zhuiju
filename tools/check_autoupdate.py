@@ -124,6 +124,15 @@ def main() -> int:
     STATE, LOCK, LOGF = autoupdate.STATE, autoupdate.LOCK, autoupdate.LOG
     BAK = tmp / "state.bak.json"
 
+    # 同一个道理，统计库也得指到临时目录去：test_client 自带的 UA 是 `Werkzeug/3.1.9`，
+    # 这个工具每跑一次就往真实的 stats.db 里写一条"庆余年"的搜索记录（实测攒了 27 条，
+    # 后台明细里看着像有个人在反复搜同一部剧）。离线工具不该污染真数据。
+    from zhuiju import stats as stats_mod
+    stats_mod.DB = tmp / "stats.db"
+    stats_mod.DATA = tmp
+    stats_mod._ready = False
+    stats_mod.ensure_schema()
+
 
     client = create_app().test_client()
 

@@ -31,9 +31,13 @@ BOTS = (
     "googlebot", "bingbot", "yahoo", "yandexbot", "baiduspider", "sogou", "360spider",
     "bytespider", "petalbot", "applebot", "duckduckbot", "facebookexternalhit",
     "twitterbot", "weibo", "slackbot", "telegrambot", "whatsapp", "curl", "wget",
-    "httpie", "python-requests", "python-urllib", "go-http-client", "java/",
+    "httpie", "python-requests", "python-urllib", "python-httpx", "httpx",
+    "go-http-client", "java/",
     "okhttp", "axios", "node-fetch", "headlesschrome", "phantomjs", "postman",
     "insomnia", "lighthouse", "feedfetcher", "rss", "scrapy", "libwww",
+    # Flask/Werkzeug 的 test_client 自带的 UA：离线工具一跑就往真实库里写一行
+    # （实测 check_autoupdate 每跑一次留一条 Werkzeug/3.1.9），它当然不是浏览器
+    "werkzeug",
 )
 
 # (匹配, 显示名)：按顺序命中，越靠前越特殊
@@ -117,6 +121,7 @@ def parse_ua(ua: str | None) -> dict:
     for b in BOTS:
         if b in low:
             name = {"python-requests": "requests 脚本", "python-urllib": "urllib 脚本",
+                    "python-httpx": "httpx 脚本", "werkzeug": "Werkzeug 测试客户端",
                     "curl": "curl", "wget": "wget", "headlesschrome": "无头浏览器",
                     "googlebot": "Google 爬虫", "bingbot": "必应爬虫",
                     "baiduspider": "百度爬虫", "sogou": "搜狗爬虫",

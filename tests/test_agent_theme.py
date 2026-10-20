@@ -73,10 +73,14 @@ check("Windows NT 6.1 认成 Win7 而不是 10/11", r["os"] == "Windows 7", r["o
 
 print("\n2) 爬虫与脚本要单独分出来，否则查询次数被抓取灌满")
 for s, name in (("curl/8.5.0", "curl"), ("python-requests/2.34.2", "requests 脚本"),
+                # Werkzeug 是 Flask 的 test_client 自带的 UA：离线工具一跑就往真实库里
+                # 写一行（实测 27 行），以前不在词表里，被算成"像真人"
+                ("Werkzeug/3.1.9", "Werkzeug 测试客户端"),
+                ("python-httpx/0.27.0", "httpx 脚本"),
                 ("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", "Google 爬虫"),
                 ("Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)", "百度爬虫")):
     r = agent.parse_ua(s)
-    check(f"{name} 标为 bot", r["bot"] and r["device"] == "程序", r)
+    check(f"{name} 标为 bot", r["bot"] and r["device"] == "程序" and r["browser"] == name, r)
 r = agent.parse_ua("")
 check("空 UA 不抛异常、算未知", r["browser"] == "" and r["label"] == "未知", r)
 r = agent.parse_ua("瞎写的")

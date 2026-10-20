@@ -19,6 +19,7 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 from zhuiju import admin as admin_mod      # noqa: E402
+from zhuiju import agent as agent_mod      # noqa: E402
 from zhuiju import stats as stats_mod      # noqa: E402
 
 FAILS = []
@@ -962,16 +963,19 @@ H_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, lik
        "Chrome/124.0.0.0 Safari/537.36"
 
 
-def put(ip, minute, kw, *, ua=H_UA, ref_kind="direct", ref=""):
+def put(ip, minute, kw, *, ua=H_UA, ref_kind="direct", ref="", browser=None):
     """按指定时刻插一条搜索：节奏是这个测试的主角，不能让 record() 自己 now()。"""
     con = sqlite3.connect(str(stats_mod.DB))
     ts = f"{today()} 09:{minute // 60:02d}:{minute % 60:02d}"
+    if browser is None:
+        browser = ("未知" if not ua else
+                   "Chrome 124.0" if "Chrome" in ua else
+                   "curl" if "curl" in ua else "")
     con.execute("INSERT INTO queries (ts, day, ip, kw, via, results, hits, sources_ok,"
                 " sources_total, ms, iso, country, geo, browser, os, device, bot, ua,"
                 " ref, ref_kind, ref_label) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (ts, today(), ip, kw, "api", 5, 8, 3, 4, 300.0, "", "", "本机",
-                 "未知" if not ua else ("Chrome 124.0" if "Chrome" in ua else "curl"),
-                 "" if not ua else "Windows 10/11", "未知" if not ua else "桌面",
+                 browser, "" if not ua else "Windows 10/11", "未知" if not ua else "桌面",
                  None if ua is None else (1 if "curl" in ua else 0),
                  ua, ref, ref_kind, ref))
     con.commit()
@@ -993,6 +997,13 @@ put("8.151.3.3", 600, "C1", ua="curl/8.5.0")
 put("8.151.4.4", 900, "D1", ua=None)
 stats_mod.record_click("8.151.4.4", kind="detail", kw="D1", title="D 一部", place="hot",
                        ua="python-requests/2.32")
+# E：浏览器认不出来，但 UA 有浏览器的骨架 —— 真 Firefox 的 UA 里是 `Gecko/20100101`、
+# 没有 `like Gecko`，判据要是写成"含 like Gecko"就会把这种真人判成说不清
+put("8.151.5.5", 1000, "E1", ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) "
+                                "Gecko/20100101 Firefox/126.0")
+# F：没自报爬虫、可也完全不像浏览器（以前这种直接落进"像真人"，页面上就出现
+#    「浏览器 未知 + 像真人」这种自相矛盾的一行）
+put("8.151.6.6", 1001, "F1", ua="MyOwnFetcher/2.1")
 
 who = {x["who"]: x["n"] for x in stats_mod.summary({})["by_who"]}
 check("三档加起来就是总数，没有第四种被吞掉",
@@ -1000,6 +1011,20 @@ check("三档加起来就是总数，没有第四种被吞掉",
 check("UA 自报爬虫 → bot 档", who.get("bot", 0) >= 1
       and stats_mod.list_queries({"who": "bot"})["total"] == who["bot"], who)
 check("没留 UA 的老行 → 说不清，不再被当成 0 忽略", who.get("unknown", 0) >= 1, who)
+w_of = lambda ip: stats_mod.list_activity({"ip": ip}, per=5)["items"][0]["who"]
+check("浏览器认不出来、但 UA 有浏览器骨架 → 仍算像真人（Firefox 没有 like Gecko）",
+      w_of("8.151.5.5") == "human"
+      and stats_mod.list_activity({"ip": "8.151.5.5"}, per=5)["items"][0]["browser"] in ("", "未知"),
+      w_of("8.151.5.5"))
+check("UA 根本不像浏览器（MyOwnFetcher/2.1）→ 说不清，不冒充真人",
+      w_of("8.151.6.6") == "unknown", w_of("8.151.6.6"))
+check("三档里 human 那一档要求 UA 以 Mozilla/ 开头（词表漏了也不装）",
+      "Mozilla/%" in stats_mod.WHO_SQL, stats_mod.WHO_SQL)
+check("Werkzeug 这类离线工具的 UA 进了爬虫词表",
+      "werkzeug" in agent_mod.BOTS and "python-httpx" in agent_mod.BOTS, None)
+check("离线工具 check_autoupdate 不再往真实统计库里写测试记录",
+      "stats_mod.DB = tmp" in (BASE / "tools" / "check_autoupdate.py").read_text(encoding="utf-8"),
+      None)
 check("认不出的 who 值当没填（静默筛空比忽略更难查）",
       stats_mod.list_queries({"who": "'; DROP"})["total"] == stats_mod.list_queries({})["total"],
       stats_mod.list_queries({"who": "'; DROP"})["total"])
