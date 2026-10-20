@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 import re
 import sqlite3
@@ -127,6 +128,27 @@ CLICK_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT 'play'"),
 # 面板上同一个"未知"就占两行（看着像重复统计），点进去过滤条件又只命中其中一套，
 # 数字对不上比数错更难查。
 UNKNOWN = "未知"
+
+# 「这条像真人吗」只有三档，而且**不装得比实际更确定**：
+#   bot     —— UA 自己报了爬虫或脚本客户端（agent.BOTS 命中，写库时就是 bot=1）
+#   unknown —— 当初根本没存 UA，或 `bot` 这列是补列之前的 NULL：无从判断
+#   human   —— 存了浏览器 UA 且没报爬虫。**这不代表一定是人**：UA 是客户端随便写的，
+#              要往下分只能看行为（见 behavior()），或者上会话 token（那要加 cookie）
+# 这段 SQL 是唯一口径：三档徽章、筛选、聚合都从这里出，别在模板里再拼一份 CASE。
+WHO_SQL = ("CASE WHEN COALESCE(bot, 0) = 1 THEN 'bot'"
+           " WHEN ua IS NULL OR ua = '' OR bot IS NULL THEN 'unknown'"
+           " ELSE 'human' END")
+WHO_VALUES = ("human", "bot", "unknown")
+
+
+def who_label(who: str) -> str:
+    """给三档一个固定说法（模板与报表都用它，不各自翻译）。
+
+    `mixed` 只出现在 behavior() 那种**按 IP 汇总**的地方：同一个 IP 里既有浏览器 UA
+    又有脚本 UA（家里共用一个出口、或有人边用边跑脚本），单条记录不会是这个值。
+    """
+    return {"human": "像真人", "bot": "脚本/爬虫", "unknown": "说不清",
+            "mixed": "两种都有"}.get(who, who or "说不清")
 
 
 def normalize_agent(con) -> int:
@@ -408,6 +430,8 @@ _COLUMNS = {
     "os": "os LIKE ?",
     "device": "device = ?",
     "ref_kind": "ref_kind = ?",
+    # 三档归类：拼的是 WHO_SQL，所以筛值必须在 _ENUMS 里，绝不能让人自由输入
+    "who": WHO_SQL + " = ?",
     "day_from": "day >= ?",
     "day_to": "day <= ?",
 }
@@ -419,6 +443,7 @@ _ENUMS = {
     "ref_kind": ("direct", "site", "search", "out", "other"),
     "place": CLICK_PLACES,
     "kind": CLICK_KINDS,
+    "who": WHO_VALUES,
 }
 
 
@@ -508,6 +533,7 @@ _CLICK_COLUMNS = {
     "browser": "browser LIKE ?",
     "os": "os LIKE ?",
     "device": "device = ?",
+    "who": WHO_SQL + " = ?",
     "day_from": "day >= ?",
     "day_to": "day <= ?",
     "title": "title LIKE ?",
@@ -570,7 +596,7 @@ def click_stats(f: dict, top: int = 10) -> dict:
 _ACT_COLS = (
     # 两张表都有
     ("id", "ts", "day", "ip", "kw", "iso", "country", "geo",
-     "browser", "os", "device", "bot", "ua"),
+     "browser", "os", "device", "bot", "ua", "who"),
     # 只有搜索有：结果数、耗时、入口、Referer
     ("via", "results", "hits", "sources_ok", "sources_total", "ms",
      "ref", "ref_kind", "ref_label"),
@@ -579,10 +605,16 @@ _ACT_COLS = (
 )
 _QUERY_HAS = frozenset(_ACT_COLS[0] + _ACT_COLS[1])
 _CLICK_HAS = frozenset(_ACT_COLS[0] + _ACT_COLS[2])
+# 算出来的列（不是表里的字段）：两张表用同一个表达式，两行的徽章才会说同一种话
+_COMPUTED = {"who": WHO_SQL}
 
 
 def _select_side(has: frozenset) -> str:
-    return ", ".join(c if c in has else f"NULL AS {c}" for c in sum(_ACT_COLS, ()))
+    def one(c: str) -> str:
+        if c in _COMPUTED:
+            return f"{_COMPUTED[c]} AS {c}"
+        return c if c in has else f"NULL AS {c}"
+    return ", ".join(one(c) for c in sum(_ACT_COLS, ()))
 
 
 def list_activity(f: dict, page: int = 1, per: int = 50, scope: str = "all") -> dict:
@@ -692,6 +724,13 @@ def summary(f: dict, top: int = 15) -> dict:
             f" COUNT(DISTINCT ip) AS ips, MAX(day) AS last_day"
             f" FROM queries WHERE {where} GROUP BY COALESCE(ref_label,'direct')"
             f" ORDER BY n DESC LIMIT ?", params + [int(top)])]
+        # 三档归类：GROUP BY 1 引用上面 SELECT 出来的 who 表达式，口径与筛选、
+        # 明细徽章都是同一个 WHO_SQL，不会出现"面板合成一行、点进去却少几行"
+        by_who = [dict(r) for r in con.execute(
+            f"SELECT {WHO_SQL} AS who, COUNT(*) AS n,"
+            f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT kw) AS kws,"
+            f" MAX(day) AS last_day"
+            f" FROM queries WHERE {where} GROUP BY 1 ORDER BY n DESC", params)]
     finally:
         con.close()
     days = [d["day"] for d in by_day if d.get("day")]
@@ -705,4 +744,108 @@ def summary(f: dict, top: int = 15) -> dict:
         "by_day": by_day,      # 最新的日期在最上面：后台是"今天有没有人用"先看，不是画年报
         "top_kw": top_kw, "top_ip": top_ip, "by_via": by_via, "by_geo": by_geo,
         "by_browser": by_browser, "by_ref": by_ref, "by_ref_src": by_ref_src,
+        "by_who": by_who,
     }
+
+
+# ---- 行为特征：UA 三档只是"它自己说的是什么"，这一节看的是做出来的样子 ----
+
+# 少于这个搜索次数谈不上"节奏"，报了也是 noise；点开比同理
+BEHAVIOR_MIN_Q = 3
+# 判读理由：key 给 CSS 与测试用，text 给人看。每条都必须可以用页面上那一列的数复核，
+# 不做"综合可疑度打分"那种说不清来源的数字。
+BEHAVIOR_REASONS = {
+    "ua-bot": "UA 自己报了爬虫/脚本",
+    "ua-none": "有一批请求根本没留 UA，判断不了",
+    "burst": "秒级连发（最快间隔 ≤ 1 秒）",
+    "metronome": "间隔稳得像节拍器（标准差 / 平均值 ≤ 0.25）",
+    "no-ref": "从来不带站内跳转（没有上一页就从没搜过）",
+    "no-click": "搜了但从没点开过详情或播放地址",
+}
+
+
+def behavior(f: dict, limit: int = 40) -> list[dict]:
+    """按 IP 汇总行为特征，并把能解释的判读理由挂上。
+
+    用的都是库里已有的字段，不额外埋点：`ts` 算相邻间隔与每分钟峰值，
+    `ref_kind` 算站内跳转占比，`clicks` 表算点开/搜索比，`bot`/`ua` 走 WHO_SQL 三档。
+    标准差 SQLite 没有 `sqrt`（这台的 libsqlite 没编数学函数），所以 SQL 只给
+    `n / sum / sumsq`，开方在这里算 —— 这样两边算的是同一批数，不会出现"面板的方差
+    与明细的间隔对不上"。
+    """
+    if not _ready:
+        ensure_schema()
+    where, params = _where(f)
+    cwhere, cparams = _where_clicks(f)
+    con = connect()
+    try:
+        base = {r["ip"]: dict(r) for r in con.execute(
+            f"SELECT ip, MAX(geo) AS geo, MAX(country) AS country, COUNT(*) AS n,"
+            f" COUNT(DISTINCT kw) AS kws, MAX(day) AS last_day,"
+            f" SUM(CASE WHEN ref_kind = 'site' THEN 1 ELSE 0 END) AS site_n,"
+            f" SUM(CASE WHEN {WHO_SQL} = 'bot' THEN 1 ELSE 0 END) AS bot_n,"
+            f" SUM(CASE WHEN {WHO_SQL} = 'unknown' THEN 1 ELSE 0 END) AS unknown_n"
+            f" FROM queries WHERE {where} GROUP BY ip", params)}
+        # 相邻间隔：LAG 取上一条的时间，第一行给 NULL，所以 COUNT(gap) 天然比 n 少 1
+        for r in con.execute(
+                f"WITH gap AS (SELECT ip, strftime('%s', ts)"
+                f" - LAG(strftime('%s', ts)) OVER (PARTITION BY ip ORDER BY ts) AS g"
+                f" FROM queries WHERE {where})"
+                f" SELECT ip, COUNT(g) AS n_gap, MIN(g) AS min_gap, MAX(g) AS max_gap,"
+                f" AVG(g) AS avg_gap, SUM(g * g) AS sumsq FROM gap WHERE g IS NOT NULL"
+                f" GROUP BY ip", params):
+            d = base.get(r["ip"])
+            if d:
+                d.update(n_gap=r["n_gap"], min_gap=r["min_gap"], max_gap=r["max_gap"],
+                         avg_gap=r["avg_gap"], sumsq=r["sumsq"])
+        # 一分钟里的峰值：把 "YYYY-MM-DD HH:MM:SS" 截到分钟，纯文本分组，不碰日期函数
+        for r in con.execute(
+                f"SELECT ip, MAX(c) AS peak_min FROM (SELECT ip, SUBSTR(ts, 1, 16) AS minute,"
+                f" COUNT(*) AS c FROM queries WHERE {where} GROUP BY 1, 2) GROUP BY ip", params):
+            d = base.get(r["ip"])
+            if d:
+                d["peak_min"] = r["peak_min"]
+        for r in con.execute(
+                f"SELECT ip, COUNT(*) AS click_n FROM clicks WHERE {cwhere} GROUP BY ip",
+                cparams):
+            d = base.get(r["ip"])
+            if d:
+                d["click_n"] = r["click_n"]
+    finally:
+        con.close()
+
+    out = []
+    for ip, d in base.items():
+        d.setdefault("click_n", 0)
+        d.setdefault("peak_min", 1)
+        # 只有一条搜索的 IP 在上面那几个 GROUP BY 里一行都不返回（LAG 给的是 NULL），
+        # 这些都得先补默认值，否则下面按 key 取值直接 KeyError
+        for k in ("n_gap", "min_gap", "max_gap", "avg_gap", "sumsq"):
+            d.setdefault(k, 0 if k in ("n_gap", "sumsq") else None)
+        n_gap, sumsq = d["n_gap"] or 0, d["sumsq"] or 0
+        avg = d["avg_gap"] or 0.0
+        # 平方和减均值平方可能因为浮点误差给出极小的负数，夹住再开方
+        var = max(0.0, sumsq / n_gap - avg * avg) if n_gap else 0.0
+        d["sd_gap"] = math.sqrt(var)
+        d["cv"] = (d["sd_gap"] / avg) if avg > 0 else None
+        d["who"] = ("bot" if d["bot_n"] == d["n"] else
+                    "unknown" if d["unknown_n"] == d["n"] else
+                    "mixed" if (d["bot_n"] or d["unknown_n"]) else "human")
+        reasons = []
+        if d["bot_n"]:
+            reasons.append("ua-bot")
+        if d["unknown_n"]:
+            reasons.append("ua-none")
+        if n_gap >= 3 and d["min_gap"] is not None and d["min_gap"] <= 1:
+            reasons.append("burst")
+        if n_gap >= 8 and d["cv"] is not None and d["cv"] <= 0.25:
+            reasons.append("metronome")
+        if d["n"] >= BEHAVIOR_MIN_Q and not d["site_n"]:
+            reasons.append("no-ref")
+        if d["n"] >= BEHAVIOR_MIN_Q and not d["click_n"]:
+            reasons.append("no-click")
+        d["reasons"] = [{"key": k, "text": BEHAVIOR_REASONS[k]} for k in reasons]
+        out.append(d)
+    # 排序按"能举出几条理由"再按条数：理由多的排前面，但都摆着数让人自己复核
+    out.sort(key=lambda d: (-len(d["reasons"]), -(d["n"] or 0), d["ip"]))
+    return out[:max(1, min(200, int(limit)))]

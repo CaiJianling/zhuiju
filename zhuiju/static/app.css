@@ -984,6 +984,36 @@ code {
   margin-right: 4px;
 }
 .scope a.on { color: var(--brand-ink); border-color: var(--brand); background: var(--brand-soft); }
+
+/* 三档归类的徽章：「像真人」不做成 chip —— 满屏绿勾似的东西没有信息量，
+   要让人一眼看到的是「脚本/爬虫」和「说不清」这两种例外 */
+.who {
+  display: inline-block;
+  font-size: var(--fs-min);
+  font-style: normal;
+  line-height: 1.5;
+  border-radius: 6px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.who-human { color: var(--faint); padding: 0; }
+.who-bot, a.who-bot:hover { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
+.who-unknown { color: var(--ink-2); border-color: var(--warn-line); background: var(--warn-bg); }
+.who-mixed { color: var(--ink-2); border-color: var(--line); background: var(--surface-2); }
+/* 行为特征那一列的判读理由：每条都是页面上那一列的数能复核出来的，不是打分 */
+.whykey {
+  display: inline-block;
+  font-size: var(--fs-min);
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 0 5px;
+  margin-right: 3px;
+}
+.who-cell { white-space: normal; min-width: 150px; }
+tr.suspicious td:first-child { box-shadow: inset 2px 0 0 var(--bad); }
 .table th {
   text-align: left;
   font-size: var(--fs-min);

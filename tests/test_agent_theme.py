@@ -377,20 +377,22 @@ check("表头写的是国家 / 地区而不是含糊的归属地",
 check("明细那一列仍然是带省市的完整归属地", "浙江省杭州市" in
       stats_mod.list_queries({"geo": "CN"})["items"][0]["geo"])
 
-print("\n10) 面板内联滚动：五行的五行，明细和观看点击十行")
+print("\n10) 面板内联滚动：五行的五行，明细十行")
 ah = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
 # 认身份靠各表自己的第一个表头，不靠 <h2>：明细和归属地那两块的 h2 里带 <span>，
 # 用 h2 配对着正则会直接漏掉这两块
 folded = [(m.group(1), re.search(r"<th>([^<]+)</th>", m.group(2)).group(1))
           for m in re.finditer(r'<div class="fold" data-fold data-rows="(\d+)">\s*<table[^>]*>'
                                r'\s*<thead><tr>(.*?)</tr>', ah, re.S)]
-check("七块表都包了滚动容器（按天/关键词/IP/浏览器/来源/明细/归属地）",
-      len(folded) == 7, folded)
+check("八块表都包了滚动容器（按天/关键词/IP/浏览器/来源/行为特征/明细/归属地）",
+      len(folded) == 8, folded)
 check("每块包的都是预期那张表",
-      [t for _, t in folded] == ["日期", "关键词", "IP", "浏览器", "来源", "时间", "国家 / 地区"],
+      [t for _, t in folded] == ["日期", "关键词", "IP", "浏览器", "来源", "IP",
+                                 "时间", "国家 / 地区"],
       [t for _, t in folded])
-check("除了明细是 10 行，其余六块都是 5 行",
-      [n for n, _ in folded] == ["5", "5", "5", "5", "5", "10", "5"], [n for n, _ in folded])
+check("除了明细是 10 行，其余七块都是 5 行（行为特征那节也折叠，别把首屏挤没）",
+      [n for n, _ in folded] == ["5", "5", "5", "5", "5", "5", "10", "5"],
+      [n for n, _ in folded])
 # 表在滚动框里取自然宽度之后，行本身就不会被挤成竖排的字，不需要再逐列 nowrap
 check("明细表没有残留的 .nw（那是被 width:100% 挤出来的补丁，现在从根上修了）",
       'class="nw"' not in ah and ".table .nw" not in css, ah.count('class="nw"'))

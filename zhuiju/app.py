@@ -524,13 +524,15 @@ def create_app() -> Flask:
             return redirect(url_for("admin_password", first=1))
         flt = {k: (request.args.get(k) or "").strip()[:80]
                for k in ("ip", "kw", "via", "geo", "browser", "os", "device", "ref_kind",
-                         "day_from", "day_to", "title", "host", "place", "kind")}
+                         "who", "day_from", "day_to", "title", "host", "place", "kind")}
         if flt["via"] not in stats_mod.VIA:
             flt["via"] = ""
         if flt["place"] not in stats_mod.CLICK_PLACES:
             flt["place"] = ""
         if flt["kind"] not in stats_mod.CLICK_KINDS:
             flt["kind"] = ""
+        if flt["who"] not in stats_mod.WHO_VALUES:
+            flt["who"] = ""
         # 什么都不选时默认最近一周（含今天）：用得越久这页越长，而"今天有没有人用"
         # 恰恰是最想知道的。?day=all 是显式要看全部的出口，日期框里回填的就是这个区间。
         day_all = (request.args.get("day") or "") == "all"
@@ -550,6 +552,8 @@ def create_app() -> Flask:
         rows = stats_mod.list_activity(flt, page=page, per=per, scope=scope)
         agg = stats_mod.summary(flt)
         cagg = stats_mod.click_stats(flt)
+        # 行为特征：UA 三档只是"它自己说的"，这一节按 IP 看节奏、跳转与点开比
+        beh = stats_mod.behavior(flt)
         geo_info = geoip.available()
         markers = _markers(agg["by_geo"]) if geo_info["points"] else []
         base = geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}, "error": "没有底图文件"}
@@ -572,6 +576,8 @@ def create_app() -> Flask:
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
             place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
+            who_cn={k: stats_mod.who_label(k) for k in
+                    ("human", "bot", "unknown", "mixed")}, beh=beh,
             day_all=day_all, day_window=DEFAULT_WINDOW,
             keep_days=stats_mod.KEEP_DAYS, keep_args=keep_args,
             flt={**flt, "per": rows["per"]},

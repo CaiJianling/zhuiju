@@ -645,8 +645,8 @@ print("\n19) 区块顺序与明细翻页控件")
 dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)
 ids = [m for m in re.findall(r'<section class="asect" id="(\w+)"', dash)]
 check("明细在归属地之前（归属地垫底）", ids[-1] == "geo" and "detail" in ids, ids)
-check("带 id 的区块只有明细与归属地（观看点击已并进明细，不再单开一节）",
-      ids == ["detail", "geo"], ids)
+check("带 id 的区块是行为特征、明细与归属地（观看点击已并进明细，不再单开一节）",
+      ids == ["behavior", "detail", "geo"], ids)
 pager = dash[dash.index('class="pager"'):dash.index("</div>", dash.index('class="pager"'))]
 check("翻页区有跳转表单", 'class="jumpform"' in pager)
 check("跳转框是 number 且带 min/max",
@@ -956,6 +956,98 @@ try:
 finally:
     stats_mod.DB, stats_mod._ready = _real4, _ready4
     stats_mod.ensure_schema()
+
+print("\n24) 真人 / 脚本 / 说不清：三档口径 + 按 IP 的行为特征")
+H_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " \
+       "Chrome/124.0.0.0 Safari/537.36"
+
+
+def put(ip, minute, kw, *, ua=H_UA, ref_kind="direct", ref=""):
+    """按指定时刻插一条搜索：节奏是这个测试的主角，不能让 record() 自己 now()。"""
+    con = sqlite3.connect(str(stats_mod.DB))
+    ts = f"{today()} 09:{minute // 60:02d}:{minute % 60:02d}"
+    con.execute("INSERT INTO queries (ts, day, ip, kw, via, results, hits, sources_ok,"
+                " sources_total, ms, iso, country, geo, browser, os, device, bot, ua,"
+                " ref, ref_kind, ref_label) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ts, today(), ip, kw, "api", 5, 8, 3, 4, 300.0, "", "", "本机",
+                 "未知" if not ua else ("Chrome 124.0" if "Chrome" in ua else "curl"),
+                 "" if not ua else "Windows 10/11", "未知" if not ua else "桌面",
+                 None if ua is None else (1 if "curl" in ua else 0),
+                 ua, ref, ref_kind, ref))
+    con.commit()
+    con.close()
+    return ts
+
+
+# A：像真人的样子 —— 站内跳转、有点开、间隔不规则
+for i, (m, kw) in enumerate([(0, "A1"), (120, "A2"), (165, "A3"), (765, "A4"), (855, "A5")]):
+    put("8.151.1.1", m, kw, ref_kind="site", ref="http://127.0.0.1:5000/")
+stats_mod.record_click("8.151.1.1", kind="detail", kw="A1", title="A 第一部", place="panel", ua=H_UA)
+# B：UA 老老实实是 Chrome，行为却是定时器 —— 这一条就是"为什么光看 UA 不够"
+for i in range(10):
+    put("8.151.2.2", i * 5, f"B{i}")
+# C：UA 自报脚本
+put("8.151.3.3", 600, "C1", ua="curl/8.5.0")
+# D：只有一条、而且没留 UA（这既要顺手回归那个 KeyError：一条搜索的 IP 在
+# LAG 那一组里一行都不返回，取 d["sumsq"] 就会炸）
+put("8.151.4.4", 900, "D1", ua=None)
+stats_mod.record_click("8.151.4.4", kind="detail", kw="D1", title="D 一部", place="hot",
+                       ua="python-requests/2.32")
+
+who = {x["who"]: x["n"] for x in stats_mod.summary({})["by_who"]}
+check("三档加起来就是总数，没有第四种被吞掉",
+      sum(who.values()) == stats_mod.list_queries({})["total"], who)
+check("UA 自报爬虫 → bot 档", who.get("bot", 0) >= 1
+      and stats_mod.list_queries({"who": "bot"})["total"] == who["bot"], who)
+check("没留 UA 的老行 → 说不清，不再被当成 0 忽略", who.get("unknown", 0) >= 1, who)
+check("认不出的 who 值当没填（静默筛空比忽略更难查）",
+      stats_mod.list_queries({"who": "'; DROP"})["total"] == stats_mod.list_queries({})["total"],
+      stats_mod.list_queries({"who": "'; DROP"})["total"])
+act_b = stats_mod.list_activity({"ip": "8.151.2.2"}, per=50)["items"]
+check("明细每一行都带着自己那一档", act_b and all(r["who"] for r in act_b),
+      [r["who"] for r in act_b][:3])
+
+beh = {b["ip"]: b for b in stats_mod.behavior({})}
+b2 = beh.get("8.151.2.2") or {}
+keys = [x["key"] for x in b2.get("reasons", [])]
+check("节拍器被抓出来：十条固定 5 秒的 Chrome 请求，UA 说像真人，行为说不是",
+      b2.get("who") == "human" and "metronome" in keys and "no-ref" in keys
+      and "no-click" in keys, {"who": b2.get("who"), "reasons": keys})
+check("间隔真的算对了：9 个间隔、每个 5 秒，标准差 0",
+      b2.get("n_gap") == 9 and b2.get("min_gap") == 5 and b2.get("avg_gap") == 5.0
+      and abs(b2.get("sd_gap") or 0) < 1e-6 and b2.get("cv") == 0.0,
+      {k: b2.get(k) for k in ("n_gap", "min_gap", "avg_gap", "sd_gap", "cv")})
+b1 = beh.get("8.151.1.1") or {}
+check("有站内跳转、有点开、间隔不规则的那位不被冤枉",
+      not {"metronome", "no-ref", "no-click"} & {x["key"] for x in b1["reasons"]},
+      [x["key"] for x in b1["reasons"]])
+check("秒级连发单独一条判读（最快间隔 ≤ 1 秒才算，B 那位隔 5 秒不算）",
+      "burst" not in keys and "burst" not in [x["key"] for x in b1["reasons"]], None)
+check("UA 自报脚本的 IP 直接挂着 ua-bot 理由",
+      "ua-bot" in [x["key"] for x in beh["8.151.3.3"]["reasons"]],
+      [x["key"] for x in beh["8.151.3.3"]["reasons"]])
+check("只有一条搜索的 IP 不炸，也没有间隔可报",
+      beh["8.151.4.4"]["n_gap"] == 0 and beh["8.151.4.4"]["min_gap"] is None,
+      {k: beh["8.151.4.4"].get(k) for k in ("n", "n_gap", "min_gap", "sd_gap", "cv")})
+beh_list = stats_mod.behavior({})
+check("排序按理由多的在前（多的先看，同分再按条数）",
+      [len(v["reasons"]) for v in beh_list] ==
+      sorted([len(v["reasons"]) for v in beh_list], reverse=True),
+      [(v["ip"], len(v["reasons"])) for v in beh_list])
+check("点开表吃同一个 who 口径（python-requests 那次点开要能被筛出来）",
+      stats_mod.list_activity({"who": "bot"}, scope="click")["total"] >= 1, None)
+page = c3.get("/admin").get_data(as_text=True)
+check("后台出现了三档徽章", "who-bot" in page and "who-unknown" in page and "who-human" in page,
+      re.findall(r'class="who who-\w+"', page)[:4])
+check("行为特征那一节出现了，IP 与判读理由都在页面上",
+      'id="behavior"' in page and "8.151.2.2" in page and "节拍器" in page, None)
+check("筛选栏有「像谁」这一档", 'name="who"' in page, None)
+check("汇总第一排也有三档那一格", re.search(r'<span>[^<]*像真人 / 脚本', page) is not None,
+      re.findall(r"<span>([^<]{0,40})</span>", page)[:8])
+check("说了判读只是提示、不是判决（别让人把它当结论）",
+      "判读只是提示" in page, None)
+check("说清了什么情况下这几列看不出来（老实带 Referer 的脚本）",
+      "想真正钉死只能给首页发一个匿名会话" in page, None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

@@ -91,6 +91,13 @@
         <option value="{{ k }}" {% if flt.device == k %}selected{% endif %}>{{ k }}</option>
         {% endfor %}
       </select></label>
+    <label class="admfield"><span>像谁</span>
+      <select name="who">
+        <option value="">全部</option>
+        {% for k in ('human', 'bot', 'unknown') %}
+        <option value="{{ k }}" {% if flt.who == k %}selected{% endif %}>{{ who_cn[k] }}</option>
+        {% endfor %}
+      </select></label>
     <label class="admfield"><span>关键词包含</span>
       <input type="text" name="kw" value="{{ flt.kw }}" placeholder="庆余年"></label>
     <label class="admfield"><span>入口</span>
@@ -121,6 +128,11 @@
        指向 #detail：点击行就在明细那张表里，不再单独一张表、也就没有 #clicks 这个锚点 #}
     <div class="stat"><b><a href="{{ url_for('admin', **args_scope['click']) }}">{{ cagg.detail }} / {{ cagg.play }}</a></b>
       <span>详情 / 观看点击</span></div>
+    {# 三档放第一排：这一排回答的是"这些人到底是谁"。数字来自 summary 的 by_who（同一个 WHO_SQL） #}
+    <div class="stat"><b>
+      {%- for x in agg.by_who %}<a href="{{ url_for('admin', who=x.who) }}">{{ x.n }}</a>{{ ' / ' if not loop.last }}{% endfor -%}
+      {%- if not agg.by_who %}—{% endif -%}</b>
+      <span>{% for x in agg.by_who %}{{ who_cn[x.who] }}{% if not loop.last %} / {% endif %}{% endfor %}{% if not agg.by_who %}像真人 / 脚本 / 说不清{% endif %}</span></div>
   </div>
   <p class="rangehint">
     {%- if day_all %}当前是<b>全部历史</b>（库里最多留 {{ keep_days }} 天）·
@@ -250,6 +262,56 @@
     </section>
   </div>
 
+  <section class="asect" id="behavior">
+    <h2>像脚本的行为特征 <span class="asub">按 IP · 只看现有字段算出来的节奏，不改埋点</span></h2>
+    {# 上面那几节靠 UA 分真人和脚本，UA 是客户端随便写的。这一节不问"它说自己是什么"，
+       只问"做出来的样子像不像人"：节奏、跳转、搜完之后有没有点开。 #}
+    {% if beh %}
+    <div class="fold" data-fold data-rows="5">
+      <table class="table">
+        <thead><tr><th>IP</th><th>归属地</th><th>搜索</th><th>词</th>
+          <th title="这段时间这个 IP 点开了多少次详情 / 播放地址，除以搜了多少次">点开比</th>
+          <th title="带站内 Referer 的比例：真人是从这一页点进去的，脚本通常直接打接口">站内跳转</th>
+          <th title="相邻两次请求的最小间隔（秒）">最快间隔</th>
+          <th title="平均间隔 ± 标准差；标准差小=每次隔一样久，像定时器">平均间隔</th>
+          <th title="一分钟里最多同时来几次">峰值/分</th>
+          <th>判读</th></tr></thead>
+        <tbody>
+        {% for b in beh %}
+          <tr class="{{ 'suspicious' if b.reasons }}">
+            <td><a href="{{ url_for('admin', ip=b.ip) }}">{{ b.ip }}</a></td>
+            <td class="dim">{{ b.geo or '未解析' }}</td>
+            <td class="num"><a href="{{ url_for('admin', ip=b.ip) }}">{{ b.n }}</a></td>
+            <td class="num">{{ b.kws }}</td>
+            <td class="num">{{ '%.2f' | format(b.click_n / b.n) if b.n else '—' }}</td>
+            <td class="num">{{ (b.site_n * 100 // b.n) ~ '%' if b.n else '—' }}</td>
+            <td class="num">{{ b.min_gap if b.min_gap is not none else '—' }}</td>
+            <td class="num">
+              {{ '%.1f ± %.1f' | format(b.avg_gap, b.sd_gap) if b.avg_gap is not none else '—' }}
+              {%- if b.cv is not none %}<span class="dim" title="变异系数 = 标准差 / 平均值：越小表示每次都隔一样久（像定时器），越大表示一会儿一秒一会儿一小时">×{{ '%.2f' | format(b.cv) }}</span>{% endif -%}
+            </td>
+            <td class="num">{{ b.peak_min }}</td>
+            <td class="who-cell">
+              <span class="who who-{{ b.who }}">{{ who_cn[b.who] }}</span>
+              {%- for x in b.reasons %} <span class="whykey" data-k="{{ x.key }}">{{ x.text }}</span>{% else %}<span class="dim">没看出异常</span>{% endfor -%}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="atip">这些数都是<b>现有的列</b>算出来的，没有新增埋点：间隔用相邻两条搜索的时间差（窗口函数
+      <code>LAG</code>），峰值按分钟分桶，点开比来自 <code>clicks</code> 表，站内跳转看 Referer。
+      <b>判读只是提示，不是判决</b>：真人用浏览器插件批量搜、或者几个人共用一个出口，都会落进同一行；
+      反过来，脚本只要老老实实带上 Referer、按秒休息，这几列就看不出来 —— UA 是客户端自由发挥，
+      想真正钉死只能给首页发一个匿名会话 token（那是另一个决定，涉及加 cookie）。
+      「说不清」那一档是补 UA 列之前的老记录，库里 <b>{{ agg.by_who | selectattr('who','equalto','unknown') | map(attribute='n') | sum }}</b> 条，
+      它们既不算人也不算脚本，别当成 0 忽略掉。</p>
+    {% else %}
+    <p class="empty">这个条件下没有可分析的记录。</p>
+    {% endif %}
+  </section>
+
   <section class="asect" id="detail" data-pages="{{ rows.pages }}">
     <h2>明细 <span class="asub">第 {{ rows.page }} / {{ rows.pages }} 页 · 共 {{ rows.total }} 条
       {%- if rows.scope == 'all' %}（搜索与点开合流，按时间倒序）{% elif rows.scope == 'query' %}（只看搜索）{% else %}（只看点开）{% endif -%}
@@ -290,6 +352,15 @@
             {%- if r.browser %}
               <a href="{{ url_for('admin', browser=r.browser) }}">{{ r.browser }}</a>
             {%- else %}<span class="dim">未知</span>{% endif -%}
+            {# 三档徽章：点它就是把这一档筛出来。像真人那一档不挂链接也不上色 ——
+               满屏"像真人"没信息量，需要一眼看到的是例外（脚本、说不清） #}
+            {%- if r.who == 'bot' %}
+              <a class="who who-bot" href="{{ url_for('admin', who='bot') }}"
+                 title="UA 自己报了爬虫或脚本客户端">{{ who_cn.bot }}</a>
+            {%- elif r.who == 'unknown' %}
+              <a class="who who-unknown" href="{{ url_for('admin', who='unknown') }}"
+                 title="当初没存 UA，判断不了">说不清</a>
+            {%- else %}<span class="who who-human">{{ who_cn.human }}</span>{% endif -%}
           </td>
           <td>
             {%- if r.os %}
