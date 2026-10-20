@@ -319,6 +319,24 @@ check("显隐只用 hidden 表达，不写死 aria-hidden",
       'aria-hidden' not in html[html.index('<aside class="dpanel"'):html.index("</main>")])
 check("面板滑入动画与骨架屏闪动在减少动效时都关掉",
       "@media (prefers-reduced-motion: reduce)" in css[css.index(".dpanel"):])
+op = js[js.index("dpEl.hidden = false;"):js.index("dpClose.focus()")]
+check("点开是从屏幕外滑进来：先摘 hidden、强制一次布局、再加 .on",
+      "void dpEl.offsetWidth;" in op and op.index("dpEl.hidden = false;")
+      < op.index("void dpEl.offsetWidth;") < op.index("dpEl.classList.add('on');"),
+      op[:200])
+check("强制重排只在「摘 hidden → 加 .on」这一段里出现一次（别处不需要，多一处就多个坑）",
+      js[js.index("function openDetail("):js.index("function closeDetail()")].count(
+          "void dpEl.offsetWidth;") == 1, None)
+cl = js[js.index("function closeDetail()"):js.index("dpClose.addEventListener")]
+check("关闭是滑出去再 display:none，时长从 CSS 读、不在 JS 里抄一份",
+      "getComputedStyle(dpEl).transitionDuration" in cl and "dur * 1000 + 40" in cl
+      and not re.search(r"setTimeout\([^\n]*?,\s*(260|600)\)", cl),
+      re.findall(r"setTimeout\([^\n]{0,60}", cl))
+check("滑出没播完之前不藏（期间又点开就不藏）",
+      "if (!dpEl.classList.contains('on')) dpEl.hidden = true;" in cl, None)
+check("起点在屏幕外这件事写在 CSS 里（右侧 translateX、窄屏 translateY）",
+      "transform: translateX(calc(100% + 20px))" in css and "transform: translateY(calc(100% + 20px))" in css,
+      None)
 check("窄屏时面板盖满并锁住页面滚动", "body.dp-open { overflow: hidden; }" in css)
 check("详情按钮常驻可见（不靠 hover 才发现），触屏上给满不透明度",
       ".dbtn {" in css and "@media (hover: none) { .dbtn { opacity: 1; } }" in css)

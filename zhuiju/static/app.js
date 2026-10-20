@@ -896,6 +896,11 @@
     dpBody.innerHTML = headHTML(s);
     revealIn(dpBody);               // 面板是点开才建的，海报同样要淡入而不是蹦出来
     dpEl.hidden = false;
+    // 强制一次布局，把"还在屏幕外"这一帧真的算出来，然后再上 .on。
+    // 少了这一步就是"直接出现"：hidden 摘掉与 .on 加上在同一次样式重算里，
+    // 浏览器从没算过 translateX(100%) 这个起点，没有起点就没有过渡（关闭方向不受影响，
+    // 见 closeDetail —— 所以以前是"滑出去、蹦进来"，首尾不呼应）。
+    void dpEl.offsetWidth;
     dpEl.classList.add('on');
     document.body.classList.add('dp-open');
     dpClose.focus();
@@ -922,11 +927,20 @@
     dpending[key].then((d) => { if (token === dpToken) fillDetail(s, d); });
   }
 
+  let dpHideTimer = 0;
   function closeDetail() {
     dpToken++;                        // 在途请求回来时不再填已经关掉的面板
     dpEl.classList.remove('on');
     document.body.classList.remove('dp-open');
-    setTimeout(() => { if (!dpEl.classList.contains('on')) dpEl.hidden = true; }, 260);
+    // 滑出播完才能 display:none：早一步就把面板直接抹掉，"尾"就断了。
+    // 时长从 CSS 自己读（这里改 `.26s` → `.4s` 时不用跟着改两处），
+    // 也不用 transitionend：它会被子元素冒泡上来的过渡干扰，而 reduced-motion 下
+    // `transition: none` 又永远等不到事件 —— 读时长这一条两种情况都正好。
+    const dur = parseFloat(getComputedStyle(dpEl).transitionDuration) || 0;
+    clearTimeout(dpHideTimer);
+    dpHideTimer = setTimeout(() => {
+      if (!dpEl.classList.contains('on')) dpEl.hidden = true;   // 期间又点开就别藏了
+    }, dur * 1000 + 40);
     if (dpBack && dpBack.focus) dpBack.focus();
     dpBack = null;
   }
