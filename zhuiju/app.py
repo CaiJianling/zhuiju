@@ -53,6 +53,31 @@ CLICK_PLACE_CN = {"panel": "海报详情", "card": "卡片线路", "hot": "猜�
 CLICK_KIND_CN = {"play": "观看地址", "detail": "详情"}
 # 明细列表看哪一半：合流是默认，另外两个是给"只想数搜索"的人的出口
 SCOPE_CN = {"all": "全部", "query": "只看搜索", "click": "只看点开"}
+# 后台分标签页。一整页 11 块太长了：进后台多数只想知道"今天有没有人用"，
+# 翻明细、翻 STRM、改设置是完全不同的三件事，不该都挤在同一条滚动里。
+# 分组的唯一口径就这一处：tab 校验、标签栏、侧边目录、模板上的 data-grp 都从它生成，
+# 加一块内容时只改这里，不会出现"块归在总览、目录却写在明细"这种对不上的情况。
+# 每个块 = (锚点 id, 目录里显示的名字)
+ADMIN_TABS = {
+    "overview": {"label": "总览", "blocks": [
+        ("stat", "汇总卡片"), ("days", "按天"), ("top-kw", "热门关键词"),
+        ("top-ip", "活跃 IP"), ("agents", "浏览器 / 设备"), ("refs", "来源页"),
+        ("geo", "IP 归属地地图")]},
+    "detail": {"label": "明细", "blocks": [
+        ("behavior", "像脚本的行为特征"), ("detail", "明细")]},
+    "strm": {"label": "Emby STRM", "blocks": [
+        ("strm", "采集与状态"), ("strm-zips", "分卷包"), ("strm-src", "各源采集进度")]},
+    "settings": {"label": "设置", "blocks": [("settings", "运行设置")]},
+}
+
+
+def admin_tab(raw) -> str:
+    """tab 参数只认 ADMIN_TABS 里那几个键，认不出来回总览。
+
+    和 scope / who 一样是"非法值不当没填处理"而不是"报错"：手改 URL 的人不该看到 500，
+    而静默回总览最多是"咦怎么换了页"，比筛空或崩都好查。
+    """
+    return raw if raw in ADMIN_TABS else "overview"
 DEFAULT_WINDOW = int(os.environ.get("ZHUIJU_ADMIN_DAYS", "7"))   # 后台不选日期时看最近几天
 REF_KIND_CN = {"site": "站内上一页", "search": "搜索引擎", "out": "外部站点",
                "direct": "直接访问/无来源", "other": "无法解析"}
@@ -270,6 +295,17 @@ def create_app() -> Flask:
     # 本站的 POST 只有后台表单和观看埋点，都是几百字节。给个上限：/api/click 是公开接口，
     # 不设上限就等于让人拿任意大的正文来把进程撑住（超了直接 413，不进解析）
     app.config["MAX_CONTENT_LENGTH"] = 16 * 1024
+
+    # 后台里所有指向 /admin 的链接都自动带上当前标签页：切标签不该把人甩回总览，
+    # 筛一个 IP 也不该把标签弄丢（同一件事：页内链接不该动我没点的东西）。
+    # 写成 jinja 全局而不是每次 render 传参 —— admin.html 里指向 /admin 的链接有四十多个，
+    # 漏掉一处就是"点这个链接回去标签复位了"这种只有真点到才发现的毛病。
+    def _admin_url(**kw):
+        if "tab" not in kw:
+            kw["tab"] = admin_tab((request.args.get("tab") or "").strip())
+        return url_for("admin", **kw)
+
+    app.jinja_env.globals["admin_url"] = _admin_url
     try:
         stats_mod.ensure_schema()
     except Exception:  # noqa: BLE001 - 统计库不可写也不该挡住站点启动
@@ -758,6 +794,9 @@ def create_app() -> Flask:
         if scope not in ("all", "query", "click"):
             scope = "all"
         flt["scope"] = scope
+        # 标签页：非法值回总览（见 admin_tab）。tab 只决定"哪几块显示"，不参与任何数据口径 ——
+        # 同一套筛选条件在四个标签里数的是同一批记录，切个标签不该把数字变了
+        tab = admin_tab((request.args.get("tab") or "").strip())
         rows = stats_mod.list_activity(flt, page=page, per=per, scope=scope)
         agg = stats_mod.summary(flt)
         cagg = stats_mod.click_stats(flt)
@@ -787,8 +826,14 @@ def create_app() -> Flask:
         # 而换范围必须回到第 1 页——两边条数不一样，停在第 4 页看"只看点开"会是空的
         args_scope = {s: {k: v for k, v in keep.items() if k != "page"} | {"scope": s}
                       for s in SCOPE_CN}
+        # 汇总卡片里那颗「详情 / 观看点击」要点开的表上去，所以除了换 scope 还得换标签；
+        # 这件事在 Python 里拼好整条 URL：Jinja 的函数调用不接受 `f(**d, k=v)` 这种混合写法
+        # （直接 TemplateSyntaxError），留给模板就只能再加一个中间变量，不如这里一行搞定
+        click_url = url_for("admin", **{**args_scope["click"], "tab": "detail"})
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
+            tab=tab, tabs=ADMIN_TABS,
+            click_url=click_url,
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
             place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
             who_cn={k: stats_mod.who_label(k) for k in stats_mod.WHO_LABELS},

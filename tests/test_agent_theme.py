@@ -371,7 +371,8 @@ check("注入串被当普通字符串比对，表还在",
       and stats_mod.list_queries({})["total"] > 0)
 
 geo = d2[d2.index("geotbl"):]
-pairs = re.findall(r'\?geo=([A-Z]{2})">([^<]+)<', geo)
+# geo=CN 后面现在还会跟着 &tab=overview（页内链接都带当前标签），所以不能在参数末尾就要求 ">
+pairs = re.findall(r'[?&]geo=([A-Z]{2})[^"]*">([^<]+)<', geo)
 check("归属地列表只显示国家，不带省市运营商",
       all(("省" not in v and "市" not in v and "·" not in v) for _, v in pairs), pairs)
 check("国家名取自库里那一列（中国 / Australia 原样）",
@@ -441,8 +442,13 @@ check("横向滚动条占的那几像素高度要补回去，否则最后一行�
       "f.offsetHeight - f.clientHeight" in js)
 check("明细局部换页后重算框高", "refold();" in ah[ah.index("function render"):ah.index("/* ---- 面板内联滚动")])
 check("翻页不再把页面滚到明细顶部：整套 scrollIntoView 定位都删了",
-      "scrollIntoView" not in ah and "scrollToDetail" not in ah
-      and "scroll-margin-top" not in css)
+      "scrollIntoView" not in ah and "scrollToDetail" not in ah, None)
+# scroll-margin-top 又回来了，但服务对象不同：以前是给"翻页后把明细滚进视野"用的（那套已删），
+# 现在是给侧边目录的锚点跳转用的 —— 没有它，点目录跳过去后标题会被顶部那排标签压住。
+# 所以它必须只作用在正文块上（.adminmain [id]），不能又变成 #detail 的全局滚动避让
+check("滚动避让只为目录锚点服务：写在正文块上，不给 #detail 单独留",
+      ".adminmain [id] { scroll-margin-top: 56px; }" in css
+      and "#detail { scroll-margin-top" not in css, None)
 check("窗口变窄重算（折行变了会露半行），且做防抖",
       "resize" in js and "clearTimeout(foldT)" in js and "setTimeout(refold, 200)" in js)
 

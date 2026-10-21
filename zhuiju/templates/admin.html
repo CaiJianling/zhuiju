@@ -9,7 +9,9 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>📊</text></svg>">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_v }}">
 </head>
-<body>
+{# data-tab 由服务端给（不是 JS 写的）：这样禁用 JS 也照样只显示当前标签那一组块，
+   而登录页那一份没有 tab，`or 'overview'` 兜住 —— 那一屏本来就没有带 data-grp 的块 #}
+<body data-tab="{{ tab or 'overview' }}">
 <header class="topbar">
   <div class="wrap">
     <h1>后台统计 <span class="ver">需要口令</span>
@@ -26,7 +28,7 @@
       · 最近一次访问触发：{{ upd.last_trigger or "还没访问触发过" }}
       {# 每天几点算"新的一天"是设置项，页头这句要点一下去哪儿改：光看这一屏没人知道有那一节 #}
       · 每天 <b>{{ '%02d' | format(setinfo.hour) }}</b> 点后第一次访问才会触发
-      （在页面最下面「<a href="#settings">设置</a>」里改，
+      （在页面最下面「<a href="{{ admin_url(tab='settings') }}">设置</a>」里改，
       {%- if setinfo.source == 'env' %}现在被环境变量 <code>{{ setinfo.spec.env }}</code> 顶着{% endif -%}
       {%- if setinfo.source == 'file' %}现在来自 settings.json{% endif -%}
       {%- if setinfo.source == 'default' %}现在还是默认值{% endif -%}）
@@ -65,7 +67,7 @@
   <p class="loginerr">统计库的结构没能升级，归属地暂时不会写入：{{ geo_warn }}
     <br>搜索不受影响；重启服务会再试一次。</p>
   {% endif %}
-  <form class="admform" method="get" action="{{ url_for('admin') }}">
+  <form class="admform" method="get" action="{{ admin_url() }}">
     {# 正在看全部历史时筛了个 IP 提交，不该被悄悄送回"最近一周" #}
     {% if day_all %}<input type="hidden" name="day" value="all">{% endif %}
     {# 同理：正在"只看点开"时筛个关键词，不该被顶回合流视图 #}
@@ -120,10 +122,29 @@
         {% endfor %}
       </select></label>
     <button class="gobtn" type="submit">筛选</button>
-    <a class="reset" href="{{ url_for('admin') }}">清空</a>
+    <a class="reset" href="{{ admin_url() }}">清空</a>
   </form>
 
-  <div class="statgrid">
+  {# 标签栏就是普通的 GET 链接（admin_url 会自动带上当前筛选），所以禁用 JS 也切得动、
+     切完刷新也不会丢条件。显示哪几块是 CSS 按 body[data-tab] 决定的，见 app.css 那四条规则 #}
+  <nav class="admintabs" aria-label="后台标签页">
+    {% for key, t in tabs.items() %}
+    <a href="{{ admin_url(tab=key) }}" {% if tab == key %}class="on" aria-current="page"{% endif %}>{{ t.label }}</a>
+    {% endfor %}
+  </nav>
+
+  <div class="adminbody">
+    {# 侧边目录：只列**当前这个标签**里的小节，点了平滑滚过去。
+       不列别的标签的条目：目标被 CSS 藏起来了，点了没反应比没有目录更让人以为坏了 #}
+    <nav class="admintoc" aria-label="本页目录">
+      <b>{{ tabs[tab].label }}</b>
+      {% for anchor, name in tabs[tab].blocks %}
+      <a href="#{{ anchor }}" data-to="{{ anchor }}">{{ name }}</a>
+      {% endfor %}
+    </nav>
+    <div class="adminmain">
+
+  <div class="statgrid" id="stat" data-grp="overview">
     <div class="stat"><b>{{ agg.count }}</b><span>查询次数</span></div>
     <div class="stat"><b>{{ agg.ips }}</b><span>独立 IP</span></div>
     <div class="stat"><b>{{ agg.kws }}</b><span>独立关键词</span></div>
@@ -131,12 +152,13 @@
     <div class="stat"><b>{{ agg.avg_ok if agg.avg_ok is not none else '—' }}</b><span>平均可用源</span></div>
     <div class="stat"><b>{{ agg.avg_ms if agg.avg_ms is not none else '—' }}</b><span>平均耗时 ms</span></div>
     {# 点开行为放第一排：搜了多少次不稀罕，稀罕的是搜完之后有没有人真去看。
-       指向 #detail：点击行就在明细那张表里，不再单独一张表、也就没有 #clicks 这个锚点 #}
-    <div class="stat"><b><a href="{{ url_for('admin', **args_scope['click']) }}">{{ cagg.detail }} / {{ cagg.play }}</a></b>
+       点击行就在明细那张表里，所以要连着 tab=detail 一起给：只换 scope 不换标签的话，
+       在总览上点它 = 数据换了但那一块是被 CSS 藏着的，看上去就像"点了没反应" #}
+    <div class="stat"><b><a href="{{ click_url }}">{{ cagg.detail }} / {{ cagg.play }}</a></b>
       <span>详情 / 观看点击</span></div>
     {# 三档放第一排：这一排回答的是"这些人到底是谁"。数字来自 summary 的 by_who（同一个 WHO_SQL） #}
     <div class="stat"><b>
-      {%- for x in agg.by_who %}<a href="{{ url_for('admin', who=x.who) }}">{{ x.n }}</a>{{ ' / ' if not loop.last }}{% endfor -%}
+      {%- for x in agg.by_who %}<a href="{{ admin_url(who=x.who) }}">{{ x.n }}</a>{{ ' / ' if not loop.last }}{% endfor -%}
       {%- if not agg.by_who %}—{% endif -%}</b>
       <span>{% for x in agg.by_who %}{{ who_cn[x.who] }}{% if not loop.last %} / {% endif %}{% endfor %}{% if not agg.by_who %}像真人 / 脚本 / 说不清{% endif %}</span></div>
   </div>
@@ -145,12 +167,12 @@
     {%- else %}最近 {{ day_window }} 天（{{ flt.day_from }} ～ {{ flt.day_to }}）· {% endif -%}
     条件内时间跨度：{{ agg.first_ts or '—' }} ～ {{ agg.last_ts or '—' }} ·
     {%- if day_all %}
-    <a href="{{ url_for('admin') }}">回到最近 {{ day_window }} 天</a>
+    <a href="{{ admin_url() }}">回到最近 {{ day_window }} 天</a>
     {%- else %}
-    <a href="{{ url_for('admin', day='all', **keep_args) }}">看全部历史</a>
+    <a href="{{ admin_url(day='all', **keep_args) }}">看全部历史</a>
     {%- endif %}</p>
 
-  <section class="asect">
+  <section class="asect" id="days" data-grp="overview">
     <h2>按天 <span class="asub">最新一天在最上面</span></h2>
     {% if agg.by_day %}
     {% set maxn = agg.by_day | map(attribute='n') | max %}
@@ -161,7 +183,7 @@
       <tbody>
       {% for d in agg.by_day %}
         <tr>
-          <td><a href="{{ url_for('admin', day_from=d.day, day_to=d.day) }}">{{ d.day }}</a></td>
+          <td><a href="{{ admin_url(day_from=d.day, day_to=d.day) }}">{{ d.day }}</a></td>
           <td class="num">{{ d.n }}</td><td class="num">{{ d.ips }}</td><td class="num">{{ d.empty }}</td>
           <td class="barcell"><i class="bar" style="width: {{ (d.n / maxn * 100) | round(1) }}%"></i></td>
         </tr>
@@ -172,8 +194,8 @@
     {% else %}<p class="empty">还没有查询记录。去首页搜一部剧，这里就会有数据。</p>{% endif %}
   </section>
 
-  <div class="cols">
-    <section class="asect">
+  <div class="cols" data-grp="overview">
+    <section class="asect" id="top-kw" data-grp="overview">
       <h2>热门关键词</h2>
       {% if agg.top_kw %}
       <div class="fold" data-fold data-rows="5">
@@ -181,7 +203,7 @@
         <thead><tr><th>关键词</th><th>次数</th><th>IP</th><th>平均结果</th></tr></thead>
         <tbody>
         {% for k in agg.top_kw %}
-          <tr><td><a href="{{ url_for('admin', kw=k.kw) }}">{{ k.kw }}</a></td>
+          <tr><td><a href="{{ admin_url(kw=k.kw) }}">{{ k.kw }}</a></td>
             <td class="num">{{ k.n }}</td><td class="num">{{ k.ips }}</td>
             <td class="num">{{ '%.1f'|format(k.avg_results or 0) }}</td></tr>
         {% endfor %}
@@ -191,7 +213,7 @@
       {% else %}<p class="empty">无</p>{% endif %}
     </section>
 
-    <section class="asect">
+    <section class="asect" id="top-ip" data-grp="overview">
       <h2>活跃 IP</h2>
       {% if agg.top_ip %}
       <div class="fold" data-fold data-rows="5">
@@ -199,7 +221,7 @@
         <thead><tr><th>IP</th><th>次数</th><th>关键词</th><th>首 / 末次</th></tr></thead>
         <tbody>
         {% for r in agg.top_ip %}
-          <tr><td><a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a></td>
+          <tr><td><a href="{{ admin_url(ip=r.ip) }}">{{ r.ip }}</a></td>
             <td class="num">{{ r.n }}</td><td class="num">{{ r.kws }}</td>
             <td class="dim">{{ r.first_day }} ~ {{ r.last_day }}</td></tr>
         {% endfor %}
@@ -213,8 +235,8 @@
     </section>
   </div>
 
-  <div class="cols">
-    <section class="asect">
+  <div class="cols" data-grp="overview">
+    <section class="asect" id="agents" data-grp="overview">
       <h2>浏览器 / 设备</h2>
       {% if agg.by_browser %}
       <div class="fold" data-fold data-rows="5">
@@ -223,10 +245,10 @@
         <tbody>
         {% for b in agg.by_browser %}
           <tr>
-            <td><a href="{{ url_for('admin', browser=b.browser) }}">{{ b.browser }}</a>
+            <td><a href="{{ admin_url(browser=b.browser) }}">{{ b.browser }}</a>
               {%- if b.bots %} <span class="dim">含程序 {{ b.bots }}</span>{% endif %}</td>
             <td class="dim">{{ b.os or '—' }}</td>
-            <td><a class="dim" href="{{ url_for('admin', device=b.device) }}">{{ b.device or '—' }}</a></td>
+            <td><a class="dim" href="{{ admin_url(device=b.device) }}">{{ b.device or '—' }}</a></td>
             <td class="num">{{ b.n }}</td><td class="num">{{ b.ips }}</td>
           </tr>
         {% endfor %}
@@ -239,7 +261,7 @@
       {% else %}<p class="empty">无</p>{% endif %}
     </section>
 
-    <section class="asect">
+    <section class="asect" id="refs" data-grp="overview">
       <h2>来源页（对方从哪来）</h2>
       {% if agg.by_ref_src %}
       <div class="fold" data-fold data-rows="5">
@@ -248,7 +270,7 @@
         <tbody>
         {% for f in agg.by_ref_src %}
           <tr>
-            <td><a href="{{ url_for('admin', ref_kind=f.kind) }}">{{ f.label }}</a></td>
+            <td><a href="{{ admin_url(ref_kind=f.kind) }}">{{ f.label }}</a></td>
             <td class="dim">{{ ref_kind_cn.get(f.kind, f.kind) }}</td>
             <td class="num">{{ f.n }}</td><td class="num">{{ f.ips }}</td>
             <td class="dim">{{ f.last_day }}</td>
@@ -268,7 +290,7 @@
     </section>
   </div>
 
-  <section class="asect" id="behavior">
+  <section class="asect" id="behavior" data-grp="detail">
     {# 这一节默认收起：上面几排才是"今天有没有人用、有没有搜不到"，这一节是
        "要不要再挖一层"的入口，展开才占地方。用 <details>/<summary> 而不是自己写按钮：
        键盘 Tab + 空格/回车原生就能开关，屏幕阅读器认它，禁用 JS 时也照样能点。
@@ -293,9 +315,9 @@
           {# 不用 `class="{{ 'suspicious' if b.reasons }}"`：没有理由时它渲染成 `class=""`，
              那串空属性曾经让测试里的正则一路跳到归属地表上去（明细那张表同样改成 if/else） #}
           {% if b.reasons %}<tr class="suspicious">{% else %}<tr>{% endif %}
-            <td><a href="{{ url_for('admin', ip=b.ip) }}">{{ b.ip }}</a></td>
+            <td><a href="{{ admin_url(ip=b.ip) }}">{{ b.ip }}</a></td>
             <td class="dim">{{ b.geo or '未解析' }}</td>
-            <td class="num"><a href="{{ url_for('admin', ip=b.ip) }}">{{ b.n }}</a></td>
+            <td class="num"><a href="{{ admin_url(ip=b.ip) }}">{{ b.n }}</a></td>
             <td class="num">{{ b.kws }}</td>
             <td class="num">{{ '%.2f' | format(b.click_n / b.n) if b.n else '—' }}</td>
             <td class="num">{{ (b.site_n * 100 // b.n) ~ '%' if b.n else '—' }}</td>
@@ -336,7 +358,7 @@
     </details>
   </section>
 
-  <section class="asect" id="detail" data-pages="{{ rows.pages }}">
+  <section class="asect" id="detail" data-grp="detail" data-pages="{{ rows.pages }}">
     <h2>明细 <span class="asub">第 {{ rows.page }} / {{ rows.pages }} 页 · 共 {{ rows.total }} 条
       {%- if rows.scope == 'all' %}（搜索与点开合流，按时间倒序）{% elif rows.scope == 'query' %}（只看搜索）{% else %}（只看点开）{% endif -%}
       {# 「入口/来源/结果数」是搜索那一侧才有的列，按它们筛的时候点开行会被一起排除掉。
@@ -345,7 +367,7 @@
       <span class="scope">
         {% for s in ('all', 'query', 'click') %}
         {# 当前范围才加 class="on"：写成 `class="{{ 'on' if ... }}"` 时另外两颗会渲染成 class="" #}
-        <a href="{{ url_for('admin', **args_scope[s]) }}" data-page
+        <a href="{{ admin_url(**args_scope[s]) }}" data-page
            {% if rows.scope == s %}class="on"{% endif %}>{{ scope_cn[s] }}</a>
         {% endfor %}
       </span></span></h2>
@@ -367,7 +389,7 @@
           {%- set bh = beh_map.get(r.ip) %}
           <td class="dim">{{ r.ts }}</td>
           <td>
-            <a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a>
+            <a href="{{ admin_url(ip=r.ip) }}">{{ r.ip }}</a>
             {# 这个 IP 的行为特征挂在这儿：翻明细时不用回到上面那一节去对照。
                只挂行为那一类（秒级连发 / 节拍器 / 无站内跳转 / 从没点开）—— UA 自报的
                两种每一行右边已经有三档徽章了，重复一遍只会更吵。 #}
@@ -381,14 +403,14 @@
             {# 这里必须用 `or ''` 不是 `default('')`：Jinja 的 default 只管"没这个键"，
                管不了值是 None，而归属地没回填成的老行 iso 正是 NULL —— 那样这一页直接 500 #}
             {%- if (r.iso or '') | length == 2 %}
-              <a href="{{ url_for('admin', geo=r.iso) }}">{{ r.geo }}</a>
+              <a href="{{ admin_url(geo=r.iso) }}">{{ r.geo }}</a>
             {%- else %}
               <span class="dim">{{ r.geo or '未解析' }}</span>
             {%- endif -%}
           </td>
           <td>
             {%- if r.browser %}
-              <a href="{{ url_for('admin', browser=r.browser) }}">{{ r.browser }}</a>
+              <a href="{{ admin_url(browser=r.browser) }}">{{ r.browser }}</a>
             {%- else %}<span class="dim">未知</span>{% endif -%}
             {# 三档徽章：点它就是把这一档筛出来。像真人那一档不挂链接也不上色 ——
                满屏"像真人"没信息量，需要一眼看到的是例外（脚本、说不清）。
@@ -403,25 +425,25 @@
               <span class="who who-{{ w }}"
                     title="UA 是浏览器的样子，但这个 IP 同时命中 {{ bh.act_n }} 条脚本行为特征（就是 IP 旁边那几颗胶囊），所以不写「像真人」">{{ who_cn[w] }}</span>
             {%- elif r.who == 'bot' %}
-              <a class="who who-bot" href="{{ url_for('admin', who='bot') }}"
+              <a class="who who-bot" href="{{ admin_url(who='bot') }}"
                  title="UA 自己报了爬虫或脚本客户端">{{ who_cn.bot }}</a>
             {%- elif r.who == 'unknown' %}
-              <a class="who who-unknown" href="{{ url_for('admin', who='unknown') }}"
+              <a class="who who-unknown" href="{{ admin_url(who='unknown') }}"
                  title="当初没存 UA，判断不了">说不清</a>
             {%- else %}<span class="who who-human">{{ who_cn.human }}</span>{% endif -%}
           </td>
           <td>
             {%- if r.os %}
-              <a href="{{ url_for('admin', os=r.os) }}">{{ r.os }}</a>
+              <a href="{{ admin_url(os=r.os) }}">{{ r.os }}</a>
             {%- else %}<span class="dim">未知</span>{% endif -%}
             {%- if r.device %}<span class="dim">{{ r.device }}</span>{% endif -%}
           </td>
           <td>
             {%- if r.type == 'click' %}
-              <a href="{{ url_for('admin', place=r.place) }}"
+              <a href="{{ admin_url(place=r.place) }}"
                  title="从哪儿点的">{{ place_cn.get(r.place, '卡片线路') }}</a>
             {%- elif r.ref_label and r.ref_kind != 'direct' %}
-              <a href="{{ url_for('admin', ref_kind=r.ref_kind) }}">{{ r.ref_label }}</a>
+              <a href="{{ admin_url(ref_kind=r.ref_kind) }}">{{ r.ref_label }}</a>
             {%- else %}
               <span class="dim">{{ r.ref_label or '直接访问 / 无来源' }}</span>
             {%- endif -%}
@@ -430,19 +452,19 @@
             {%- if r.type == 'click' %}
               <b>{{ r.title or r.kw or '（没带片名）' }}</b>
               {%- if r.kw and r.title and r.kw != r.title %}
-                <a href="{{ url_for('admin', kw=r.kw) }}" class="dim">搜：{{ r.kw }}</a>
+                <a href="{{ admin_url(kw=r.kw) }}" class="dim">搜：{{ r.kw }}</a>
               {%- endif -%}
               {%- if r.src_name %}<span class="dim">· {{ r.src_name }}</span>{% endif -%}
               {%- if r.line %}<span class="dim">· {{ r.line }}</span>{% endif -%}
               {%- if r.ep %}<span class="dim">· {{ r.ep }}</span>{% endif -%}
-              {%- if r.host %}<a href="{{ url_for('admin', host=r.host) }}" title="{{ r.url }}"
+              {%- if r.host %}<a href="{{ admin_url(host=r.host) }}" title="{{ r.url }}"
                     rel="noopener noreferrer">{{ r.host }}</a>{% endif -%}
               {%- if r.bot %}<span class="dim">（程序）</span>{% endif -%}
-            {%- else %}<a href="{{ url_for('admin', kw=r.kw) }}">{{ r.kw }}</a>{% endif -%}
+            {%- else %}<a href="{{ admin_url(kw=r.kw) }}">{{ r.kw }}</a>{% endif -%}
           </td>
           <td>
             {%- if r.type == 'click' %}
-              <a href="{{ url_for('admin', kind=r.kind) }}">{{ kind_cn.get(r.kind, '观看地址') }}</a>
+              <a href="{{ admin_url(kind=r.kind) }}">{{ kind_cn.get(r.kind, '观看地址') }}</a>
             {%- else %}{{ via_cn.get(r.via, r.via) }}{% endif -%}
           </td>
           {# 点开行没有结果数，那一格是破折号；别给它套"零结果"的红色（会被读成搜了没结果） #}
@@ -456,11 +478,11 @@
     </table>
       </div>
     <div class="pager">
-      {% if rows.page > 1 %}<a href="{{ url_for('admin', **args_prev) }}" data-page>‹ 上一页</a>{% endif %}
+      {% if rows.page > 1 %}<a href="{{ admin_url(**args_prev) }}" data-page>‹ 上一页</a>{% endif %}
       <span class="dim">第 {{ rows.page }} / {{ rows.pages }} 页</span>
-      {% if rows.page < rows.pages %}<a href="{{ url_for('admin', **args_next) }}" data-page>下一页 ›</a>{% endif %}
+      {% if rows.page < rows.pages %}<a href="{{ admin_url(**args_next) }}" data-page>下一页 ›</a>{% endif %}
       {# 跳转表单把当前筛选当隐藏域带上：不然跳完页筛选就丢了，等于白筛 #}
-      <form class="jumpform" method="get" action="{{ url_for('admin') }}">
+      <form class="jumpform" method="get" action="{{ admin_url() }}">
         {% if day_all %}<input type="hidden" name="day" value="all">{% endif %}
         {% for k, v in flt.items() %}{% if v %}
         <input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
@@ -478,10 +500,10 @@
       （换一个源再看等于又看一次，也记一条），写 <b>观看地址</b> 的是点开了某条播放地址；
       这两类行和搜索行排在同一张表里，按时间倒序，所以"搜了 → 点详情 → 点播放"从上往下读就是过程。
       当前条件下共 {{ cagg.count }} 条 ——
-      {%- for k in cagg.by_kind %} <a href="{{ url_for('admin', kind=k.kind) }}">{{ kind_cn.get(k.kind, '观看地址') }}</a>
+      {%- for k in cagg.by_kind %} <a href="{{ admin_url(kind=k.kind) }}">{{ kind_cn.get(k.kind, '观看地址') }}</a>
         {{ k.n }} 条 / {{ k.ips }} 个 IP{% if not loop.last %}、{% endif %}{% endfor %}
       {%- if cagg.by_host %}；点得最多的站：{% for h in cagg.by_host[:5] %}
-        <a href="{{ url_for('admin', host=h.host) }}">{{ h.host }}</a> {{ h.n }}{% if not loop.last %}、{% endif %}{% endfor %}{% endif %}。
+        <a href="{{ admin_url(host=h.host) }}">{{ h.host }}</a> {{ h.n }}{% if not loop.last %}、{% endif %}{% endfor %}{% endif %}。
       播放页是第三方的，点开就跳过去了，本站只知道"点开了"，不知道最后看不看得成。</p>
     {% endif %}
     {% else %}
@@ -490,7 +512,7 @@
   </section>
 
   {# 归属地与地图放最后：它是"看分布"的，日常翻明细用不上，垫在下面不占首屏 #}
-  <section class="asect" id="geo">
+  <section class="asect" id="geo" data-grp="overview">
     <h2>IP 归属地地图
       <span class="asub">{{ markers | length }} 个地点 · {{ agg.count }} 次查询</span></h2>
     {% if not geo.ready %}
@@ -510,7 +532,7 @@
           {% for gy in range(30, 180, 30) %}<line x1="0" y1="{{ gy }}" x2="360" y2="{{ gy }}"></line>{% endfor %}
         </g>
         {% for m in markers %}
-        <a href="{{ url_for('admin', geo=m.iso) }}">
+        <a href="{{ admin_url(geo=m.iso) }}">
           <title>{{ m.name }} · {{ m.n }} 次 · {{ m.ips }} 个 IP</title>
           <circle cx="{{ m.x }}" cy="{{ m.y }}" r="{{ m.r }}" class="mk"></circle>
         </a>
@@ -535,11 +557,11 @@
           <td>
             {%- if g.iso | length == 2 %}
               {# 这一列只要国家名：geo 里掺了省市区和运营商，放这儿就变成了"某个地区" #}
-              <a href="{{ url_for('admin', geo=g.iso) }}">{{ g.country or g.iso }}</a>
+              <a href="{{ admin_url(geo=g.iso) }}">{{ g.country or g.iso }}</a>
               <span class="dim">{{ g.iso }}</span>
             {%- else %}
               {# 这一桶混了内网/本机/保留/非法，桶名用统称；明细行仍显示各自准确的说法 #}
-              <a href="{{ url_for('admin', geo='--') }}">内网 / 保留地址</a>
+              <a href="{{ admin_url(geo='--') }}">内网 / 保留地址</a>
             {%- endif %}
           </td>
           <td class="num">{{ g.n }}</td><td class="num">{{ g.ips }}</td>
@@ -557,7 +579,7 @@
   {% set pr = sjob.progress or {} %}
   {# data-running 是给下面那段轮询用的初始状态；文案本身仍然由服务端渲染，
      禁用 JavaScript 时这一节照样说得清"在不在跑"（只是不会自己更新） #}
-  <section class="asect" id="strm" data-running="{{ 1 if sjob.running else 0 }}">
+  <section class="asect" id="strm" data-grp="strm" data-running="{{ 1 if sjob.running else 0 }}">
     <h2>Emby STRM <span class="asub">近一年电影 / 电视剧采集 → strm 目录树 → 分卷 zip</span></h2>
     {% if smsg %}<p class="loginnote">{{ smsg }}</p>{% endif %}
 
@@ -586,8 +608,8 @@
     <p class="atip">上一轮各源停在哪：{{ st.note }}</p>
     {% endif %}
 
-    <div class="cols">
-      <section class="asect">
+    <div class="cols" data-grp="strm">
+      <section class="asect" id="strm-zips" data-grp="strm">
         <h2>分卷包 <span class="asub">movie01、movie02… / tv01、tv02…，一卷一个 zip</span></h2>
         {% for kind in ['movie', 'tv'] %}
           {% set kv = smeta.kinds[kind] %}
@@ -625,7 +647,7 @@
           别混在一个库里（Emby 的电影库不认 Season 目录）。</p>
       </section>
 
-      <section class="asect">
+      <section class="asect" id="strm-src" data-grp="strm">
         <h2>各源采集进度 <span class="asub">游标在 strm.db 的 cur 表里，跨天续采</span></h2>
         {% set stop_cn = {'cutoff': '已翻到窗口外', 'known': '全是老片，提前收',
                           'empty': '没有更多页了', 'budget': '预算用完，待续',
@@ -739,7 +761,7 @@
     {% endif %}
   </section>
 
-  <section class="asect" id="settings">
+  <section class="asect" id="settings" data-grp="settings">
     <h2>设置 <span class="asub">这台机器上的运行设置 · 存在 <code>zhuiju/data/{{ setinfo.path }}</code>（不进版本库，也不放进统计库）</span></h2>
     {% if settings_err %}
     <p class="loginerr">刚才那个值没存上：「{{ setinfo.spec.label }}」要填 {{ setinfo.spec.min }}–{{ setinfo.spec.max }}
@@ -768,6 +790,9 @@
       真要放库的场景是多实例共享同一份设置、或者要查"谁在什么时候改的"，本机单进程用不上。
       口令在 <code>admin.json</code>（含秘密），这里放不含秘密的行为设置，两个都是运行时可写、都不进版本库。</p>
   </section>
+
+    </div><!-- /adminmain -->
+  </div><!-- /adminbody -->
 
   <div class="logout">
     <a class="reset" href="{{ url_for('admin_password') }}">改口令</a>
@@ -868,7 +893,7 @@
       if (!isFinite(n) || n < 1) n = 1;
       if (n > pages) n = pages;
       q.set('page', String(n));
-      go(root, '{{ url_for("admin") }}?' + q.toString());
+      go(root, '{{ admin_url() }}?' + q.toString());
     });
   }
 
@@ -884,6 +909,44 @@
       refold();
     });
   });
+
+  /* ---- 侧边目录：滚到哪一节就高亮哪一条 ----
+     不用 IntersectionObserver：这里要的只是"最后一个已经滚过那条线的块"，
+     一个 getBoundingClientRect 就够，还能保证第一次进来（还没滚过）就点亮第一块。
+     观察对象只取"目录里有条目、且在当前标签里看得见"的那些块：别的块要么被 CSS 藏着
+     （宽度 0，量出来永远是同一行），要么压根不在这一页的目录上，高亮它们只会误导。 */
+  (function () {
+    var toc = document.querySelector('.admintoc');
+    if (!toc) return;
+    var blocks = Array.prototype.filter.call(
+      document.querySelectorAll('.adminmain [data-grp]'),
+      function (el) { return el.id && toc.querySelector('a[data-to="' + el.id + '"]'); });
+    if (!blocks.length) return;
+    var raf = 0;
+
+    function mark() {
+      raf = 0;
+      // 这条线要和 CSS 里的 scroll-margin-top(56px) 一起想：跳到某一节后它的顶边就停在 56 附近，
+      // 所以"最后一个顶边越过这条线的块"才是当前节。线画太高（曾经用 140）会把下一节也误判成已到，
+      // 于是"点了『像脚本的行为特征』，高亮却跑到『明细』"——两块之间只差一行表的高度。
+      var line = 84;
+      var bottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+      var cur = blocks[0];
+      for (var i = 0; i < blocks.length; i++) {
+        if (blocks[i].getBoundingClientRect().top <= line) cur = blocks[i];
+        else break;
+      }
+      if (bottom) cur = blocks[blocks.length - 1];   // 滚到页尾时最后一节可能够不着那条线（短的库）
+      Array.prototype.forEach.call(toc.querySelectorAll('a[data-to]'), function (a) {
+        a.classList.toggle('on', a.getAttribute('data-to') === cur.id);
+      });
+    }
+
+    function onScroll() { if (!raf) raf = requestAnimationFrame(mark); }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    mark();
+  })();
 
   refold();                       // 表格在文档流里，脚本放末尾时布局已完成，能直接量到
   var foldT = null;

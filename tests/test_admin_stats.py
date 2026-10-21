@@ -647,12 +647,13 @@ finally:
 
 print("\n19) 区块顺序与明细翻页控件")
 dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)
-ids = [m for m in re.findall(r'<section class="asect" id="(\w+)"', dash)]
-check("明细在归属地之前，最后才是设置（翻数据的人不该先撞见配置）",
-      ids[-1] == "settings" and ids[:3] == ["behavior", "detail", "geo"], ids)
-check("带 id 的区块是行为特征、明细、归属地与设置（观看点击已并进明细，不再单开一节；"
-      "#strm 是可选功能，开着就排在设置之前，所以按「去掉它」来比）",
-      [i for i in ids if i != "strm"] == ["behavior", "detail", "geo", "settings"], ids)
+# id 里带连字符（top-kw / strm-zips…），所以匹配要允许 -，不然这些块会整块从清单里消失
+ids = [m for m in re.findall(r'<section class="asect" id="([\w-]+)"', dash)]
+check("标签分组按 ADMIN_TABS 排：总览那几块在前，明细、STRM（含两块子表）、设置在最后",
+      ids == ["days", "top-kw", "top-ip", "agents", "refs", "behavior", "detail",
+              "geo", "strm", "strm-zips", "strm-src", "settings"], ids)
+check("明细在归属地之前、设置排在最后（翻数据的人不该先撞见配置）",
+      ids.index("detail") < ids.index("geo") < ids.index("settings"), ids[-3:])
 pager = dash[dash.index('class="pager"'):dash.index("</div>", dash.index('class="pager"'))]
 check("翻页区有跳转表单", 'class="jumpform"' in pager)
 check("跳转框是 number 且带 min/max",
@@ -1179,7 +1180,8 @@ check("页面有「设置」那一节和那一项输入（默认就是以前写�
 check("页面上写清了存哪个文件、为什么不放库里",
       "settings.json" in sp and "为什么存在文件而不是" in sp, None)
 check("页头那句也说了每天几点触发、去哪儿改（只看第一屏的人也该找得到）",
-      "点后第一次访问才会触发" in sp and 'href="#settings"' in sp, None)
+      "点后第一次访问才会触发" in sp
+      and re.search(r'href="/admin\?tab=settings"', sp) is not None, None)
 r = c3.post("/admin/settings", data={"csrf": tok, "refresh_hour": "8"})
 check("保存合法值：302 回列表并带 saved 标记",
       r.status_code == 302 and "settings_saved=1" in r.headers["Location"],
@@ -1228,6 +1230,59 @@ check("撤掉环境变量后回到文件里的 8 点（环境变量不写文件�
 check("autoupdate 的日切判据和页面上那个数是同一个（都读 settings.refresh_hour）",
       "settings.refresh_hour()" in (BASE / "zhuiju" / "autoupdate.py").read_text(encoding="utf-8"),
       None)
+
+print("\n27) 后台标签页与侧边目录")
+TABS = app_mod.ADMIN_TABS
+ov = c3.get("/admin").get_data(as_text=True)
+de = c3.get("/admin?tab=detail").get_data(as_text=True)
+st_ = c3.get("/admin?tab=strm").get_data(as_text=True)
+se = c3.get("/admin?tab=settings").get_data(as_text=True)
+check("四个标签都在，链接各指自己那一组",
+      len(re.findall(r'class="admintabs"', ov)) == 1
+      and all(f"tab={k}" in ov for k in TABS), sorted(TABS))
+def tabnav(page):
+    m = re.search(r'<nav class="admintabs"[^>]*>(.*?)</nav>', page, re.S)
+    return m.group(1) if m else ""
+
+
+check("当前标签那颗是高亮的，且带 aria-current（一次只能有一颗）",
+      re.search(r'<a href="/admin\?tab=overview"[^>]*class="on" aria-current="page"', ov) is not None
+      and tabnav(ov).count('class="on"') == 1 and tabnav(de).count('class="on"') == 1, None)
+check("tab 由服务端写到 body 上（禁用 JS 也只显示当前那一组）",
+      '<body data-tab="overview">' in ov and '<body data-tab="detail">' in de
+      and '<body data-tab="strm">' in st_ and '<body data-tab="settings">' in se, None)
+check("认不出来的 tab 值回总览，不报错也不空白",
+      '<body data-tab="overview">' in c3.get("/admin?tab=瞎写").get_data(as_text=True), None)
+grps = set(re.findall(r'data-grp="([\w-]+)"', ov))
+check("页面上出现的 data-grp 全是登记过的标签（拼错一个就是那块永远不显示）",
+      grps <= set(TABS), grps - set(TABS))
+for key, meta in TABS.items():
+    page = {"overview": ov, "detail": de, "strm": st_, "settings": se}[key]
+    anchors = [a for a, _ in meta["blocks"]]
+    check(f"「{meta['label']}」这一组：每个块都有 id、都归在本标签下",
+          all(f'id="{a}" data-grp="{key}"' in page for a in anchors), anchors)
+    check(f"「{meta['label']}」的侧边目录只列自己这几块（点了必须看得见东西）",
+          re.search(r'<nav class="admintoc"[^>]*>(.*?)</nav>', page, re.S).group(1).count('href="#')
+          == len(anchors), anchors)
+check("目录条目与块一一对应：目录里没有指向别的标签的锚点",
+      all(f'href="#{a}"' in ov for a, _ in TABS["overview"]["blocks"])
+      and 'href="#detail"' not in ov and 'href="#detail"' in de, None)
+cssx = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
+check("CSS 里一个标签一条隐藏规则（加标签要一起加，少写一条就是「两块叠在一起」这种显眼错）",
+      all(f'body[data-tab="{k}"] [data-grp]:not([data-grp="{k}"])' in cssx for k in TABS), None)
+check("侧边目录是粘性的、窄屏退到正文上方（不跟正文抢宽度）",
+      ".admintoc {\n  position: sticky;" in cssx
+      and "@media (max-width: 900px) {\n  .adminbody { grid-template-columns: 1fr; }" in cssx, None)
+check("页内链接都带当前 tab：在明细里筛一个 IP，切回来看的还是明细",
+      "tab=detail" in re.search(r'<a href="(/admin\?ip=[^"]*)"', de).group(1),
+      re.search(r'<a href="(/admin\?ip=[^"]*)"', de).group(1))
+check("汇总卡片那颗「详情 / 观看点击」连标签一起换（只换 scope 的话点了像没反应）",
+      re.search(r'href="/admin\?[^"]*scope=click[^"]*tab=detail', ov) is not None, None)
+check("局部刷新的基址也带 tab（否则原地翻两页后地址栏丢了标签，刷新就回总览）",
+      "go(root, '/admin?tab=detail?' + q.toString())" in de,
+      re.findall(r"go\(root, '[^']*'", de)[:1])
+check("目录高亮跟着滚动走，并用 requestAnimationFrame 节流",
+      "requestAnimationFrame(mark)" in de and 'data-to="' in de, None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
