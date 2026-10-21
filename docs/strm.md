@@ -80,7 +80,8 @@ Emby 认多版本的条件是：同一条影片的几个文件放在同一个文
 | `GET /strm/file?path=movie/movie01/…/x.strm` | 只取单个 strm 文件 |
 | `GET /api/strm/status` | 在不在跑、上次跑了多少页、库里多少条、待合并多少 |
 
-`/strm/zip` 不拿请求里的名字直接拼磁盘：先按 `movieNN.zip` / `tvNN.zip` 这个形状认，
+`/strm/zip` 不拿请求里的名字直接拼磁盘：先按 `movieNN.zip` / `tvNN.zip` 这个形状认
+（NN 就是卷号，两位补零：movie01、movie02…、tv01、tv02…），
 再去 `zip` 表里查这一卷确确实实打出来过 —— 否则就成了任意文件下载。
 
 ### 后台那一节（/admin → Emby STRM）

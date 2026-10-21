@@ -196,6 +196,10 @@ def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
         pg = int(cur["pg"]) if same_pass and cur["pg"] else 1
         known = int(cur["known"]) if same_pass else 0
         backfill = int(cur["backfill"]) if cur else 0
+        # 本轮累计已翻页数的起点：翻页途中那次保存也必须写这个累计值，
+        # 以前它写的是"这一批几页"，于是后台那一列被反复覆盖成 1、2 ——
+        # 实测出现过"翻到第 128 页，已翻页数 2"
+        base_req = int(cur["requests"]) if same_pass and cur and cur["requests"] else 0
         fails = 0
         while res["pages"] < max_pages:
             if time.time() >= end_at:
@@ -215,7 +219,8 @@ def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
             if not items:
                 res["stop"] = "empty"
                 strm.save_cursor(con, src.id, pg, True, pass_id, res["last_time"],
-                                 known, res["pages"], stop="empty", backfill=1)
+                                 known, base_req + res["pages"], stop="empty",
+                                 backfill=1)
                 con.commit()
                 break
             fresh = False
@@ -234,7 +239,7 @@ def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
             bump(pages=1, since_flush=1)
             known = 0 if fresh else known + 1
             strm.save_cursor(con, src.id, pg + 1, False, pass_id, newest, known,
-                             res["pages"], stop="", backfill=backfill)
+                             base_req + res["pages"], stop="", backfill=backfill)
             con.commit()
             progress(per_src={src.id: {"name": src.name, "pg": pg, "last_time": newest,
                                        "known": known, "pages": res["pages"],
@@ -244,7 +249,7 @@ def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
             if newest[:10] < since.isoformat():
                 res["stop"] = "cutoff"
                 strm.save_cursor(con, src.id, pg + 1, True, pass_id, newest, known,
-                                 res["pages"], stop="cutoff", backfill=1)
+                                 base_req + res["pages"], stop="cutoff", backfill=1)
                 res["pruned"] = strm.prune_source(con, src.id, pass_id)
                 con.commit()
                 if res["pruned"]:
@@ -255,7 +260,7 @@ def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
                 # 这里刻意不调 prune_source：这一轮只翻了开头几页，
                 # 后面那些是几天前采的正常数据，不是下架
                 strm.save_cursor(con, src.id, pg + 1, True, pass_id, newest, known,
-                                 res["pages"], stop="known", backfill=1)
+                                 base_req + res["pages"], stop="known", backfill=1)
                 con.commit()
                 break
             pg += 1
@@ -266,12 +271,9 @@ def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
         if not res["stop"]:
             res["stop"] = "slice"           # 这一批翻满了 max_pages 页，还没到头，下批再来
         if res["stop"] not in ("cutoff", "known", "empty"):
-            # 没翻到头（这一批满了 / 预算用完 / 连续失败）：游标停在下一处，done=0，下批接着翻。
-            # requests 存"本轮累计"而不是"这一批"，否则后台看到的已翻页数会在每批之后清零
-            total = (int(cur["requests"]) if same_pass and cur and cur["requests"] else 0) \
-                + res["pages"]
+            # 没翻到头（这一批满了 / 预算用完 / 连续失败）：游标停在下一处，done=0，下批接着翻
             strm.save_cursor(con, src.id, pg, False, pass_id, res["last_time"], known,
-                             total, stop=res["stop"], backfill=backfill)
+                             base_req + res["pages"], stop=res["stop"], backfill=backfill)
             con.commit()
         return res
     finally:

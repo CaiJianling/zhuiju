@@ -549,6 +549,10 @@ check("更新文案一律走 textContent（源名和上游备注是外部字符�
 check("没有 JavaScript 时这一节仍然说得出在不在跑（服务端四种文案都渲染）",
       any(t in page for t in ("正在后台采集", "现在访问网站就会拉起一轮",
                               "采集开关是关的", "这一轮跑完了，在等最小间隔")))
+check("分卷那一行写的是真实卷名，不是 movieNN 这种程序员占位符（页面上没人认识 NN）",
+      "movieNN" not in page and "tvNN" not in page
+      and "movie01、movie02" in page and "tv01、tv02" in page,
+      re.findall(r'asub">([^<]*)', page)[:6])
 
 print("\n14) 访问触发（spawn 换成了记账桩，不会真起进程）")
 import time  # noqa: E402
@@ -636,6 +640,41 @@ pass_id, reset = col.decide_pass(c)
 check("全翻完就起新一轮并复位", pass_id == 4 and set(reset) == {"huya", "suoni"}, (pass_id, reset))
 c.commit()
 c.close()
+
+print("\n15b) 游标那一列「已翻页数」是本轮累计（不是这一批几页）")
+
+
+class FakeSrc:
+    id, name, api, params = "hhzy", "火狐资源", "https://hhzyapi.com/api.php/provide/vod/", {}
+
+
+c = con()
+c.execute("DELETE FROM cur")
+c.commit()
+c.close()
+real_fetch = col.fetch_page
+pages_seen = []
+
+
+def fake_fetch(src, pg):
+    pages_seen.append(pg)
+    # 每页给一条新的、在窗口内的条目：这样 record_vod 判 new，known 不会被累加干扰
+    return {"ok": True, "pagecount": 999, "error": None,
+            "items": [mk(f"第{pg}页的片子", "2026", "动作片", "hhm3u8", vid=9000 + pg)]}
+
+
+col.fetch_page = fake_fetch
+cfg = strm.settings()
+col.crawl_src(FakeSrc(), cfg, 7, strm.cutoff(cfg), time.time() + 60, 0.0, 3)
+cur1 = strm.cursors()["hhzy"]
+col.crawl_src(FakeSrc(), cfg, 7, strm.cutoff(cfg), time.time() + 60, 0.0, 3)
+cur2 = strm.cursors()["hhzy"]
+col.fetch_page = real_fetch
+check("第一批翻 3 页 → 游标记 3", cur1["requests"] == 3, cur1)
+check("第二批再翻 3 页 → 游标记 6（累计，不是被覆盖成 3 或 2）",
+      cur2["requests"] == 6, cur2)
+check("页码也确实往前走了", pages_seen[:6] == [1, 2, 3, 4, 5, 6], pages_seen)
+check("下一跳页码 = 已翻页数 + 1", cur2["pg"] == 7, cur2)
 
 print("\n16) 结构：库里到底存了什么（数据先落库再导出这条要求）")
 tables = [x[0] for x in sqlite3.connect(str(strm.DB)).execute(
