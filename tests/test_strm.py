@@ -321,8 +321,13 @@ zpath = strm.ZIPS / "movie01.zip"
 check("打包写出了 movie01.zip", zpath.is_file())
 with zipfile.ZipFile(zpath) as z:
     names = z.namelist()
-    check("包内路径去掉了 movie/ 这一层（解压到媒体库根就能直接用）",
-          names and all(n.startswith("movie01/") for n in names), names[:3])
+    # 默认不带卷号目录：解压到媒体库根就是「片名 (年份)/…」，和 Emby 一个文件夹一部片对齐
+    check("包内既不带 movie/ 那层、也不带 movie01/ 那层，直接是片名目录",
+          names and all(not n.startswith(("movie", "tv")) for n in names)
+          and all(n.count("/") >= 1 for n in names), names[:3])
+    check("包内每个文件名都以它所在文件夹名开头（Emby 认多版本就认这一条）",
+          all(n.split("/")[-2] in n.split("/")[-1] and " - " in n.split("/")[-1]
+              for n in names), names[:2])
     check("包里的文件数与这一卷清单一模一样",
           len(names) == len([p for p in strm.part_paths("movie", "movie01")]),
           (len(names), len(strm.part_paths("movie", "movie01"))))
@@ -332,6 +337,26 @@ with zipfile.ZipFile(zpath) as z:
 again = strm.export()["zips"]
 check("内容没变就不重打包（否则同步脚本每次都要白拷一遍）",
       again["made"] == 0 and again["skipped"] >= 1, again)
+# 打开"包内带卷号目录"：必须重打，而且条目要多一层 movie01/
+strm.save_settings({"zip_part_dir": "1"})
+sw = strm.export()["zips"]
+check("改这个开关会重打所有卷（签名里带着开关，不然改了设置包还是老样子）",
+      sw["made"] >= 1 and sw["skipped"] == 0, sw)
+with zipfile.ZipFile(strm.ZIPS / "movie01.zip") as z:
+    names2 = z.namelist()
+check("打开后包里多一层卷号目录 movie01/",
+      all(n.startswith("movie01/") for n in names2), names2[:2])
+check("清单里那句解压说明跟着实际写法变（不写死一种）",
+      "movie01/片名 (年份)" in strm.manifest()["kinds"]["movie"]["zip_hint"],
+      strm.manifest()["kinds"]["movie"]["zip_hint"])
+strm.save_settings({"zip_part_dir": "0"})
+strm.export()
+with zipfile.ZipFile(strm.ZIPS / "movie01.zip") as z:
+    names3 = z.namelist()
+check("关回去也照样重打，包内回到片名开头",
+      names3 == names and all(not n.startswith("movie01/") for n in names3), names3[:2])
+check("盘上的目录树不受包内写法影响（还是 strm/movie/movie01/…，两种写法共用一份文件）",
+      (strm.ROOT / "movie" / "movie01").is_dir())
 code, path, err = strm.zip_file("movie01.zip")
 check("接口能取到包", code == 200 and path.endswith("movie01.zip"), (code, path, err))
 # 老版本的 zip 表把 "strm_zips/movie01.zip" 整串存进了 path 列，新版只存文件名。
@@ -459,6 +484,13 @@ check("GET /strm/zip 下载分卷包", r.status_code == 200 and len(r.get_data()
       (r.status_code, len(r.get_data())))
 check("下载头带文件名", "movie01.zip" in (r.headers.get("Content-Disposition") or ""),
       r.headers.get("Content-Disposition"))
+cd = r.headers.get("Content-Disposition") or ""
+check("文件名就是卷名本身，不带任何路径（不能出现 E:\\ 或 strm_zips/ 这种）",
+      "filename=movie01.zip" in cd and "\\" not in cd and "/" not in cd.split("filename=")[-1],
+      cd)
+check("清单里 zip 字段也是裸文件名（下载接口认的就是它）",
+      all(p["zip"] == f"{p['name']}.zip" for p in strm.manifest()["kinds"]["movie"]["parts"]),
+      strm.manifest()["kinds"]["movie"]["parts"][:1])
 r = client.get("/strm/zip?name=../../zhuiju/data/admin.json")
 check("包名不合法时 400（挡掉任意文件下载）", r.status_code == 400, r.status_code)
 one_path = strm.part_paths("movie", "movie01")[0]

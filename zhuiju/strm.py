@@ -69,6 +69,9 @@ SPEC: dict[str, tuple] = {
     # × 8 个源就是 480 个文件），一年窗口 ×17 个源是百万级。3000 个一卷会切出几百卷，
     # 包数量比包大小更难受；strm 是纯文本一行地址，2 万个文件的包也就 1MB 上下。
     "part_files": ("每卷最多几个 strm 文件", 200, 200000, 20000),
+    # 默认不带：解压到媒体库根就直接是「片名 (年份)/…」，和 Emby 一个文件夹一部片的
+    # 常规布局对齐；想按卷整目录删除的人可以打开这一项。
+    "zip_part_dir": ("包内带卷号目录（movie01/…）", 0, 1, 0),
     "budget_seconds": ("每轮采集时间预算（秒）", 60, 7200, 900),
     "delay_ms": ("每次请求间隔（毫秒）", 0, 5000, 400),
     "workers": ("同时翻几个源", 1, 8, 3),
@@ -90,6 +93,10 @@ SPEC_HELP = {
                          "不设上限时一部片就能撑爆一卷。",
     "part_files": "每卷最多几个 strm 文件，决定要分成多少个卷（movie01、movie02… / "
                   "tv01、tv02…）。太大 Emby 一次扫描吃不下，太小卷的数量不好看。",
+    "zip_part_dir": "关掉（默认）时包里就是 `片名 (年份)/…`，几卷一起解压到媒体库根正好拼成一棵树；"
+                    "打开后多一层卷号目录 `movie01/片名 (年份)/…`，好处是"
+                    "\"这一卷不要了\"能整目录删掉。改这里会重打所有卷；"
+                    "已经解压过的先别改——旧路径那套还留在库里，同一部片会出现两次。",
     "budget_seconds": "一轮采集最多跑多久。近一年全量一轮跑不完是设计内的，"
                       "预算用完就停，下一次访问接着翻。",
     "delay_ms": "每个请求之间睡多久（各源分别算）。调到 0 就是贴着上游打，不建议。",
@@ -927,7 +934,7 @@ def export(full: bool = False, note: str = "", keys_limit: int = 0) -> dict:
         # 顺序不能倒 —— 先打包的话，这一轮刚写出来的那几个文件根本不在这个卷的清单里。
         # 中间先提交一次：写文件和打包是两段长事务，攒成一个的话期间谁都写不进这个库
         con.commit()
-        zp = build_zips(con)
+        zp = build_zips(con, cfg)
         # 打包之后还要写 manifest.json / 接入说明（这两步只读库 + 写文件，
         # 但读一份清单在 WAL 下也会拿快照；先提交让别的写者能挤进来）
         con.commit()
@@ -989,26 +996,46 @@ def _rmdir(p: Path) -> None:
         pass
 
 
-def zip_arcname(rel: str) -> str:
-    """盘上的相对路径 -> zip 里的路径（去掉最外层 movie/ 或 tv/）。
+def zip_arcname(rel: str, keep_part: bool = False) -> str:
+    """盘上的相对路径 -> zip 里的路径。
 
-    为什么去掉：下载下来的包是"解到媒体库根目录"用的。留着那一层的话，
-    解压后变成 `电影库根/movie/movie01/片名 (2026)/…`，而 movie 那一层里既没有
-    电影库标记也没有别的，纯粹多出来的一跳；把 movie01.zip、movie02.zip 一起解到
-    电影库根，拼出来正好是完整的一棵树。
+    盘上是 `movie/movie01/片名 (年份)/片名 (年份) - 虎牙资源.strm`，包里的写法看设置：
+
+      keep_part=False（默认）→ `片名 (年份)/片名 (年份) - 虎牙资源.strm`
+          几卷一起解压到媒体库根，直接就是 `电影库根/片名 (年份)/…` 这一层，
+          和"媒体库根下面每个文件夹一部片"的常规布局完全对齐。
+      keep_part=True        → `movie01/片名 (年份)/…`
+          多留一层卷号目录。好处是"这一卷不要了"能整目录删掉，坏处是媒体库根下面
+          多一层和 Emby 无关的目录。
+
+    两种写法都不带最外层的 `movie/` 或 `tv/`：那一层只是本站用来把两类分开存，
+    Emby 的电影库和电视剧库本来就是两个库、两个根，再套一层纯属多余。
+
+    换这个设置会重打所有卷（签名里带了这个开关）。已经解压过的人要小心：
+    换写法后旧的那套目录还在库里，同一部片会以两个路径各出现一次，
+    要么先清掉旧解压结果，要么就别换了。
     """
     parts = rel.split("/")
-    return "/".join(parts[1:]) if parts[0] in KINDS and len(parts) > 2 else rel
+    if parts[0] not in KINDS or len(parts) <= 2:
+        return rel
+    return "/".join(parts[1:] if keep_part else parts[2:])
 
 
-def build_zips(con) -> dict:
+def build_zips(con, cfg: dict | None = None) -> dict:
     """每一卷打一个 zip；内容签名没变的卷不重打包。
 
     包里的条目一律用 writestr 写文本，不用 write(filename)：
     后者会把磁盘上的 mtime 打进 zip，导出重写文件时 zip 字节也跟着变，
     "这一卷到底有没有变过"就没法用文件大小/哈希一眼对上了。
     """
+    cfg = cfg or settings()
+    keep = bool(cfg.get("zip_part_dir", 0))
     ZIPS.mkdir(parents=True, exist_ok=True)
+    # 清掉上一次被打断留下的中间文件：打包是"先写 .zip.tmp 再 replace"，
+    # 进程在中间被杀就会留一个半成品躺在那儿（实测留过 tv05.zip.tmp），
+    # 它不会被任何人读到，但会一直占着目录、让人以为打包没干净
+    for stale in ZIPS.glob("*.zip.tmp"):
+        _unlink(stale)
     made = skipped = removed = 0
     groups = list(con.execute(
         "SELECT kind, part, COUNT(*) AS files, COUNT(DISTINCT key) AS titles FROM file"
@@ -1019,7 +1046,9 @@ def build_zips(con) -> dict:
         rows = list(con.execute(
             "SELECT path, sig FROM file WHERE kind=? AND part=? ORDER BY path",
             (g["kind"], g["part"])))
-        body = "\n".join(f"{r['path']}\t{r['sig']}" for r in rows)
+        # 签名里带上"包内带不带卷号目录"这个开关：不带的话，改了设置却判成"没变"，
+        # 老包会一直原样发出去，人只会看到"我明明改了，解压出来还是老样子"
+        body = f"part_dir={int(keep)}\n" + "\n".join(f"{r['path']}\t{r['sig']}" for r in rows)
         sig = hashlib.md5(body.encode("utf-8")).hexdigest()[:16]
         name = f"{part_name(g['kind'], g['part'])}.zip"
         path = ZIPS / name
@@ -1035,7 +1064,7 @@ def build_zips(con) -> dict:
                     p = ROOT / r["path"].replace("/", os.sep)
                     if not p.is_file():
                         continue            # 理论上不会发生（file 表就是导出时写的）；真缺了就跳过这一条，别让整卷打不出来
-                    z.writestr(zip_arcname(r["path"]), p.read_text(encoding="utf-8"))
+                    z.writestr(zip_arcname(r["path"], keep), p.read_text(encoding="utf-8"))
             tmp.replace(path)
         except OSError:
             _unlink(tmp)
@@ -1069,7 +1098,10 @@ HOWTO = """# Emby 接入说明（这一棵树和这些包都是程序生成的�
 
 1. 把 `movie01.zip`、`movie02.zip`… 全部**解压到同一个「电影」媒体库根目录**；
    把 `tv01.zip`、`tv02.zip`… 全部解压到同一个「电视剧」媒体库根目录。
-   包里的路径已经是 `movie01/片名 (2026)/…`，不会多套一层，几卷并排解开就是一整棵树。
+   包里默认就是 `片名 (年份)/片名 (年份) - 虎牙资源.strm` 这一层，解开直接得到
+   `电影库根/片名 (年份)/…`，和 Emby「一个文件夹一部片」的常规布局对齐。
+   （后台「包内带卷号目录」打开后会多一层 `movie01/`，好处是"这一卷不要了"能整目录删。
+   改这一项会重打所有卷；已经解压过的别改 —— 旧路径那套还留在库里，同一部片会出现两次。）
 2. Emby 后台 → 媒体库 → 新建「电影」库指到那个目录，「电视剧」库指到另一个目录。
    以后新增的卷（movie03、tv05…）解进同一个目录再扫一次库就行，不用新建库。
 3. 影片名统一是 `片名 (年份)`，同一文件夹里的多个文件是不同源的线路：
@@ -1112,6 +1144,9 @@ def _manifest(con, cfg: dict | None = None) -> dict:
            "part_files": int(cfg["part_files"]),
            "counts": db_counts(con), "kinds": {}}
     for kind in KINDS:
+        # 说法跟着"包内带不带卷号目录"这个设置走：写死一种，改了设置页面就在说假话
+        inside = (f"{part_name(kind, 1)}/片名 (年份)/…" if cfg["zip_part_dir"]
+                  else "片名 (年份)/…")
         rows = list(con.execute(
             "SELECT f.part AS part, COUNT(DISTINCT f.key) AS titles, COUNT(*) AS files,"
             " MAX(z.path) AS zpath, MAX(z.bytes) AS zbytes,"
@@ -1124,7 +1159,8 @@ def _manifest(con, cfg: dict | None = None) -> dict:
             "files": sum(r["files"] for r in rows),
             # 卷只是同一棵树被切成几段，所以"解到同一个库根"是关键用法，写在清单里
             "zip_hint": f"{KIND_CN[kind]}的分卷包全部解压到同一个媒体库根目录，"
-                        "拼起来就是完整的一棵树（包内路径已去掉 movie/ 或 tv/ 那一层）",
+                        f"拼起来就是完整的一棵树；包里是 `{inside}`"
+                        "（不带本站用来分门别类的 movie/ 或 tv/ 那一层）",
             "parts": [],
         }
         for r in rows:
