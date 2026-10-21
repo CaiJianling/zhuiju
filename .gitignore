@@ -35,8 +35,24 @@ zhuiju/data/stats.db
 zhuiju/data/stats.db-wal
 zhuiju/data/stats.db-shm
 
+# Emby STRM 那一套：采集数据库、访问触发的状态与进度、导出的目录树和分卷包。
+# strm/ 与 strm_zips/ 是几万个文件（近一年 × 多源 × 多线路必然是这个量级），
+# 全部由 tools/collect_strm.py 重新生成 —— 提交上去既把仓库撑爆，
+# 又会让每台机器自己的采集结果互相覆盖
+zhuiju/data/strm.db
+zhuiju/data/strm.db-wal
+zhuiju/data/strm.db-shm
+zhuiju/data/strm_state.json
+zhuiju/data/strm_progress.json
+strm/
+strm_zips/
+
 # 后台口令配置文件：明文 password + 会话签名密钥，换台机器就该重新生成
 zhuiju/data/admin.json
+
+# 后台页面上能改的运行设置（现在只有"每天几点算新的一天"）：这台机器的状态，
+# 默认值在 zhuiju/settings.py 里，提交上来只会让仓库跟着每个人的偏好来回改
+zhuiju/data/settings.json
 
 # 部署时写本机解释器/端口/口令的小文件（模板是 zhuiju.env.example）：
 # 里面可能有口令与 secret_key，跟 admin.json 一样不能提交

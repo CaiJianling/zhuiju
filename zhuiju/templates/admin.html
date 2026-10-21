@@ -24,6 +24,12 @@
        这一行把判据直接摆在页面上，不用登服务器翻日志 #}
     <p class="atip">自动更新用的解释器：<code>{{ upd.python }}</code>（{{ upd.python_why }}）
       · 最近一次访问触发：{{ upd.last_trigger or "还没访问触发过" }}
+      {# 每天几点算"新的一天"是设置项，页头这句要点一下去哪儿改：光看这一屏没人知道有那一节 #}
+      · 每天 <b>{{ '%02d' | format(setinfo.hour) }}</b> 点后第一次访问才会触发
+      （在页面最下面「<a href="#settings">设置</a>」里改，
+      {%- if setinfo.source == 'env' %}现在被环境变量 <code>{{ setinfo.spec.env }}</code> 顶着{% endif -%}
+      {%- if setinfo.source == 'file' %}现在来自 settings.json{% endif -%}
+      {%- if setinfo.source == 'default' %}现在还是默认值{% endif -%}）
       {% if upd.retry_in %}· 上一轮失败，约 {{ (upd.retry_in + 59) // 60 }} 分钟后才会再自动重试
       （{{ upd.retry_minutes }} 分钟冷却，改完环境可跑
       <code>{{ upd.retry_cmd }}</code> 立刻重试）{% endif %}</p>
@@ -263,7 +269,13 @@
   </div>
 
   <section class="asect" id="behavior">
-    <h2>像脚本的行为特征 <span class="asub">按 IP · 只看现有字段算出来的节奏，不改埋点</span></h2>
+    {# 这一节默认收起：上面几排才是"今天有没有人用、有没有搜不到"，这一节是
+       "要不要再挖一层"的入口，展开才占地方。用 <details>/<summary> 而不是自己写按钮：
+       键盘 Tab + 空格/回车原生就能开关，屏幕阅读器认它，禁用 JS 时也照样能点。
+       展开状态记在 localStorage，下次进来还是上次那样（见页尾那段脚本）。 #}
+    <details class="asec-fold" data-memo="zhuiju.admin.behaviorFold">
+    <summary><h2>像脚本的行为特征 <span class="asub">按 IP · 只看现有字段算出来的节奏，不改埋点 ·
+      <b class="tog t-open">点开看</b><b class="tog t-close">点击收起</b></span></h2></summary>
     {# 上面那几节靠 UA 分真人和脚本，UA 是客户端随便写的。这一节不问"它说自己是什么"，
        只问"做出来的样子像不像人"：节奏、跳转、搜完之后有没有点开。 #}
     {% if beh %}
@@ -278,7 +290,9 @@
           <th>判读</th></tr></thead>
         <tbody>
         {% for b in beh %}
-          <tr class="{{ 'suspicious' if b.reasons }}">
+          {# 不用 `class="{{ 'suspicious' if b.reasons }}"`：没有理由时它渲染成 `class=""`，
+             那串空属性曾经让测试里的正则一路跳到归属地表上去（明细那张表同样改成 if/else） #}
+          {% if b.reasons %}<tr class="suspicious">{% else %}<tr>{% endif %}
             <td><a href="{{ url_for('admin', ip=b.ip) }}">{{ b.ip }}</a></td>
             <td class="dim">{{ b.geo or '未解析' }}</td>
             <td class="num"><a href="{{ url_for('admin', ip=b.ip) }}">{{ b.n }}</a></td>
@@ -292,7 +306,10 @@
             </td>
             <td class="num">{{ b.peak_min }}</td>
             <td class="who-cell">
-              <span class="who who-{{ b.who }}">{{ who_cn[b.who] }}</span>
+              {# 这一档已经是"UA + 行为"合成后的说法（stats.verdict），不是 UA 那一档本身；
+                 两档不一样时在 title 里把两个都写出来，免得读的人以为页面在自说自话 #}
+              <span class="who who-{{ b.who }}"
+                    title="UA 那一档是「{{ who_cn[b.who_ua] }}」；命中 {{ b.act_n }} 条行为特征 → 这一档是「{{ who_cn[b.who] }}」">{{ who_cn[b.who] }}</span>
               {%- for x in b.reasons %} <span class="whykey" data-k="{{ x.key }}">{{ x.text }}</span>{% else %}<span class="dim">没看出异常</span>{% endfor -%}
             </td>
           </tr>
@@ -302,6 +319,10 @@
     </div>
     <p class="atip">这些数都是<b>现有的列</b>算出来的，没有新增埋点：间隔用相邻两条搜索的时间差（窗口函数
       <code>LAG</code>），峰值按分钟分桶，点开比来自 <code>clicks</code> 表，站内跳转看 Referer。
+      <b>最左边那一档不是照抄 UA</b>：UA 是浏览器的样子、但行为特征命中 <b>{{ BEHAVIOR_SUSPECT }} 条及以上</b>时，
+      这一档改成「{{ who_cn.suspect }}」（IP 旁边挂的就是那几颗胶囊），命中 <b>{{ BEHAVIOR_SCRIPT }} 条全中</b>时直接按
+      「{{ who_cn.bot }}」显示 —— 同一格里写「像真人」又列一串脚本毛病，等于让读的人自己猜哪句作数。
+      鼠标停在徽章上能看到 UA 那一档原本是什么。明细里同一个 IP 的徽章跟着一起改，两张表是同一个口径。
       <b>判读只是提示，不是判决</b>：真人用浏览器插件批量搜、或者几个人共用一个出口，都会落进同一行；
       反过来，脚本只要老老实实带上 Referer、按秒休息，这几列就看不出来 —— UA 是客户端自由发挥，
       想真正钉死只能给首页发一个匿名会话 token（那是另一个决定，涉及加 cookie）。
@@ -312,6 +333,7 @@
     {% else %}
     <p class="empty">这个条件下没有可分析的记录。</p>
     {% endif %}
+    </details>
   </section>
 
   <section class="asect" id="detail" data-pages="{{ rows.pages }}">
@@ -322,8 +344,9 @@
       {%- if flt.via or flt.ref_kind %}（按入口/来源筛的是搜索记录，点开行没有这两列，已排除）{% endif -%}
       <span class="scope">
         {% for s in ('all', 'query', 'click') %}
+        {# 当前范围才加 class="on"：写成 `class="{{ 'on' if ... }}"` 时另外两颗会渲染成 class="" #}
         <a href="{{ url_for('admin', **args_scope[s]) }}" data-page
-           class="{{ 'on' if rows.scope == s }}">{{ scope_cn[s] }}</a>
+           {% if rows.scope == s %}class="on"{% endif %}>{{ scope_cn[s] }}</a>
         {% endfor %}
       </span></span></h2>
     {% if rows['items'] %}
@@ -339,13 +362,15 @@
            点开行不挂在搜索行下面——从「猜你想搜」海报点进来的人根本没搜过，
            挂在搜索行底下就等于一条都看不见（实测 15 条点击能对上搜索的是 0 条） #}
         {% if r.type == 'click' %}<tr class="crow">{% else %}<tr>{% endif %}
+          {# 这个 IP 的行为特征（上面那一节按 IP 算出来的）在这一行要用两次：
+             IP 格挂胶囊、浏览器格定档位，所以在行首就取好 #}
+          {%- set bh = beh_map.get(r.ip) %}
           <td class="dim">{{ r.ts }}</td>
           <td>
             <a href="{{ url_for('admin', ip=r.ip) }}">{{ r.ip }}</a>
             {# 这个 IP 的行为特征挂在这儿：翻明细时不用回到上面那一节去对照。
                只挂行为那一类（秒级连发 / 节拍器 / 无站内跳转 / 从没点开）—— UA 自报的
                两种每一行右边已经有三档徽章了，重复一遍只会更吵。 #}
-            {%- set bh = beh_map.get(r.ip) %}
             {%- if bh %}
               {%- for x in bh.reasons if x.src == 'act' %}
                 <span class="behflag" title="这个 IP 的行为特征：{{ x.text }}（搜 {{ bh.n }} 次、站内跳转占 {{ (bh.site_n * 100 // bh.n) if bh.n else 0 }}%、点开 {{ bh.click_n }} 次）">{{ x.short }}</span>
@@ -366,8 +391,18 @@
               <a href="{{ url_for('admin', browser=r.browser) }}">{{ r.browser }}</a>
             {%- else %}<span class="dim">未知</span>{% endif -%}
             {# 三档徽章：点它就是把这一档筛出来。像真人那一档不挂链接也不上色 ——
-               满屏"像真人"没信息量，需要一眼看到的是例外（脚本、说不清） #}
-            {%- if r.who == 'bot' %}
+               满屏"像真人"没信息量，需要一眼看到的是例外（脚本、说不清）。
+               但"这一行的 UA 是浏览器的样子"不等于"这个 IP 像真人"：上面那一节按 IP
+               数出来的行为特征命中够多条时，按 stats.verdict() 改判（与行为表同一个口径、
+               同一个说法），否则同一格里左边三颗行为胶囊、右边写着"像真人"，
+               读的人只能自己猜哪句是真的。
+               改判出来的那一档**不挂筛选链接** —— ?who= 筛的是 UA 那一档，
+               点了筛不出这些行，比"不能点"更难查。 #}
+            {%- set w = (bh.who if (r.who == 'human' and bh and bh.who != 'human') else r.who) %}
+            {%- if w != r.who %}
+              <span class="who who-{{ w }}"
+                    title="UA 是浏览器的样子，但这个 IP 同时命中 {{ bh.act_n }} 条脚本行为特征（就是 IP 旁边那几颗胶囊），所以不写「像真人」">{{ who_cn[w] }}</span>
+            {%- elif r.who == 'bot' %}
               <a class="who who-bot" href="{{ url_for('admin', who='bot') }}"
                  title="UA 自己报了爬虫或脚本客户端">{{ who_cn.bot }}</a>
             {%- elif r.who == 'unknown' %}
@@ -517,6 +552,220 @@
     {% endif %}
   </section>
 
+  {# ================= Emby STRM：采集进度、分卷包、设置 ================= #}
+  {% set st = sjob.state or {} %}
+  {% set pr = sjob.progress or {} %}
+  {# data-running 是给下面那段轮询用的初始状态；文案本身仍然由服务端渲染，
+     禁用 JavaScript 时这一节照样说得清"在不在跑"（只是不会自己更新） #}
+  <section class="asect" id="strm" data-running="{{ 1 if sjob.running else 0 }}">
+    <h2>Emby STRM <span class="asub">近一年电影 / 电视剧采集 → strm 目录树 → 分卷 zip</span></h2>
+    {% if smsg %}<p class="loginnote">{{ smsg }}</p>{% endif %}
+
+    {% if sjob.running %}
+    <p class="fresh run" id="strm-state"><i class="dot s-run"></i>正在后台采集
+      <span class="fresh-hint">{{ pr.note or '准备中' }} · 本轮已发 {{ pr.requests or 0 }} 次请求 ·
+        翻 {{ pr.pages or 0 }} 页 · 新增 {{ pr.rows_new or 0 }} 条 · 变更 {{ pr.rows_changed or 0 }} 条</span></p>
+    {% elif not sjob.settings.enabled %}
+    <p class="fresh stale" id="strm-state"><i class="dot s-stale"></i>采集开关是关的
+      <span class="fresh-hint">已采的数据、已写出的文件和分卷包都留着，只是访问网站不再拉起采集</span></p>
+    {% elif sjob.next_in %}
+    <p class="fresh warn" id="strm-state"><i class="dot s-warn"></i>这一轮跑完了，在等最小间隔
+      <span class="fresh-hint">约 {{ (sjob.next_in + 59) // 60 }} 分钟后访问网站会自动接着采
+        （间隔下限 {{ sjob.settings.min_interval_minutes }} 分钟）</span></p>
+    {% else %}
+    <p class="fresh ok" id="strm-state"><i class="dot s-ok"></i>现在访问网站就会拉起一轮
+      <span class="fresh-hint">上次结束 {{ st.at or '从没跑过' }}
+        {%- if st.pages %} · 那轮翻了 {{ st.pages }} 页 / {{ st.requests or 0 }} 次请求{% endif %}</span></p>
+    {% endif %}
+
+    <p class="atip" id="strm-kpi">库里 {{ smeta.counts.vods }} 条（{{ smeta.counts.titles }} 部：电影
+      {{ smeta.counts.movies }} · 剧集 {{ smeta.counts.shows }}）· 来自 {{ smeta.counts.sources }} 个源 ·
+      {{ smeta.counts.urls }} 条可播地址 · 已写 {{ smeta.counts.files }} 个 strm ·
+      待合并 {{ smeta.counts.dirty }} 条。窗口 {{ smeta.window_days }} 天（{{ smeta.since }} 起）。</p>
+    {% if st.note %}
+    <p class="atip">上一轮各源停在哪：{{ st.note }}</p>
+    {% endif %}
+
+    <div class="cols">
+      <section class="asect">
+        <h2>分卷包 <span class="asub">movieNN / tvNN，一卷一个 zip</span></h2>
+        {% for kind in ['movie', 'tv'] %}
+          {% set kv = smeta.kinds[kind] %}
+          <h3 class="subh">{{ kv.label }} · {{ kv.titles }} 部 · {{ kv.files }} 个文件
+            · {{ kv.parts | length }} 卷</h3>
+          {# 表骨架总是渲染：某一类还没打出包时，脚本也要有地方把第一轮的结果填进去，
+             不然"看进度"就还得手动刷一次页面。一轮跑完分卷会变（新片往后追加、
+             新包打出来），所以这张表由轮询在"这一轮结束"的那一刻用 manifest 重建 #}
+          <div class="fold" data-fold data-rows="6">
+          <table class="table">
+            <thead><tr><th>卷</th><th>部</th><th>文件</th><th>包</th><th></th></tr></thead>
+            <tbody id="strm-parts-{{ kind }}">
+            {% for p in kv.parts %}
+              <tr>
+                <td>{{ p.name }}</td>
+                <td class="num">{{ p.titles }}</td>
+                <td class="num">{{ p.files }}</td>
+                <td class="num">{% if p.zip_bytes %}{{ '%.0f'|format(p.zip_bytes / 1024) }} KB{% else %}—{% endif %}</td>
+                <td class="dim">
+                  {% if p.zip_url %}<a href="{{ p.zip_url }}">下载 {{ p.zip }}</a>{% endif %}
+                  {%- if p.index_url %} · <a href="{{ p.index_url }}">看条目</a>{% endif %}
+                  {%- if p.tree_url %} · <a href="{{ p.tree_url }}">文件清单</a>{% endif %}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          </div>
+          {% if not kv.parts %}
+          <p class="empty" id="strm-parts-empty-{{ kind }}">{{ kv.label }}还没有分卷：
+            先跑一轮采集，攒够条目才会打包。</p>
+          {% endif %}
+        {% endfor %}
+        <p class="atip">{{ smeta.kinds.movie.zip_hint }}。
+          {{ smeta.kinds.movie.label }}和{{ smeta.kinds.tv.label }}要分别解压到各自的媒体库根目录，
+          别混在一个库里（Emby 的电影库不认 Season 目录）。</p>
+      </section>
+
+      <section class="asect">
+        <h2>各源采集进度 <span class="asub">游标在 strm.db 的 cur 表里，跨天续采</span></h2>
+        {% set stop_cn = {'cutoff': '已翻到窗口外', 'known': '全是老片，提前收',
+                          'empty': '没有更多页了', 'budget': '预算用完，待续',
+                          'slice': '这批翻满，等换手', 'error': '取不到', 'done': '本轮已收',
+                          '': '本轮还没开始'} %}
+        {# 这张表**总是**渲染出来（哪怕一条游标都没有）：首轮刚开始时脚本要有个地方把
+           页码填进去，不然"看进度"就还得手动刷新一次页面 #}
+        <div class="fold" data-fold data-rows="6">
+        <table class="table">
+          <thead><tr><th>源</th><th>下一跳页码</th><th>本轮状态</th><th>已翻页数</th><th>翻到的最新更新时间</th></tr></thead>
+          <tbody id="strm-cur">
+          {% for c in smeta.cursor %}
+            <tr>
+              <td>{{ c.src }}</td>
+              <td class="num">{{ c.pg }}</td>
+              <td class="dim">{{ stop_cn.get(c.stop, c.stop or '待续') }}</td>
+              <td class="num">{{ c.requests }}</td>
+              <td class="dim">{{ c.last_time or '—' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        {% if not smeta.cursor %}
+        <p class="empty" id="strm-cur-empty">还没采过：一轮都没跑起来，游标是空的。
+          <span class="tip">点开一轮采集（或访问一次首页）这里就会动起来。</span></p>
+        {% endif %}
+        <p class="atip">上游每个站的「最近更新流」都按更新时间倒序，所以是"从第 1 页往后翻、
+          翻到窗口外为止"。一年窗口下 17 个源加起来要翻两三万页，一轮跑不完是设计内的：
+          预算 {{ sjob.settings.budget_seconds }} 秒用完就停，下次访问接着这一页翻。</p>
+
+        <h3 class="subh">各源覆盖度</h3>
+        <div class="fold" data-fold data-rows="5">
+        <table class="table">
+          <thead><tr><th>源</th><th>条目</th><th>部</th><th>可播地址</th></tr></thead>
+          <tbody>
+          {% for s in smeta.sources %}
+            <tr><td>{{ s.name }} <span class="dim">{{ s.id }}</span></td>
+              <td class="num">{{ s.vods }}</td><td class="num">{{ s.titles }}</td>
+              <td class="num">{{ s.m3u8_urls }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        {% if not smeta.sources %}<p class="empty">库里还没有任何源的条目。</p>{% endif %}
+      </section>
+    </div>
+
+    <h3 class="subh">采集设置 <span class="asub">存在 strm.db 里，保存即生效、不用重启</span></h3>
+    <form method="post" action="{{ url_for('admin_strm_settings') }}" class="setform">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="cols">
+        {% for f in sspec %}
+        <label class="admfield"><span>{{ f.label }}{% if f.default != f.value %}
+          <span class="dim">（默认 {{ f.default }}）</span>{% endif %}</span>
+          {% if f.kind == 'bool' %}
+          <select name="{{ f.key }}">
+            <option value="1" {% if f.value %}selected{% endif %}>开</option>
+            <option value="0" {% if not f.value %}selected{% endif %}>关</option>
+          </select>
+          {% elif f.kind == 'int' %}
+          <input type="number" name="{{ f.key }}" value="{{ f.value }}"
+                 min="{{ f.lo }}" max="{{ f.hi }}" step="1">
+          {% else %}
+          <input type="text" name="{{ f.key }}" value="{{ f.value }}"
+                 placeholder="huya,suoni" autocomplete="off">
+          {% endif %}
+          {% if f.help %}<span class="dim sethelp">{{ f.help }}</span>{% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      <p class="setrow"><button class="gobtn" type="submit">保存设置</button></p>
+    </form>
+
+    <p class="setrow">
+      <form method="post" action="{{ url_for('admin_strm_run') }}" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="fbtn">立刻采一轮（{{ sjob.settings.budget_seconds }} 秒预算）</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_strm_export') }}" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="fbtn">现在合并导出 + 打包</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_strm_export') }}" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="mode" value="full">
+        <button type="submit" class="fbtn">全量重建（改了窗口就按这个）</button>
+      </form>
+    </p>
+
+    <p class="atip">接口一览：<code>/api/strm/manifest</code> 分卷清单（就是"有几个包、各多少条目"的出口）、
+      <code>/api/strm/index?kind=movie&amp;part=movie01</code> 某一卷的条目与线路、
+      <code>/api/strm/tree?kind=tv&amp;part=tv01</code> 某一卷的文件清单（纯文本一行一个）、
+      <code>/strm/zip?name=movie01.zip</code> 下载分卷包、
+      <code>/strm/file?path=movie/movie01/…/x.strm</code> 取单个 strm。
+      手动跑：<code>{{ sjob.run_cmd }}</code>；只看状态：<code>{{ sjob.check_cmd }}</code>。
+      目录 <code>strm/</code>（Emby 也可以直接挂这一棵树）、分卷包目录 <code>strm_zips/</code>、
+      日志 <code>{{ sjob.log }}</code>。</p>
+    <p class="atip">命名规则：<code>片名 (年份)/片名 (年份) - 线路名.strm</code>，
+      剧集是 <code>剧名 (年份)/Season 01/剧名 (年份) - S01E03 - 线路名.strm</code>。
+      「文件夹名 + <code> - </code> + 版本名」是 Emby 认多版本的条件，所以海报只出一张、
+      播放时能在版本下拉里换线路；一个 strm 只对应一部片/一集，所以近一年全量必然是
+      几十万个小文件、必须分卷，而不是一个大文件。
+      文件里写的就是上游 m3u8 直链，播放不经过本站。</p>
+    {% if sjob.python %}
+    <p class="atip">采集用的解释器：<code>{{ sjob.python }}</code>
+      {% if sjob.last_trigger %} · 最近一次访问触发的结论：<code>{{ sjob.last_trigger }}</code>{% endif %}</p>
+    {% endif %}
+  </section>
+
+  <section class="asect" id="settings">
+    <h2>设置 <span class="asub">这台机器上的运行设置 · 存在 <code>zhuiju/data/{{ setinfo.path }}</code>（不进版本库，也不放进统计库）</span></h2>
+    {% if settings_err %}
+    <p class="loginerr">刚才那个值没存上：「{{ setinfo.spec.label }}」要填 {{ setinfo.spec.min }}–{{ setinfo.spec.max }}
+      之间的整数。表单里的 <code>min/max</code> 已经挡过一次，走到这句说明是绕开表单提交的。</p>
+    {% endif %}
+    <form class="admform" method="post" action="{{ url_for('admin_settings') }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="admfield"><span>{{ setinfo.spec.label }}</span>
+        <input type="number" name="refresh_hour" min="{{ setinfo.spec.min }}"
+               max="{{ setinfo.spec.max }}" step="1" value="{{ setinfo.hour }}"></label>
+      <span class="dim setnow">现在生效的是 <b>{{ '%02d' | format(setinfo.hour) }}:00</b>
+        {%- if setinfo.source == 'env' %}，由环境变量 <code>{{ setinfo.spec.env }}</code> 顶着（在这儿改了也会被它盖回去）
+        {%- elif setinfo.source == 'file' %}，来自 <code>{{ setinfo.path }}</code>
+        {%- else %}，还是默认值，没改过{% endif -%}</span>
+      <button class="gobtn" type="submit">保存</button>
+    </form>
+    <p class="atip">{{ setinfo.spec.hint }}
+      跑一轮约 4–9 分钟。下一道日切线：<b>{{ setinfo.roll }}</b>；按当前这一项算出来的"今天"是
+      <code>{{ setinfo.logical_day }}</code>，{% if setinfo.due %}所以现在判定"还没更新过"，下一次访问就会补跑一轮{% else %}所以现在判定"当天已经更新过"，不会再跑{% endif %}。
+      改完<b>立刻生效、不用重启</b>：判据每次现读这个文件（按 mtime 缓存，不额外加读盘）。
+      注意把时间往后调（比如 2 点改 8 点）而今天 4 点已经跑过的话，新口径下那天属于"昨天"，
+      下一次访问会立刻补跑一轮 —— 这是对的，不是设置没生效。</p>
+    <p class="atip">为什么存在文件而不是 <code>stats.db</code>：那个库记的是<b>发生过什么</b>
+      （每一次搜索、每一次点开），这一项是<b>以后要怎么做</b>；库会被 <code>KEEP_DAYS</code> 裁剪、
+      也可能整个删掉重新统计，而且它是本机隐私数据（IP / UA / 关键词），不该跟设置绑在同一个命运上。
+      真要放库的场景是多实例共享同一份设置、或者要查"谁在什么时候改的"，本机单进程用不上。
+      口令在 <code>admin.json</code>（含秘密），这里放不含秘密的行为设置，两个都是运行时可写、都不进版本库。</p>
+  </section>
+
   <div class="logout">
     <a class="reset" href="{{ url_for('admin_password') }}">改口令</a>
     <form method="post" action="{{ url_for('admin_logout') }}" class="inline">
@@ -620,6 +869,19 @@
     });
   }
 
+  /* ---- 收起着的那些节：记住上次开没开，展开时把滚动框重新量一遍 ---- */
+  Array.prototype.forEach.call(document.querySelectorAll('details[data-memo]'), function (d) {
+    try {
+      // 必须在第一次 refold() 之前展开：收起时里面没有布局，行高量出来是 0，
+      // 会把明细那种内联滚动框压成一条线（.fold 的高度是量出来的，不是写死的）
+      if (localStorage.getItem(d.dataset.memo) === '1') d.open = true;
+    } catch (err) { /* 隐私模式禁 localStorage：就按模板里的默认状态来 */ }
+    d.addEventListener('toggle', function () {
+      try { localStorage.setItem(d.dataset.memo, d.open ? '1' : '0'); } catch (err) { }
+      refold();
+    });
+  });
+
   refold();                       // 表格在文档流里，脚本放末尾时布局已完成，能直接量到
   var foldT = null;
   // 窗口变窄会改变折行高度（来源格、浏览器格会换行），重算一次才不会露出半行。
@@ -628,6 +890,184 @@
     clearTimeout(foldT);
     foldT = setTimeout(refold, 200);
   });
+})();
+</script>
+<script>
+/* 「Emby STRM」那一节的实时进度：在跑时 10 秒问一次 /api/strm/status，
+   只换那几行文字和两张表的行，不整页重载（重载会把滚动位置弹回顶部，
+   而看进度的人多半正停在游标表那一块）。
+   没有 JS 时这一节仍然说得清在不在跑 —— 服务端那四种文案本来就是完整渲染的，
+   这里只是让它不用手动刷新也在动。 */
+(function () {
+  var sec = document.getElementById('strm');
+  var state = document.getElementById('strm-state');
+  var kpi = document.getElementById('strm-kpi');
+  var curBody = document.getElementById('strm-cur');
+  if (!sec || !state) return;
+
+  // 与模板里那一份 stop_cn 同口径（一个在 Python/Jinja，一个在这里，改一处要记得改另一处）
+  var STOP_CN = {cutoff: '已翻到窗口外', known: '全是老片，提前收', empty: '没有更多页了',
+                 budget: '预算用完，待续', slice: '这批翻满，等换手', error: '取不到',
+                 done: '本轮已收', '': '本轮还没开始'};
+  var wasRunning = sec.dataset.running === '1';
+  var timer = null, busy = false, fails = 0;
+
+  function node(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    // 全部走 textContent：源名、上游备注、站点给的文案都是外部字符串，不能当 HTML 塞进去
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function paintState(s) {
+    var cfg = s.settings || {}, pr = s.progress || {}, c = s.counts || {};
+    state.className = 'fresh';
+    while (state.firstChild) state.removeChild(state.firstChild);
+    if (s.running) {
+      state.classList.add('run');
+      state.appendChild(node('i', 'dot s-run'));
+      state.appendChild(document.createTextNode('正在后台采集'));
+      var bits = '本轮已发 ' + (pr.requests || 0) + ' 次请求 · 翻 ' + (pr.pages || 0) +
+                 ' 页 · 新增 ' + (pr.rows_new || 0) + ' 条 · 待合并 ' + (c.dirty || 0) + ' 条';
+      state.appendChild(node('span', 'fresh-hint', (pr.note ? pr.note + ' · ' : '') + bits));
+    } else if (!cfg.enabled) {
+      state.classList.add('stale');
+      state.appendChild(node('i', 'dot s-stale'));
+      state.appendChild(document.createTextNode('采集开关是关的'));
+      state.appendChild(node('span', 'fresh-hint',
+        '已采的数据、已写出的文件和分卷包都留着，只是访问网站不再拉起采集'));
+    } else if (s.next_in) {
+      state.classList.add('warn');
+      state.appendChild(node('i', 'dot s-warn'));
+      state.appendChild(document.createTextNode('这一轮跑完了，在等最小间隔'));
+      state.appendChild(node('span', 'fresh-hint',
+        '约 ' + Math.ceil(s.next_in / 60) + ' 分钟后访问网站会自动接着采（间隔下限 ' +
+        cfg.min_interval_minutes + ' 分钟）'));
+    } else {
+      state.classList.add('ok');
+      state.appendChild(node('i', 'dot s-ok'));
+      state.appendChild(document.createTextNode('现在访问网站就会拉起一轮'));
+      var st = s.state || {};
+      state.appendChild(node('span', 'fresh-hint',
+        '上次结束 ' + (st.at || '从没跑过') +
+        (st.pages ? ' · 那轮翻了 ' + st.pages + ' 页 / ' + (st.requests || 0) + ' 次请求' : '')));
+    }
+  }
+
+  function paintKpi(s) {
+    var c = s.counts || {}, cfg = s.settings || {}, pr = s.progress || {};
+    if (!kpi) return;
+    kpi.textContent = '库里 ' + (c.vods || 0) + ' 条（' + (c.titles || 0) + ' 部：电影 ' +
+      (c.movies || 0) + ' · 剧集 ' + (c.shows || 0) + '）· 来自 ' + (c.sources || 0) + ' 个源 · ' +
+      (c.urls || 0) + ' 条可播地址 · 已写 ' + (c.files || 0) + ' 个 strm · 待合并 ' +
+      (c.dirty || 0) + ' 条。窗口 ' + (cfg.window_days || '') + ' 天' +
+      (pr.since ? '（' + pr.since + ' 起）' : '') + '。';
+  }
+
+  function paintCursor(s) {
+    if (!curBody) return;
+    var cur = s.cursor || {}, keys = Object.keys(cur).sort();
+    if (!keys.length) return;               // 还没游标就留着模板里那句"还没采过"
+    var hint = document.getElementById('strm-cur-empty');
+    if (hint) hint.parentNode.removeChild(hint);   // 有数据了就把那句提示撤掉，别说假话
+    while (curBody.firstChild) curBody.removeChild(curBody.firstChild);
+    keys.forEach(function (k) {
+      var c = cur[k], tr = node('tr');
+      tr.appendChild(node('td', null, c.src));
+      tr.appendChild(node('td', 'num', String(c.pg)));
+      tr.appendChild(node('td', 'dim', STOP_CN.hasOwnProperty(c.stop) ? STOP_CN[c.stop]
+                                                                      : (c.stop || '待续')));
+      tr.appendChild(node('td', 'num', String(c.requests || 0)));
+      tr.appendChild(node('td', 'dim', c.last_time || '—'));
+      curBody.appendChild(tr);
+    });
+  }
+
+  /* 分卷表只在"这一轮刚刚结束"时重建一次：卷数与包大小是 manifest 里聚合出来的，
+     跟着每次轮询一起拉没意义（而且一轮要跑十几分钟，人不会盯到那时候） */
+  function refreshParts() {
+    fetch('/api/strm/manifest', {credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (m) {
+        if (!m || !m.kinds) return;
+        ['movie', 'tv'].forEach(function (kind) {
+          var body = document.getElementById('strm-parts-' + kind);
+          var kv = m.kinds[kind];
+          if (!body || !kv || !kv.parts) return;
+          var hint = document.getElementById('strm-parts-empty-' + kind);
+          if (hint && kv.parts.length) hint.parentNode.removeChild(hint);
+          while (body.firstChild) body.removeChild(body.firstChild);
+          kv.parts.forEach(function (p) {
+            var tr = node('tr');
+            tr.appendChild(node('td', null, p.name));
+            tr.appendChild(node('td', 'num', String(p.titles)));
+            tr.appendChild(node('td', 'num', String(p.files)));
+            tr.appendChild(node('td', 'num', p.zip_bytes ?
+              (Math.round(p.zip_bytes / 1024) + ' KB') : '—'));
+            var cell = node('td', 'dim');
+            var links = [['下载 ' + p.zip, p.zip_url], ['看条目', p.index_url],
+                         ['文件清单', p.tree_url]].filter(function (x) { return x[1]; });
+            links.forEach(function (x, idx) {
+              if (idx) cell.appendChild(document.createTextNode(' · '));
+              var a = node('a', null, x[0]);
+              a.href = x[1];
+              cell.appendChild(a);
+            });
+            if (!links.length) cell.textContent = '还没打包';
+            tr.appendChild(cell);
+            body.appendChild(tr);
+          });
+        });
+        remeasure();
+      })
+      .catch(function () { /* 拿不到就留着服务端渲染的那一版，页面不至于空掉 */ });
+  }
+
+  function remeasure() {
+    /* 那些 .fold 内联滚动框的高度是上面那段脚本按行量出来的（不是写死的 CSS）。
+       我们往里塞了新行，高度就得重量一次 —— 借它已经监听好的 resize 事件，
+       不再把量高度的逻辑抄第二遍（抄两份迟早会对不上）。 */
+    try { window.dispatchEvent(new Event('resize')); } catch (e) { /* 老浏览器：下一步整页刷新仍然是对的 */ }
+  }
+
+  function tick() {
+    if (busy || document.hidden) return;      // 页面在后台标签里就不问，别白白打点
+    busy = true;
+    fetch('/api/strm/status', {credentials: 'same-origin'})
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        fails = 0;
+        if (s) {
+          paintState(s);
+          paintKpi(s);
+          paintCursor(s);
+          remeasure();
+          if (wasRunning && !s.running) refreshParts();   // 一轮收尾：分卷表跟一次
+          wasRunning = !!s.running;
+        }
+        // 在跑 10 秒一次，闲下来 60 秒一次（够看清"访问网站有没有把它拉起来"）
+        schedule(wasRunning ? 10000 : 60000);
+      })
+      .catch(function () {
+        fails++;
+        if (fails > 5) { clearInterval(timer); timer = null; return; }
+        schedule(20000);
+      })
+      .then(function () { busy = false; });
+  }
+
+  function schedule(ms) {
+    if (timer) clearInterval(timer);
+    timer = setInterval(tick, ms);
+  }
+
+  // 回到这个标签页时立刻补一次，不用等下一个 tick（人就是这时候想看进度的）
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) tick();
+  });
+
+  if (wasRunning) schedule(10000); else schedule(60000);
 })();
 </script>
 {% endif %}

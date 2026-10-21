@@ -146,16 +146,23 @@ WHO_SQL = ("CASE WHEN COALESCE(bot, 0) = 1 THEN 'bot'"
            " WHEN ua IS NULL OR bot IS NULL OR ua NOT LIKE 'Mozilla/%' THEN 'unknown'"
            " ELSE 'human' END")
 WHO_VALUES = ("human", "bot", "unknown")
+# 页面上可能出现的档名。比 WHO_VALUES 多两个，因为它们只在按 IP 汇总那一层存在：
+#   mixed   —— 同一个 IP 里既有浏览器 UA 又有脚本 UA
+#   suspect —— UA 是浏览器的样子，但行为特征命中了几条（见 verdict()）
+# 少一个都会让模板里 who_cn[...] 取不到值，渲染出空白徽章，所以放在一起
+WHO_LABELS = ("human", "bot", "unknown", "mixed", "suspect")
 
 
 def who_label(who: str) -> str:
-    """给三档一个固定说法（模板与报表都用它，不各自翻译）。
+    """给各档一个固定说法（模板与报表都用它，不各自翻译）。
 
     `mixed` 只出现在 behavior() 那种**按 IP 汇总**的地方：同一个 IP 里既有浏览器 UA
     又有脚本 UA（家里共用一个出口、或有人边用边跑脚本），单条记录不会是这个值。
+    `suspect` 也只出现在按 IP 汇总：UA 是浏览器的样子，但命中了几条行为特征
+    （见 verdict()）—— 那一档不能写成"像真人"，否则页面上就自相矛盾了。
     """
     return {"human": "像真人", "bot": "脚本/爬虫", "unknown": "说不清",
-            "mixed": "两种都有"}.get(who, who or "说不清")
+            "mixed": "两种都有", "suspect": "行为像脚本"}.get(who, who or "说不清")
 
 
 def normalize_agent(con) -> int:
@@ -773,6 +780,29 @@ BEHAVIOR_REASONS = {
     "no-ref": ("无站内跳转", "从来不带站内跳转（没有上一页就从没搜过）"),
     "no-click": ("从没点开", "搜了但从没点开过详情或播放地址"),
 }
+# 改判门槛：UA 那一档只看"它说自己是什么"，这几条只看"做出来的样子"。
+# 只数命中的条数，不做加权 —— 加权出来的分数没法用页面上那一列的数复核，
+# 而这一节的立身之本就是"每条判读都能回到一个看得见的数字"。
+#   2 条 —— 降级为「行为像脚本」：真人偶尔秒级连发或忘了点开都不奇怪，
+#           但同时"从不带站内跳转 + 从不点开 + 节拍器"里的两条，就已经很难是人了
+#   4 条 —— 直接按「脚本/爬虫」显示：四条全中，UA 写什么都没用了
+BEHAVIOR_SUSPECT = 2
+BEHAVIOR_SCRIPT = 4
+
+
+def verdict(who_ua: str, act_n: int) -> str:
+    """UA 档 + 命中几条行为特征 → 页面上该显示哪一档。口径只在这里，别处照抄。
+
+    只往上收、不往下放：UA 已经自报脚本（bot）或没留 UA（unknown）的，行为再像人
+    也不会被改回「像真人」—— 那一档本来就是在说"证据不足"。
+    """
+    if who_ua != "human":
+        return who_ua
+    if act_n >= BEHAVIOR_SCRIPT:
+        return "bot"
+    if act_n >= BEHAVIOR_SUSPECT:
+        return "suspect"
+    return "human"
 
 
 def behavior(f: dict, limit: int = 40) -> list[dict]:
@@ -839,9 +869,9 @@ def behavior(f: dict, limit: int = 40) -> list[dict]:
         var = max(0.0, sumsq / n_gap - avg * avg) if n_gap else 0.0
         d["sd_gap"] = math.sqrt(var)
         d["cv"] = (d["sd_gap"] / avg) if avg > 0 else None
-        d["who"] = ("bot" if d["bot_n"] == d["n"] else
-                    "unknown" if d["unknown_n"] == d["n"] else
-                    "mixed" if (d["bot_n"] or d["unknown_n"]) else "human")
+        d["who_ua"] = ("bot" if d["bot_n"] == d["n"] else
+                       "unknown" if d["unknown_n"] == d["n"] else
+                       "mixed" if (d["bot_n"] or d["unknown_n"]) else "human")
         reasons = []
         if d["bot_n"]:
             reasons.append("ua-bot")
@@ -858,7 +888,14 @@ def behavior(f: dict, limit: int = 40) -> list[dict]:
         d["reasons"] = [{"key": k, "short": BEHAVIOR_REASONS[k][0],
                          "text": BEHAVIOR_REASONS[k][1],
                          "src": "ua" if k in BEHAVIOR_UA_KEYS else "act"} for k in reasons]
+        # act_n 只数行为那几条：UA 自报的那两种已经体现在 who_ua 里了，
+        # 再算一次会让"curl 每秒搜 10 次"变成 3 条命中、比真人误点的还严重
+        d["act_n"] = sum(1 for k in reasons if k not in BEHAVIOR_UA_KEYS)
+        d["who"] = verdict(d["who_ua"], d["act_n"])
         out.append(d)
     # 排序按"能举出几条理由"再按条数：理由多的排前面，但都摆着数让人自己复核
     out.sort(key=lambda d: (-len(d["reasons"]), -(d["n"] or 0), d["ip"]))
-    return out[:max(1, min(200, int(limit)))]
+    # 上限 500 而不是 40：明细那一格要用这张表给每一行的 IP 挂徽章与改判，
+    # 截得太早会出现"同一个 IP 在行为表里是『行为像脚本』、在明细里还是『像真人』"。
+    # 这里的 n 是按 IP 聚合的，一年窗口实测几十个 IP，量级完全撑得住。
+    return out[:max(1, min(500, int(limit)))]

@@ -367,7 +367,10 @@ def _year_num(y) -> int:
 
 def search(kw: str, sources: list[Source] | None = None,
            page: int = 1, budget: float = BUDGET) -> dict:
-    sources = [s for s in (sources or load_sources()) if s.enabled]
+    # searchable=False 的那些（实测：闪电明说"暂不支持搜索"、索尼带 wd= 就 403）
+    # 根本不参与检索：它们仍留在配置里喂猜你想搜，但按关键词并发时把它们算进来，
+    # 等于每次搜索都稳定多一条失败记录，sources_total 与"平均可用源"都不再是实话
+    sources = [s for s in (sources or load_sources()) if s.enabled and s.searchable]
     # extra 必须是 list：超时分支要往里 append，写成 dict 会在"某源超预算"时抛
     # AttributeError 直接 500，而这条路径平时不触发，很容易漏掉
     per, extra = [], []

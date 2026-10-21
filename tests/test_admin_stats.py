@@ -20,6 +20,7 @@ sys.path.insert(0, str(BASE))
 
 from zhuiju import admin as admin_mod      # noqa: E402
 from zhuiju import agent as agent_mod      # noqa: E402
+from zhuiju import settings as settings_mod  # noqa: E402
 from zhuiju import stats as stats_mod      # noqa: E402
 
 FAILS = []
@@ -27,6 +28,8 @@ TMP = Path(tempfile.mkdtemp(prefix="zhuiju_admin_test_"))
 
 # 必须在 create_app 之前改：app.secret_key 建应用时就要读配置文件
 admin_mod.CONFIG = TMP / "admin.json"
+# 「每日更新时间」那项设置也一样：后台测试会真的 POST 保存，不能写进本机那份配置里
+settings_mod.PATH = TMP / "settings.json"
 stats_mod.DB = TMP / "stats.db"
 stats_mod.DATA = TMP
 stats_mod._ready = False
@@ -645,9 +648,11 @@ finally:
 print("\n19) 区块顺序与明细翻页控件")
 dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)
 ids = [m for m in re.findall(r'<section class="asect" id="(\w+)"', dash)]
-check("明细在归属地之前（归属地垫底）", ids[-1] == "geo" and "detail" in ids, ids)
-check("带 id 的区块是行为特征、明细与归属地（观看点击已并进明细，不再单开一节）",
-      ids == ["behavior", "detail", "geo"], ids)
+check("明细在归属地之前，最后才是设置（翻数据的人不该先撞见配置）",
+      ids[-1] == "settings" and ids[:3] == ["behavior", "detail", "geo"], ids)
+check("带 id 的区块是行为特征、明细、归属地与设置（观看点击已并进明细，不再单开一节；"
+      "#strm 是可选功能，开着就排在设置之前，所以按「去掉它」来比）",
+      [i for i in ids if i != "strm"] == ["behavior", "detail", "geo", "settings"], ids)
 pager = dash[dash.index('class="pager"'):dash.index("</div>", dash.index('class="pager"'))]
 check("翻页区有跳转表单", 'class="jumpform"' in pager)
 check("跳转框是 number 且带 min/max",
@@ -1004,6 +1009,10 @@ put("8.151.5.5", 1000, "E1", ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:12
 # F：没自报爬虫、可也完全不像浏览器（以前这种直接落进"像真人"，页面上就出现
 #    「浏览器 未知 + 像真人」这种自相矛盾的一行）
 put("8.151.6.6", 1001, "F1", ua="MyOwnFetcher/2.1")
+# G：UA 是浏览器的样子，但四条脚本特征全中（每秒一次 = 秒级连发 + 节拍器，
+#    从不带站内跳转、从不点开）—— 这一条是用来验"改判到顶"的
+for i in range(12):
+    put("8.151.7.7", i, f"G{i}")
 
 who = {x["who"]: x["n"] for x in stats_mod.summary({})["by_who"]}
 check("三档加起来就是总数，没有第四种被吞掉",
@@ -1036,16 +1045,18 @@ beh = {b["ip"]: b for b in stats_mod.behavior({})}
 b2 = beh.get("8.151.2.2") or {}
 keys = [x["key"] for x in b2.get("reasons", [])]
 check("节拍器被抓出来：十条固定 5 秒的 Chrome 请求，UA 说像真人，行为说不是",
-      b2.get("who") == "human" and "metronome" in keys and "no-ref" in keys
-      and "no-click" in keys, {"who": b2.get("who"), "reasons": keys})
+      b2.get("who_ua") == "human" and b2.get("who") == "suspect"
+      and "metronome" in keys and "no-ref" in keys
+      and "no-click" in keys, {"who_ua": b2.get("who_ua"), "who": b2.get("who"), "reasons": keys})
 check("间隔真的算对了：9 个间隔、每个 5 秒，标准差 0",
       b2.get("n_gap") == 9 and b2.get("min_gap") == 5 and b2.get("avg_gap") == 5.0
       and abs(b2.get("sd_gap") or 0) < 1e-6 and b2.get("cv") == 0.0,
       {k: b2.get(k) for k in ("n_gap", "min_gap", "avg_gap", "sd_gap", "cv")})
 b1 = beh.get("8.151.1.1") or {}
 check("有站内跳转、有点开、间隔不规则的那位不被冤枉",
-      not {"metronome", "no-ref", "no-click"} & {x["key"] for x in b1["reasons"]},
-      [x["key"] for x in b1["reasons"]])
+      not {"metronome", "no-ref", "no-click"} & {x["key"] for x in b1["reasons"]}
+      and b1["who"] == "human" == b1["who_ua"],
+      {"who": b1.get("who"), "reasons": [x["key"] for x in b1["reasons"]]})
 check("秒级连发单独一条判读（最快间隔 ≤ 1 秒才算，B 那位隔 5 秒不算）",
       "burst" not in keys and "burst" not in [x["key"] for x in b1["reasons"]], None)
 check("UA 自报脚本的 IP 直接挂着 ua-bot 理由",
@@ -1054,6 +1065,22 @@ check("UA 自报脚本的 IP 直接挂着 ua-bot 理由",
 check("只有一条搜索的 IP 不炸，也没有间隔可报",
       beh["8.151.4.4"]["n_gap"] == 0 and beh["8.151.4.4"]["min_gap"] is None,
       {k: beh["8.151.4.4"].get(k) for k in ("n", "n_gap", "min_gap", "sd_gap", "cv")})
+g7 = beh.get("8.151.7.7") or {}
+check("四条全中的那位不再写「像真人」，直接按「脚本/爬虫」显示",
+      g7.get("who_ua") == "human" and g7.get("who") == "bot" and g7.get("act_n") == 4,
+      {"who_ua": g7.get("who_ua"), "who": g7.get("who"),
+       "reasons": [x["key"] for x in g7.get("reasons", [])]})
+check("改判只往上收：UA 已经自报脚本或没留 UA 的，不会因为行为被改回「像真人」",
+      stats_mod.verdict("bot", 0) == "bot" and stats_mod.verdict("unknown", 4) == "unknown"
+      and stats_mod.verdict("mixed", 4) == "mixed", None)
+check("改判门槛就是页面上写的那两个数（2 条降级、4 条定性）",
+      stats_mod.verdict("human", 1) == "human" and stats_mod.verdict("human", 2) == "suspect"
+      and stats_mod.verdict("human", stats_mod.BEHAVIOR_SCRIPT - 1) == "suspect"
+      and stats_mod.verdict("human", stats_mod.BEHAVIOR_SCRIPT) == "bot", None)
+check("act_n 只数行为那几条（ua-bot / ua-none 不算进去，免得 curl 比真人还严重）",
+      stats_mod.verdict("human", len([x for x in beh["8.151.3.3"]["reasons"]
+                                      if x["src"] == "act"])) == "human"
+      and beh["8.151.3.3"]["act_n"] == 0, beh["8.151.3.3"]["act_n"])
 beh_list = stats_mod.behavior({})
 check("排序按理由多的在前（多的先看，同分再按条数）",
       [len(v["reasons"]) for v in beh_list] ==
@@ -1067,8 +1094,11 @@ check("后台出现了三档徽章", "who-bot" in page and "who-unknown" in page
 check("行为特征那一节出现了，IP 与判读理由都在页面上",
       'id="behavior"' in page and "8.151.2.2" in page and "节拍器" in page, None)
 check("筛选栏有「像谁」这一档", 'name="who"' in page, None)
-check("汇总第一排也有三档那一格", re.search(r'<span>[^<]*像真人 / 脚本', page) is not None,
-      re.findall(r"<span>([^<]{0,40})</span>", page)[:8])
+who_span = re.search(r"<span>((?:像真人|脚本/爬虫|说不清)[^<]*)</span>", page)
+check("汇总第一排那格把三档都列出来了（顺序按条数排，不写死谁在第一）",
+      who_span is not None
+      and all(k in who_span.group(1) for k in ("像真人", "脚本", "说不清")),
+      who_span.group(1) if who_span else None)
 check("说了判读只是提示、不是判决（别让人把它当结论）",
       "判读只是提示" in page, None)
 check("说清了什么情况下这几列看不出来（老实带 Referer 的脚本）",
@@ -1103,6 +1133,101 @@ clean = c3.get("/admin?ip=8.151.1.1").get_data(as_text=True)
 clean_body = clean[clean.index('id="detail"'):clean.index('class="logout"')]
 check("没被挑出行为毛病的那位，IP 边上干干净净",
       'class="behflag"' not in clean_body, clean_body.count('class="behflag"'))
+
+print("\n25) 行为特征改判：徽章不再自相矛盾；那一节默认收起、可点开")
+sus = c3.get("/admin?ip=8.151.2.2").get_data(as_text=True)
+sus_body = sus[sus.index('id="detail"'):sus.index('class="logout"')]
+check("节拍器那位：明细里的徽章是「行为像脚本」，不是「像真人」",
+      'class="who who-suspect"' in sus_body and 'class="who who-human"' not in sus_body
+      and "行为像脚本" in sus_body, sus_body.count('class="who who-'))
+check("改判出来的那一档不挂筛选链接（?who= 筛的是 UA 档，点了筛不出这些行）",
+      "who=suspect" not in sus_body, re.findall(r'href="/admin\?who=\w+"', sus_body)[:2])
+gp = c3.get("/admin?ip=8.151.7.7").get_data(as_text=True)
+gb = gp[gp.index('id="detail"'):gp.index('class="logout"')]
+check("四条全中的那位：明细按「脚本/爬虫」显示，但仍是 span —— 它不是 UA 那一档，不能点",
+      'class="who who-bot"' in gb and 'href="/admin?who=bot"' not in gb,
+      re.findall(r'<(a|span) class="who who-\w+"', gb)[:3])
+check("行为表上的徽章带 title，把 UA 那一档与改判后的那一档都写出来",
+      re.search(r'class="who who-\w+"[^>]*title="UA 那一档是', page) is not None,
+      re.findall(r'<span class="who who-\w+"', page)[:3])
+check("那一节默认收起：details 不带 open，标题那一行就是可点的开关",
+      '<details class="asec-fold"' in page
+      and re.search(r'<details class="asec-fold"[^>]*>\s*<summary>', page) is not None
+      and re.search(r'<details class="asec-fold"[^>]*\bopen\b', page) is None, None)
+css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
+check("提示跟着状态换说法（收起时「点开看」、展开后「点击收起」），展开后不说假话",
+      'class="tog t-open"' in page and 'class="tog t-close"' in page
+      and ".asec-fold[open] .t-open { display: none" in css, None)
+check("展开状态记在本地，且一展开就把内联滚动框重量一遍（收起时量到的行高是 0）",
+      "zhuiju.admin.behaviorFold" in page
+      and re.search(r"addEventListener\('toggle'[\s\S]{0,200}?refold\(\)", page) is not None,
+      None)
+check("把改判规则写在页面上（几条降级、几条定性），不是悄悄换个说法",
+      "条及以上" in page and "4 条全中" in page, None)
+check("suspicious 只挂在真有理由的行上，整页没有残留的 class=\"\"（那串空属性会带偏正则）",
+      'class="suspicious"' in page and 'class=""' not in page,
+      [page.count('class="suspicious"'), page.count('class=""')])
+check("没毛病的那位在明细里仍然是「像真人」，改判不是见谁都往上报",
+      'class="who who-human"' in clean_body and 'who-suspect' not in clean_body,
+      [clean_body.count('class="who who-human"'), clean_body.count('who-suspect')])
+
+print("\n26) 后台设置：每日更新时间（存配置文件，不写进统计库）")
+sp = c3.get("/admin").get_data(as_text=True)
+tok = re.search(r'name="csrf" value="([^"]+)"', sp).group(1)
+check("页面有「设置」那一节和那一项输入（默认就是以前写死的 2 点）",
+      'id="settings"' in sp and 'name="refresh_hour"' in sp and 'value="2"' in sp, None)
+check("页面上写清了存哪个文件、为什么不放库里",
+      "settings.json" in sp and "为什么存在文件而不是" in sp, None)
+check("页头那句也说了每天几点触发、去哪儿改（只看第一屏的人也该找得到）",
+      "点后第一次访问才会触发" in sp and 'href="#settings"' in sp, None)
+r = c3.post("/admin/settings", data={"csrf": tok, "refresh_hour": "8"})
+check("保存合法值：302 回列表并带 saved 标记",
+      r.status_code == 302 and "settings_saved=1" in r.headers["Location"],
+      r.headers.get("Location"))
+saved = json.loads((TMP / "settings.json").read_text(encoding="utf-8"))
+check("值落到配置文件里（不是写进 stats.db）", saved == {"refresh_hour": 8}, saved)
+con = stats_mod.connect()
+try:
+    has_tbl = con.execute("SELECT 1 FROM sqlite_master WHERE name='settings'").fetchone()
+finally:
+    con.close()
+check("统计库里没有多出 settings 表（配置的归宿不是事件日志库）", has_tbl is None, has_tbl)
+after = c3.get("/admin").get_data(as_text=True)
+check("改完立刻按新值说话，不用重启（时间点在页面上、日切线也在）",
+      'value="8"' in after and "08:00" in after and "下一道日切线" in after, None)
+check("来源从「默认值」变成「来自 settings.json」", "settings.json</code>" in after, None)
+check("保存成功的提示走跳转带回的查询参数（不塞 session，和这一页别的状态一样）",
+      "设置已保存" in c3.get("/admin?settings_saved=1").get_data(as_text=True)
+      and "设置已保存" not in after, None)
+bad = c3.post("/admin/settings", data={"csrf": tok, "refresh_hour": "25"})
+check("越界的值（25）被拒：跳回页面带 err 标记",
+      bad.status_code == 302 and "settings_err=1" in bad.headers["Location"],
+      bad.headers.get("Location"))
+bp = c3.get("/admin?settings_err=1").get_data(as_text=True)
+check("拒的时候一句都不写盘，原来的值还在（半套设置比没设置更难查）",
+      "没存上" in bp and json.loads((TMP / "settings.json").read_text(encoding="utf-8"))
+      == {"refresh_hour": 8}, bp[bp.index("没存上"):bp.index("没存上") + 60])
+noauth = app_mod.create_app().test_client()
+rn = noauth.post("/admin/settings", data={"csrf": "x", "refresh_hour": "3"})
+check("没登录改不动设置（401 给登录页，不落盘）",
+      rn.status_code == 401 and json.loads(
+          (TMP / "settings.json").read_text(encoding="utf-8")) == {"refresh_hour": 8}, rn.status_code)
+rc = c3.post("/admin/settings", data={"refresh_hour": "3"})
+check("缺 csrf 的提交被当成过期表单挡掉", rc.status_code in (400, 401), rc.status_code)
+check("表单本身带 min/max（绕开浏览器才走到上面那条服务端校验）",
+      'min="0"' in bp and 'max="23"' in bp, None)
+os.environ["ZHUIJU_REFRESH_HOUR"] = "5"
+try:
+    envp = c3.get("/admin").get_data(as_text=True)
+    check("环境变量顶着的时候页面上就说是环境变量顶的（不然「改了怎么没反应」最难查）",
+          'value="5"' in envp and "环境变量" in envp and "ZHUIJU_REFRESH_HOUR" in envp, None)
+finally:
+    del os.environ["ZHUIJU_REFRESH_HOUR"]
+check("撤掉环境变量后回到文件里的 8 点（环境变量不写文件）",
+      json.loads((TMP / "settings.json").read_text(encoding="utf-8")) == {"refresh_hour": 8}, None)
+check("autoupdate 的日切判据和页面上那个数是同一个（都读 settings.refresh_hour）",
+      "settings.refresh_hour()" in (BASE / "zhuiju" / "autoupdate.py").read_text(encoding="utf-8"),
+      None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

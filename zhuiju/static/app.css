@@ -873,6 +873,9 @@ code {
   padding: 12px 14px;
   margin-bottom: 14px;
 }
+/* 「设置」那一行里跟在输入框后面的"现在生效的是几点"：它不是可填的东西，
+   别和字段一样高，贴着输入框底边排就好 */
+.setnow { font-size: var(--fs-sm); margin-right: auto; }
 .admfield { display: flex; flex-direction: column; gap: 3px; }
 .admfield > span { font-size: var(--fs-sm); color: var(--dim); }
 .admfield input, .admfield select {
@@ -963,6 +966,45 @@ code {
   margin-bottom: 14px;
 }
 .asect h2 { margin: 0 0 11px; font-size: 14.5px; }
+/* 「Emby STRM」那一节里再分层的小标题、设置表单与按钮行。
+   .dim 原先只在 .table 里定义过（还带 nowrap），这一节的说明文字在表格外，
+   所以要有一条不换行约束都没有的全局版本；表格那条更具体，仍然优先。 */
+.dim { color: var(--dim); }
+.subh { margin: 14px 0 8px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.subh:first-child { margin-top: 0; }
+.setform .cols { align-items: start; }
+.sethelp { font-size: var(--fs-min); font-weight: 400; line-height: 1.55; color: var(--dim); }
+.setrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 0; }
+/* 后台里"要不要再挖一层"的那种节默认收起（.asec-fold 包的就是 <details>）。
+   summary 里放的是这一节自己的 h2：长得要和旁边那些标题一样，只是前面多一个会转的箭头、
+   整行都能点。箭头用 ::before + 负 margin 顶出去，展开/收起时标题一个字都不会横移。 */
+.asec-fold > summary {
+  cursor: pointer;
+  list-style: none;                 /* Firefox 的默认三角 */
+  display: block;                   /* Chrome 下 summary 是 list-item，不去掉就打不出箭头外的样式 */
+  margin: -4px -6px 11px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.asec-fold > summary::-webkit-details-marker { display: none; }   /* Chrome/Safari 的默认三角 */
+.asec-fold > summary:hover { background: var(--surface-2); }
+.asec-fold > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.asec-fold > summary h2 { margin: 0; }
+.asec-fold > summary h2::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  margin-left: -1em;
+  color: var(--dim);
+  transition: transform .18s ease;
+}
+.asec-fold[open] > summary h2::before { transform: rotate(90deg); }
+/* 标题后面那个提示跟着状态换说法：收起时叫"点开看"，展开后还写"点开看"就成了假话。
+   只靠 [open] 属性选择器，禁用 JS 时也一起换，不需要脚本参与 */
+.asec-fold .tog { font-weight: 400; }
+.asec-fold .t-close { display: none; }
+.asec-fold[open] .t-open { display: none; }
+.asec-fold[open] .t-close { display: inline; }
 .asub { font-size: 12px; font-weight: 400; color: var(--dim); }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
@@ -1001,6 +1043,10 @@ code {
 .who-bot, a.who-bot:hover { color: var(--bad); border-color: var(--bad-line); background: var(--bad-bg); }
 .who-unknown { color: var(--ink-2); border-color: var(--warn-line); background: var(--warn-bg); }
 .who-mixed { color: var(--ink-2); border-color: var(--line); background: var(--surface-2); }
+/* UA 说像真人、行为说不是 —— 虚线框在这个页面里已经是"待核对的线索"的说法
+   （明细 IP 旁边那些胶囊就是虚线），和「说不清」那种实线琥珀分开：一个是证据不足，
+   一个是有了相反的证据 */
+.who-suspect { color: var(--ink-2); border: 1px dashed var(--warn-line); background: var(--warn-bg); }
 /* 行为特征那一列的判读理由：每条都是页面上那一列的数能复核出来的，不是打分 */
 .whykey {
   display: inline-block;

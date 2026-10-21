@@ -3,8 +3,8 @@
 
 规则
   - 判断依据是 zhuiju/data/refresh_state.json：**当天**没有成功更新过 -> 需要更新。
-    "当天"以凌晨 ZHUIJU_REFRESH_HOUR（默认 2 点）为界：2 点前访问不触发新一天，
-    2 点后只要当天跑过就不再跑。
+    "当天"以几点为界是**设置项**（后台可改，存在 zhuiju/data/settings.json，默认凌晨 2 点，
+    `ZHUIJU_REFRESH_HOUR` 环境变量再盖一层）：那点之前访问不触发新一天，之后当天没跑过才触发。
   - 需要更新时拉起一个独立进程跑 tools/refresh.py，请求线程不等待，
     所以页面照常返回**旧数据**，更新完成后文件被替换，刷新即拿到新数据
     （catalog.py 按文件 mtime 缓存，无需重启服务）。
@@ -28,6 +28,8 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from . import settings
+
 BASE = Path(__file__).resolve().parent.parent
 STATE = BASE / "zhuiju" / "data" / "refresh_state.json"
 PROGRESS = BASE / "zhuiju" / "data" / "refresh_progress.json"
@@ -36,8 +38,6 @@ LOG = BASE / "logs" / "autoupdate.log"
 REFRESH = BASE / "tools" / "refresh.py"
 LOCK_TTL = 25 * 60          # 锁的有效期，超过认为上次进程已死
 CHECK_TTL = 60              # 同一进程内多久才重新看一次状态文件，避免每次请求都读盘
-# "一天"以凌晨几点为界：2 点前访问不算新的一天，不触发；2 点后当天没跑过才触发
-REFRESH_HOUR = int(os.environ.get("ZHUIJU_REFRESH_HOUR", "2"))
 # 一轮失败后多久才允许再自动重试；设 0 就是每次访问都重试
 RETRY_MINUTES = int(os.environ.get("ZHUIJU_RETRY_MINUTES", "15"))
 
@@ -68,13 +68,15 @@ _last_check = [0.0, False]  # (时间戳, 是否需要更新)
 
 
 def logical_day(now: datetime | None = None) -> date:
-    """以 REFRESH_HOUR 为界的逻辑日期。
+    """以设置里那个小时为界的逻辑日期（后台可改，默认凌晨 2 点）。
 
-    直接用自然日会有两个毛病：凌晨 1 点访问就把"今天"更新跑掉了，2 点后又会再跑一次；
+    直接用自然日会有两个毛病：凌晨 1 点访问就把"今天"更新跑掉了，设定时间后又跑一次；
     反过来 23 点跑过的，第二天 00:30 访问会被判成"没更新"而白跑一趟。
+    几点为界这件事现在是**每次现读设置**（settings 按文件 mtime 缓存，改了立刻生效），
+    不是 import 时算死的常量 —— 后台里改完还要重启服务才会变，是最好查不出来的一类"设置没生效"。
     """
     now = now or datetime.now()
-    return (now - timedelta(hours=REFRESH_HOUR)).date()
+    return (now - timedelta(hours=settings.refresh_hour())).date()
 
 
 # --------------------------------------------------------------------------- 解释器在哪
@@ -238,20 +240,21 @@ def _read_state() -> dict:
         return {}
 
 
-def _lock_age() -> float:
+def _lock_age(lock: Path = LOCK) -> float:
     try:
-        return time.time() - LOCK.stat().st_mtime
+        return time.time() - lock.stat().st_mtime
     except OSError:
         return 1e9
 
 
-def _lock_pid_alive() -> bool:
-    """锁里记了发起进程的 PID：进程已经不在了就不能再算"正在更新"，
-    否则一次崩溃会让页面最长 TTL 时间内谎报进度。"""
-    try:
-        pid = int(LOCK.read_text(encoding="utf-8").split()[0])
-    except (OSError, ValueError, IndexError):
-        return False
+def pid_alive(pid: int) -> bool:
+    """进程还在不在 —— 只探活，不发信号。
+
+    单独包一层是给 strmjob 用的：它有自己的锁文件，但"这个 PID 还活着吗"的判据
+    不该在两个模块各写一遍。Windows 上不能拿 os.kill(pid, 0) 探活
+    （那在 Windows 语义里是"杀掉它"），只能开句柄读退出码；
+    PROCESS_QUERY_LIMITED_INFORMATION 是 Vista 之后有的，科室那些 Win7 机器够用。
+    """
     if is_windows():
         import ctypes
 
@@ -269,12 +272,49 @@ def _lock_pid_alive() -> bool:
         finally:
             kernel32.CloseHandle(h)
     try:
-        os.kill(pid, 0)     # 只是探活，不发信号
+        os.kill(pid, 0)
         return True
     except ProcessLookupError:
         return False
     except PermissionError:
         return True         # 存在但不属于我，仍算在运行
+
+
+def _lock_pid_alive(lock: Path = LOCK) -> bool:
+    """锁里记了发起进程的 PID：进程已经不在了就不能再算"正在更新"，
+    否则一次崩溃会让页面最长 TTL 时间内谎报进度。"""
+    pid = _lock_pid(lock)
+    return pid is not None and pid_alive(pid)
+
+
+def detach_kwargs() -> dict:
+    """脱离当前控制台的启动参数（两个平台都得处理，但理由不一样）。
+
+      - Windows：不加 DETACHED_PROCESS，关掉那个 .bat 窗口时子进程跟着死，
+        更新跑到一半就没声音了；
+      - Linux/宝塔：不加 start_new_session，重启站点时面板发的 SIGTERM 会顺着
+        进程组把正在跑一半的更新一起带走。
+    """
+    if is_windows():
+        return {"creationflags": 0x00000008 | 0x00000200}   # DETACHED | NEW_PROCESS_GROUP
+    return {"start_new_session": True}
+
+
+def spawn(script: Path, log: Path, lock: Path, args=()) -> int:
+    """脱离当前进程起一个子进程跑 script，把它的 PID 写进 lock，返回 PID。"""
+    log.parent.mkdir(exist_ok=True)
+    with open(log, "a", encoding="utf-8", buffering=1) as fh:
+        fh.write(f"\n=== 访问触发后台任务 {script.name} "
+                 f"{time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        # 用站点自己的解释器拉起：它在站点进程里跑起来，sys.executable 就是那个 venv
+        # 里的 python，后面各步骤再按 python_bin() 现找
+        child = subprocess.Popen([sys.executable, "-u", str(script), *args],
+                                 cwd=str(BASE), stdout=fh, stderr=fh,
+                                 close_fds=True, **detach_kwargs())
+    # 锁里必须记**子进程** PID：记服务端自己的 PID 的话探活永远为真，
+    # 子进程崩了页面还会一直显示"正在更新"
+    lock.write_text(f"{child.pid} {time.time()}", encoding="utf-8")
+    return child.pid
 
 
 def running() -> bool:
@@ -323,7 +363,7 @@ def _cycle_done(s: dict) -> bool:
 
 
 def needs_update(now: datetime | None = None) -> bool:
-    """当天（以凌晨 REFRESH_HOUR 为界）没有完整成功更新过，才需要再跑。
+    """当天（以设置里那个小时为界）没有完整成功更新过，才需要再跑。
 
     上一轮是失败的，还要看冷却：失败往往是环境性的（解释器不对、依赖没装、出网被挡），
     这种时候只要有人访问就重跑一遍注定失败的六步，等于每分钟敲一次第三方接口、
@@ -338,25 +378,7 @@ def needs_update(now: datetime | None = None) -> bool:
 
 
 def _spawn() -> None:
-    LOCK.parent.mkdir(exist_ok=True)
-    LOG.parent.mkdir(exist_ok=True)
-    with open(LOG, "a", encoding="utf-8", buffering=1) as fh:
-        fh.write(f"\n=== 访问触发后台更新 {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-        kw = {}
-        if is_windows():
-            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：不跟随控制台的生死
-            kw["creationflags"] = 0x00000008 | 0x00000200
-        else:
-            # setsid：脱离父进程所在的进程组，宝塔重启站点时发的 SIGTERM 才不会顺带
-            # 把正在跑一半的更新一起带走
-            kw["start_new_session"] = True
-        # 用站点自己的解释器拉起 refresh.py：它在站点进程里跑起来，sys.executable
-        # 就是那个 venv 的 python，后面各步骤再按 python_bin() 现找
-        child = subprocess.Popen([sys.executable, "-u", str(REFRESH)], cwd=str(BASE),
-                                 stdout=fh, stderr=fh, close_fds=True, **kw)
-        # 锁里必须记子进程 PID：记服务端自己的 PID 的话，探活永远为真，
-        # 子进程崩了页面还会一直显示"正在更新"
-        LOCK.write_text(f"{child.pid} {time.time()}", encoding="utf-8")
+    spawn(REFRESH, LOG, LOCK)
 
 
 def maybe_trigger() -> str:
@@ -411,8 +433,8 @@ def status() -> dict:
     }
 
 
-def _lock_pid() -> int | None:
+def _lock_pid(lock: Path = LOCK) -> int | None:
     try:
-        return int(LOCK.read_text(encoding="utf-8").split()[0])
+        return int(lock.read_text(encoding="utf-8").split()[0])
     except (OSError, ValueError, IndexError):
         return None

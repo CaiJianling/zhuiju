@@ -928,7 +928,11 @@
   }
 
   let dpHideTimer = 0;
-  function closeDetail() {
+  /* refocus：关掉之后要不要把焦点还给当初那颗「详情」按钮。
+     点 × 和按 Esc 是"我看完了，回到我刚才站的地方"——要还；
+     点面板外面那一下本来就是用户主动点在别处，再抢焦点只会在手机上
+     把页面拽回他视线已经不在的地方。 */
+  function closeDetail(refocus = true) {
     dpToken++;                        // 在途请求回来时不再填已经关掉的面板
     dpEl.classList.remove('on');
     document.body.classList.remove('dp-open');
@@ -941,12 +945,25 @@
     dpHideTimer = setTimeout(() => {
       if (!dpEl.classList.contains('on')) dpEl.hidden = true;   // 期间又点开就别藏了
     }, dur * 1000 + 40);
-    if (dpBack && dpBack.focus) dpBack.focus();
+    if (refocus && dpBack && dpBack.focus) dpBack.focus();
     dpBack = null;
   }
-  dpClose.addEventListener('click', closeDetail);
+  // 写成 () => closeDetail() 而不是直接交 closeDetail：不然 click 事件对象会被
+  // 当成第一个参数（事件对象是"真"，等于每次都判定成要回填焦点）
+  dpClose.addEventListener('click', () => closeDetail());
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dpEl.hidden) closeDetail();
+  });
+  /* 点面板外面也收起：桌面点左边那片页面，手机点抽屉上方那半屏。
+     三种情况不算"外面"：① 面板自己的点击（换源那排 chip、折叠的观看地址都在这儿）；
+     ② 卡片上那颗「详情」——开着面板点另一张卡片的意思是"换一部看"，那一下交给
+     上面那个 opener 处理，命中区选择器和它共用一份，改哪儿要一起改；
+     ③ 不是左键的点击：本站不劫持右键，中键是多开标签页，都不该顺手关窗。 */
+  document.addEventListener('click', (e) => {
+    if (e.button !== 0 || dpEl.hidden || !e.target.closest) return;
+    if (dpEl.contains(e.target)) return;
+    if (e.target.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')) return;
+    closeDetail(false);
   });
 
   /* 更新进度：跑起来时轮询，跑完提示刷新 */

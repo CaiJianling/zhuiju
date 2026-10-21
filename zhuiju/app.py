@@ -15,11 +15,11 @@ import secrets
 import threading
 import time
 import urllib.parse
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import (Flask, jsonify, make_response, redirect, render_template,
-                   request, session, url_for)
+                   request, send_file, session, url_for)
 from markupsafe import escape as xml_escape
 
 from . import admin as admin_mod
@@ -30,7 +30,10 @@ from . import geoip
 from . import hot as hot_mod
 from . import imgproxy
 from . import seo as seo_mod
+from . import settings as settings_mod
 from . import stats as stats_mod
+from . import strm as strm_mod
+from . import strmjob
 from .search import by_id as source_by_id
 from .search import detail as fetch_detail
 from .search import detail_by_title, fetch_one, search
@@ -67,7 +70,17 @@ def refresh_info() -> dict:
     except Exception:  # noqa: BLE001
         s = {}
     prog = autoupdate.progress()
-    src = f"{s.get('sources_enabled', '?')}/{s.get('sources_total', '?')}"
+    # 页头那颗报的是"能被并发检索到的 / 配置里全部的"：站点把关键词搜索关了的那几个
+    # （searchable=False，只喂猜你想搜）数进"检索源"里就是虚报，会让人以为搜一次打了 17 个站。
+    # 状态文件是上一轮更新时写的，配置这轮加过源就跟不上号了（实测会写出 15/10 这种数），
+    # 所以缺这个键时整对儿都当场按配置算，不用等明天那一轮更新才对上
+    n_search = s.get("sources_searchable")
+    if n_search is None:
+        live = load_sources()
+        n_search = sum(1 for x in live if x.enabled and x.searchable)
+        src = f"{n_search}/{len(live)}"
+    else:
+        src = f"{n_search}/{s.get('sources_total', '?')}"
 
     if prog.get("running"):
         done, total = prog.get("done", 0), prog.get("total") or len(autoupdate.STEPS)
@@ -106,7 +119,50 @@ def refresh_info() -> dict:
                 "hint": "访问时会自动补跑完整一轮，" + autoupdate.retry_hint()}
     return {"fresh": False, "state": "stale", "progress": prog,
             "text": f"数据是 {s.get('date', '未知')} 更新的，已过当天周期",
-            "hint": "凌晨 2 点后访问会自动重来，" + autoupdate.retry_hint()}
+            # 这句原来写死"凌晨 2 点后"：时间点现在是设置项，页面还在报一个可能的假数
+            "hint": f"过了每天 {settings_mod.refresh_hour()} 点那道线之后访问会自动重来，"
+                    + autoupdate.retry_hint()}
+
+
+def _setinfo() -> dict:
+    """后台「设置」那一节要显示的东西：当前生效值、是谁定的、下一道日切线、现在差不差。
+
+    这几项一定要摆在页面上：访问触发的更新没有日历可看，一个人把时间改成 8 点、
+    结果那天一整天没人访问，就会出现"设置明明对了怎么没更新"——那是最难查的一类问题。
+    """
+    hour = settings_mod.refresh_hour()
+    now = datetime.now()
+    roll = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if roll <= now:                       # 今天这道线已经过去了，那下一道是明天的
+        roll += timedelta(days=1)
+    return {"hour": hour, "spec": settings_mod.SPEC["refresh_hour"],
+            "path": settings_mod.PATH.name,
+            "source": settings_mod.source_of("refresh_hour"),
+            "roll": roll.strftime("%m-%d %H:%M"),
+            "logical_day": autoupdate.logical_day(now).isoformat(),
+            "due": autoupdate.needs_update(now)}
+
+
+def _strm_notice(args, st: dict) -> str:
+    """后台「Emby STRM」那一节的操作结果提示，从跳转带回的查询参数拼一句人话。
+
+    不写 session：这一页本来就用查询参数带筛选条件，多一个提示位就够了，
+    犯不上为一个提示引入 flash。参数值都是我们自己在 redirect 里写死的，
+    只有 strm_err 是用户输入拼出来的，所以模板里必须当文本渲染（不能 |safe）。
+    """
+    cfg = st["settings"]
+    if args.get("strm_err"):
+        return "没保存：" + str(args.get("strm_err"))[:160]
+    if args.get("strm_set"):
+        return (f"已保存：窗口 {cfg['window_days']} 天 · 每卷 {cfg['part_files']} 个文件 · "
+                f"每请求间隔 {cfg['delay_ms']}ms · 每轮预算 {cfg['budget_seconds']}s。"
+                "改了时间范围的话按一次「全量重建」，旧窗口采进来的才会从库里清掉")
+    why = str(args.get("why") or "")[:120]
+    if args.get("strm_run") == "1":
+        return ("已拉起后台任务：" + why) if why else "已拉起一轮后台任务"
+    if args.get("strm_run") == "0":
+        return ("没启动：" + why) if why else "没启动"
+    return ""
 
 
 def _proxied_hot(h: dict) -> dict:
@@ -218,6 +274,10 @@ def create_app() -> Flask:
         stats_mod.ensure_schema()
     except Exception:  # noqa: BLE001 - 统计库不可写也不该挡住站点启动
         pass
+    try:
+        strm_mod.ensure_schema()
+    except Exception:  # noqa: BLE001 - strm 库坏了也只是这一节空着，搜索照常
+        pass
 
     def _csrf_token() -> str:
         tok = session.get("csrf")
@@ -265,6 +325,11 @@ def create_app() -> Flask:
         # 访问即触发：今天没更新过就丢一个后台进程，本次请求照常返回旧数据
         if request.path in ("/", "/sitemap.xml"):
             autoupdate.maybe_trigger()
+        # STRM 采集同理，但它一轮跑不完（近一年要翻两三万页），所以判据是
+        # "离上次结束满没满 min_interval_minutes"。/admin 也算一次访问：
+        # 看后台的人正是想知道"采到哪了"，顺手让它往前走一格最合理。
+        if request.path in ("/", "/sitemap.xml", "/admin"):
+            strmjob.maybe_trigger()
 
     def _page(kw: str = "", snap: dict | None = None):
         host = request.host_url.rstrip("/")
@@ -283,8 +348,11 @@ def create_app() -> Flask:
         return render_template(
             "index.html",
             categories=catalog_mod.categories(),
+            # 首页那句"结果来自 N 个采集接口"和骨架屏那句"正在并发查询 N 个"数的是
+            # **会被并发到的**源：停用的一律不算，只供最新流的那两个（见 Source.searchable）
+            # 也不算 —— 它们不会进 search()，把它们数进去就是虚报
             sources=[{"id": s.id, "name": s.name, "note": s.note, "root": s.root}
-                     for s in load_sources()],
+                     for s in load_sources() if s.enabled and s.searchable],
             updated=catalog_mod.catalog().get("updated_at", ""),
             asset_v=_asset_ver(),
             refresh=refresh_info(),
@@ -507,11 +575,140 @@ def create_app() -> Flask:
         kw = request.args.get("kw", "电影")
         out = []
         for s in load_sources():
-            r = fetch_one(s, kw)
+            # 站点把搜索关了的那两个（见 Source.searchable）不该按"搜不到"来判死：
+            # 它们靠最新流活着，所以换个探法，并把用的是哪条路一起报出来，
+            # 否则自检页上永远是两个红叉，久而久之就没人看这页了
+            probe_kw = kw if s.searchable else ""
+            r = fetch_one(s, probe_kw)
             out.append({"id": s.id, "name": s.name, "ok": r["ok"],
+                        "mode": "search" if s.searchable else "latest",
                         "count": r["count"], "ms": r["ms"], "error": r["error"],
                         "sample": [i["title"] for i in r["items"][:2]]})
         return jsonify({"keyword": kw, "results": out})
+
+    # ------------------------------------------------------------- Emby STRM 接口
+    @app.get("/api/strm/manifest")
+    def api_strm_manifest():
+        """分卷清单：电影/电视剧各有哪些卷、每卷多少部多少文件、包多大、下载地址。
+
+        这就是"strm 太多要分成 movie01、movie02… 并在接口里体现"的那一份出口。
+        """
+        out = strm_mod.manifest()
+        st = strmjob.status()
+        out["job"] = {k: st.get(k) for k in
+                      ("running", "next_in", "last_trigger", "state", "progress")}
+        out["settings"] = st["settings"]
+        return jsonify(out)
+
+    @app.get("/api/strm/status")
+    def api_strm_status():
+        """采集到哪了：在不在跑、上次跑了多少页、库里多少条、待导出多少。"""
+        return jsonify(strmjob.status())
+
+    @app.get("/api/strm/index")
+    def api_strm_index():
+        kind = (request.args.get("kind") or "").strip().lower()
+        part = (request.args.get("part") or "").strip().lower()
+        out = strm_mod.part_titles(kind, part,
+                                   request.args.get("page", 1, type=int) or 1,
+                                   request.args.get("per", 200, type=int) or 200)
+        return jsonify(out), (400 if out.get("error") else 200)
+
+    @app.get("/api/strm/tree")
+    def api_strm_tree():
+        """一卷里所有 strm 的相对路径，一行一个 —— 给"自己写脚本批量拉"用。
+
+        用 text/plain 而不是 JSON：这份清单的主要用法是 `curl ... | while read p`，
+        一行一个比转义过的一串引号好处理。要结构化数据去打 /api/strm/index。
+        """
+        kind = (request.args.get("kind") or "").strip().lower()
+        part = (request.args.get("part") or "").strip().lower()
+        paths = strm_mod.part_paths(kind, part)
+        if not paths:
+            return ("没有这一卷（kind 要 movie 或 tv，part 要 movie01/tv01 这种写法）\n",
+                    404, {"Content-Type": "text/plain; charset=utf-8"})
+        head = f"# {kind}/{part} 共 {len(paths)} 个 strm · 单个文件取 " \
+               f"/strm/file?path=<这一行> · 整卷包取 /strm/zip?name={part}.zip\n"
+        return (head + "\n".join(paths) + "\n", 200,
+                {"Content-Type": "text/plain; charset=utf-8"})
+
+    @app.get("/strm/zip")
+    def strm_zip():
+        """下载一个分卷包（movie01.zip / tv01.zip …）。
+
+        文件名是从库里查出来的，不是把请求里的路径直接拼到磁盘上 ——
+        那等于开一个任意文件下载。见 strm.zip_file()。
+        """
+        name = (request.args.get("name") or "").strip()
+        code, path, err = strm_mod.zip_file(name)
+        if code != 200:
+            return jsonify({"error": err or "取不到"}), code
+        # download_name 用盘上那个文件名，不用请求里传来的字符串：
+        # 名字已经被 zip_file() 按 movieNN.zip 的形状认过一遍并查过库了
+        return send_file(path, as_attachment=True,
+                         download_name=os.path.basename(path),
+                         mimetype="application/zip")
+
+    @app.get("/strm/file")
+    def strm_file():
+        """取单个 strm 文件（排查某一条线路时用得上，批量还是走分卷包）。"""
+        rel = (request.args.get("path") or "").strip()
+        code, body, err = strm_mod.read_strm(rel)
+        if code != 200:
+            return jsonify({"error": err or "取不到"}), code
+        return (body, 200, {"Content-Type": "text/plain; charset=utf-8",
+                            "Cache-Control": "no-cache"})
+
+    @app.post("/admin/strm/settings")
+    def admin_strm_settings():
+        """后台改采集设置（含时间范围）：写进 strm.db，立刻生效不用重启。"""
+        if not _authed():
+            return _login_page(None, 401)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        try:
+            _cfg, err = strm_mod.save_settings(request.form.to_dict())
+        except Exception as exc:  # noqa: BLE001 - 保存失败要说人话，不该把后台页变成 500
+            return redirect(url_for("admin", strm_err=f"{type(exc).__name__}: {exc}"[:160],
+                                    _anchor="strm"))
+        if err:
+            return redirect(url_for("admin", strm_err=err[:160], _anchor="strm"))
+        return redirect(url_for("admin", strm_set="1", _anchor="strm"))
+
+    @app.post("/admin/strm/run")
+    def admin_strm_run():
+        """立刻催一轮采集（不等最小间隔）。已经在跑就只是回到页面看进度。"""
+        if not _authed():
+            return _login_page(None, 401)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        out = strmjob.start_now()
+        return redirect(url_for("admin", strm_run="1" if out.get("ok") else "0",
+                                why=str(out.get("error") or out.get("pid") or "")[:60], _anchor="strm"))
+
+    @app.post("/admin/strm/export")
+    def admin_strm_export():
+        """立刻把库里的东西导出+打包。全量重建是"改了时间范围"之后该按的那一颗。
+
+        和采集共用同一把锁（strmjob.LOCK）：导出要写几千上万个文件，
+        这时候再起一轮采集就是在改同一批文件，两边会互相踩。
+        """
+        if not _authed():
+            return _login_page(None, 401)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        full = (request.form.get("mode") or "") == "full"
+        if strmjob.running():
+            return redirect(url_for("admin", strm_run="0", why="已经有一轮任务在跑，等它结束再导出",
+                                    _anchor="strm"))
+        try:
+            autoupdate.spawn(strmjob.SCRIPT, strmjob.LOG, strmjob.LOCK,
+                             args=["--export-only"] + (["--full"] if full else []))
+        except Exception as exc:  # noqa: BLE001
+            return redirect(url_for("admin", strm_run="0", why=f"{type(exc).__name__}: {exc}"[:120],
+                                    _anchor="strm"))
+        return redirect(url_for("admin", strm_run="1", why="全量重建并打包" if full else "增量导出并打包",
+                                _anchor="strm"))
 
     @app.get("/admin")
     def admin():
@@ -555,7 +752,9 @@ def create_app() -> Flask:
         # 行为特征：UA 三档只是"它自己说的"，这一节按 IP 看节奏、跳转与点开比。
         # 多取一些再截前 40 行给表格里看，整份留给明细挂 IP 徽章 —— 明细那一页可能
         # 出现的 IP 未必排得进前 40，不能因为"表格没显示它"就不给它挂徽章。
-        beh_all = stats_mod.behavior(flt, limit=200)
+        # 500 这个上限是为了**改判一致**：行为命中几条会把「像真人」改成「行为像脚本」，
+        # 落在上限外的 IP 就改不到，同一个人在两张表上的说法会不一样。
+        beh_all = stats_mod.behavior(flt, limit=500)
         beh = beh_all[:40]
         beh_map = {b["ip"]: b for b in beh_all}
         geo_info = geoip.available()
@@ -580,8 +779,16 @@ def create_app() -> Flask:
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
             place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
-            who_cn={k: stats_mod.who_label(k) for k in
-                    ("human", "bot", "unknown", "mixed")}, beh=beh, beh_map=beh_map,
+            who_cn={k: stats_mod.who_label(k) for k in stats_mod.WHO_LABELS},
+            beh=beh, beh_map=beh_map,
+            # Emby STRM 那一节：设置与库都在 strm.db，进度在采集进程写的文件里，
+            # 分卷清单从 file/zip 两张表聚合出来（页面只讲"采到哪了、有几卷"）
+            smeta=strm_mod.manifest(), sjob=strmjob.status(),
+            sspec=strm_mod.spec_rows(),
+            smsg=_strm_notice(request.args, strmjob.status()),
+            # 改判门槛要写在页面上（几条命中降到哪一档），不能只在代码里
+            BEHAVIOR_SUSPECT=stats_mod.BEHAVIOR_SUSPECT,
+            BEHAVIOR_SCRIPT=stats_mod.BEHAVIOR_SCRIPT,
             day_all=day_all, day_window=DEFAULT_WINDOW,
             keep_days=stats_mod.KEEP_DAYS, keep_args=keep_args,
             flt={**flt, "per": rows["per"]},
@@ -593,7 +800,11 @@ def create_app() -> Flask:
             fetch_cmd=autoupdate.py_exe("tools/fetch_geo.py"),
             upd=autoupdate.status(),
             markers=markers, offmap=[m for m in markers if m["iso"] not in base["by_iso"]],
-            notice="口令已更新，下次登录请用新口令" if request.args.get("set") else None,
+            setinfo=_setinfo(),
+            notice=("口令已更新，下次登录请用新口令" if request.args.get("set") else None)
+                   or ("设置已保存，判断「今天该不该更新」立刻按新时间点走，不用重启"
+                       if request.args.get("settings_saved") else None),
+            settings_err=bool(request.args.get("settings_err")),
             pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
             args_next={**keep, "page": rows["page"] + 1},
             args_prev={**keep, "page": rows["page"] - 1})
@@ -626,6 +837,21 @@ def create_app() -> Flask:
             return render_template("admin_password.html", error=err, **ctx), 400
         admin_mod.set_password(new)
         return redirect(url_for("admin", set=1))
+
+    @app.post("/admin/settings")
+    def admin_settings():
+        """保存后台设置（现在只有一项：每日更新时间）。写 data/settings.json，不用重启。"""
+        if not _authed():
+            return _login_page(None, 401)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        changed, _err = settings_mod.set_value("refresh_hour", request.form.get("refresh_hour"))
+        # 认不出来就一条都不写，回到页面上提示"要 0–23 的整数"。
+        # 提示走查询参数而不是把人输入的原始值塞回 URL 或回显：这一页本来就靠参数带状态，
+        # 而原始值可能是什么都有（`<script>` 之类），别让设置表单变成另一个注入面
+        if changed:
+            return redirect(url_for("admin", settings_saved=1))
+        return redirect(url_for("admin", settings_err=1))
 
     @app.post("/admin/login")
     def admin_login():

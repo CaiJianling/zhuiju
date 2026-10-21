@@ -10,7 +10,8 @@
       "search_template": null,
       "note": "TVBox 配置『老刘备』内实测可用",
       "enabled": true,
-      "browsable": false
+      "browsable": false,
+      "searchable": true
     },
     {
       "id": "hhzy",
@@ -22,7 +23,8 @@
       "search_template": null,
       "note": "TVBox 配置『老刘备』内实测可用",
       "enabled": true,
-      "browsable": false
+      "browsable": false,
+      "searchable": true
     },
     {
       "id": "apibdzy",
@@ -34,7 +36,8 @@
       "search_template": null,
       "note": "TVBox 配置『老刘备』内实测可用",
       "enabled": true,
-      "browsable": true
+      "browsable": true,
+      "searchable": true
     },
     {
       "id": "hongniu",
@@ -46,7 +49,8 @@
       "search_template": null,
       "note": "常见公开采集接口，实测可用",
       "enabled": true,
-      "browsable": true
+      "browsable": true,
+      "searchable": true
     },
     {
       "id": "jszy",
@@ -58,7 +62,8 @@
       "search_template": null,
       "note": "常见公开采集接口，实测可用",
       "enabled": true,
-      "browsable": false
+      "browsable": false,
+      "searchable": true
     },
     {
       "id": "guangsu",
@@ -70,7 +75,8 @@
       "search_template": null,
       "note": "常见公开采集接口，实测可用",
       "enabled": true,
-      "browsable": false
+      "browsable": false,
+      "searchable": true
     },
     {
       "id": "bfzy",
@@ -82,7 +88,8 @@
       "search_template": null,
       "note": "常见公开采集接口，实测可用，番剧较多",
       "enabled": true,
-      "browsable": false
+      "browsable": false,
+      "searchable": true
     },
     {
       "id": "taopian",
@@ -94,7 +101,8 @@
       "search_template": null,
       "note": "TVBox 配置『老刘备』内实测可用",
       "enabled": true,
-      "browsable": true
+      "browsable": true,
+      "searchable": true
     },
     {
       "id": "cjffzy",
@@ -106,7 +114,8 @@
       "search_template": null,
       "note": "harvest_more_apis 实测通过",
       "enabled": true,
-      "browsable": true
+      "browsable": true,
+      "searchable": true
     },
     {
       "id": "cjlzi",
@@ -118,7 +127,99 @@
       "search_template": null,
       "note": "harvest_more_apis 实测通过",
       "enabled": true,
-      "browsable": false
+      "browsable": false,
+      "searchable": true
+    },
+    {
+      "id": "dytt",
+      "name": "电影天堂资源",
+      "kind": "maccms",
+      "api": "http://caiji.dyttzyapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "http://caiji.dyttzyapi.com/",
+      "search_template": null,
+      "note": "2026-10-20 实测：搜『庆余年』7 条、最新 20、ac=detail 两条线路，最快（361ms）",
+      "enabled": true,
+      "browsable": true,
+      "searchable": true
+    },
+    {
+      "id": "jyzy",
+      "name": "鲸鱼资源",
+      "kind": "maccms",
+      "api": "https://jyzyapi.com/provide/vod/",
+      "params": {},
+      "root": "https://jyzyapi.com/",
+      "search_template": null,
+      "note": "2026-10-20 实测：搜『庆余年』8 条、最新 20、ac=detail 两条线路",
+      "enabled": true,
+      "browsable": false,
+      "searchable": true
+    },
+    {
+      "id": "wujin",
+      "name": "无尽资源",
+      "kind": "maccms",
+      "api": "https://api.wujinapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://api.wujinapi.com/",
+      "search_template": null,
+      "note": "2026-10-20 实测：搜『庆余年』9 条最多，但慢（2.8s，最新流偶发超时）",
+      "enabled": true,
+      "browsable": false,
+      "searchable": true
+    },
+    {
+      "id": "modu",
+      "name": "魔都资源",
+      "kind": "maccms",
+      "api": "https://caiji.moduapi.cc/api.php/provide/vod/",
+      "params": {},
+      "root": "https://caiji.moduapi.cc/",
+      "search_template": null,
+      "note": "2026-10-20 实测：搜『庆余年』3 条、最新 20、ac=detail 一条线路",
+      "enabled": true,
+      "browsable": true,
+      "searchable": true
+    },
+    {
+      "id": "ffzy5",
+      "name": "非凡资源(新域)",
+      "kind": "maccms",
+      "api": "https://www.ffzy5.tv/api.php/provide/vod/",
+      "params": {},
+      "root": "https://www.ffzy5.tv/",
+      "search_template": null,
+      "note": "2026-10-20 实测：与 cj.ffzyapi.com 同一套库换了域名，结果完全一致，留作备用入口",
+      "enabled": true,
+      "browsable": true,
+      "searchable": true
+    },
+    {
+      "id": "suoni",
+      "name": "索尼资源",
+      "kind": "maccms",
+      "api": "https://suoniapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://suoniapi.com/",
+      "search_template": null,
+      "note": "2026-10-20 实测：URL 带 wd= 一律 403 拦截页（换 ac / 换 ASCII 关键词都一样），最新流与 ac=detail 正常 → 只喂猜你想搜，不参与检索",
+      "enabled": true,
+      "browsable": false,
+      "searchable": false
+    },
+    {
+      "id": "sdzy",
+      "name": "闪电资源",
+      "kind": "maccms",
+      "api": "https://sdzyapi.com/api.php/provide/vod/",
+      "params": {},
+      "root": "https://sdzyapi.com/",
+      "search_template": null,
+      "note": "2026-10-20 实测：接口明文回「暂不支持搜索」（from/sdm3u8、http/https 都一样），最新流与 ac=detail 正常 → 只喂猜你想搜，不参与检索",
+      "enabled": true,
+      "browsable": false,
+      "searchable": false
     }
   ]
 }

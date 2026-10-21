@@ -325,15 +325,28 @@ check("点开是从屏幕外滑进来：先摘 hidden、强制一次布局、再
       < op.index("void dpEl.offsetWidth;") < op.index("dpEl.classList.add('on');"),
       op[:200])
 check("强制重排只在「摘 hidden → 加 .on」这一段里出现一次（别处不需要，多一处就多个坑）",
-      js[js.index("function openDetail("):js.index("function closeDetail()")].count(
+      js[js.index("function openDetail("):js.index("function closeDetail(")].count(
           "void dpEl.offsetWidth;") == 1, None)
-cl = js[js.index("function closeDetail()"):js.index("dpClose.addEventListener")]
+cl = js[js.index("function closeDetail("):js.index("dpClose.addEventListener")]
 check("关闭是滑出去再 display:none，时长从 CSS 读、不在 JS 里抄一份",
       "getComputedStyle(dpEl).transitionDuration" in cl and "dur * 1000 + 40" in cl
       and not re.search(r"setTimeout\([^\n]*?,\s*(260|600)\)", cl),
       re.findall(r"setTimeout\([^\n]{0,60}", cl))
 check("滑出没播完之前不藏（期间又点开就不藏）",
       "if (!dpEl.classList.contains('on')) dpEl.hidden = true;" in cl, None)
+out = js[js.index("点面板外面也收起"):]
+check("点面板外面也关：只认鼠标左键，面板已经关了就不再管（右键本站不劫持）",
+      "e.button !== 0 || dpEl.hidden" in out, None)
+check("面板里面的点击不算外面（换源那排 chip、折叠的观看地址都长在面板里）",
+      "if (dpEl.contains(e.target)) return;" in out, None)
+check("卡片上那颗「详情」不算外面：开着面板点另一张是换一部看，不是关窗",
+      "e.target.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')" in out
+      # 命中区两处共用一份说法，改 opener 必须一起改这里
+      and "coarse() ? '.hcover, .cover, .dbtn' : '.dbtn'" in js, None)
+check("外面那一下不抢焦点：只有 × 与 Esc 才把焦点还给当初那颗按钮",
+      "closeDetail(false)" in out and "if (refocus && dpBack && dpBack.focus)" in cl, None)
+check("× 的监听器包一层箭头函数（直接把 closeDetail 交出去会把 event 当成 refocus 参数）",
+      "dpClose.addEventListener('click', () => closeDetail())" in js, None)
 check("起点在屏幕外这件事写在 CSS 里（右侧 translateX、窄屏 translateY）",
       "transform: translateX(calc(100% + 20px))" in css and "transform: translateY(calc(100% + 20px))" in css,
       None)

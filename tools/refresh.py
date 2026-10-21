@@ -109,7 +109,11 @@ def sources_summary() -> dict:
         data = json.loads((BASE / "zhuiju" / "data" / "sources.json").read_text(encoding="utf-8"))
         srcs = data.get("sources", [])
         return {"sources_total": len(srcs),
-                "sources_enabled": sum(1 for s in srcs if s.get("enabled", True))}
+                "sources_enabled": sum(1 for s in srcs if s.get("enabled", True)),
+                # enabled 里有两类：能按关键词搜的，和站点把搜索关了、只喂猜你想搜的
+                # （searchable=False）。日志只报 enabled 就把"并发检索到底打几个源"糊掉了
+                "sources_searchable": sum(1 for s in srcs
+                                          if s.get("enabled", True) and s.get("searchable", True))}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -273,7 +277,7 @@ def main() -> int:
     lines.append(json.dumps({k: state[k] for k in
                              ("date", "ok", "failed_steps", "seconds",
                               "upstream_updated_at", "fetched_at",
-                              "sources_enabled", "sources_total")
+                              "sources_enabled", "sources_searchable", "sources_total")
                              if k in state}, ensure_ascii=False, indent=2))
     save_log()
     STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -289,7 +293,8 @@ def main() -> int:
         pass
 
     print(f"\n{'完成' if ok else '部分步骤失败: ' + ','.join(failed)}"
-          f"  用时 {state['seconds']}s  检索源 {state.get('sources_enabled')}/{state.get('sources_total')}"
+          f"  用时 {state['seconds']}s  检索源 {state.get('sources_searchable')}/{state.get('sources_total')}"
+          f"（可搜 {state.get('sources_searchable')}、启用 {state.get('sources_enabled')}）"
           f"  目录日期 {upd or '未知'}")
     print(f"日志： {log_path}")
     return 0 if ok else 1

@@ -11,7 +11,7 @@
 
 为什么明文存文件：用户要能自己改（这是需求），而这个工具本来就只在自己机器上跑。
 配套的缓解措施是登录失败限流 + 只在回环/局域网监听。真要公网暴露，
-应当放到 nginx 后面再加一层 TLS，README 里写了这点。
+应当放到 nginx 后面再加一层 TLS，这点写在 docs/deploy.md（以及 README 的「限制与说明」）。
 """
 from __future__ import annotations
 

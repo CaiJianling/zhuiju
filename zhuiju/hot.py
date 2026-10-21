@@ -218,7 +218,9 @@ def verify_pool(cands: list[dict], sources: list[Source], since: date) -> dict:
     """豆瓣候选回查采集源：既确认点进去搜得到，也从返回的 vod_year/vod_time 落实窗口。"""
     if not cands:
         return {}
-    probes = sources[:VERIFY_SOURCES]
+    # 回查豆瓣候选靠的是"按片名搜"，所以只挑搜索这条路走得通的源
+    # （searchable=False 的那两个最新流很好，但发 wd= 过去要么被拦要么被明说拒）
+    probes = [s for s in sources if s.searchable][:VERIFY_SOURCES]
 
     def one(title: str):
         hits = []

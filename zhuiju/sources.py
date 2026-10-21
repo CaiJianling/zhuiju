@@ -7,6 +7,11 @@
   params          附加查询参数
   root            对应站点首页，用于兜底跳转
   search_template 站内搜索页模板，{kw} 为关键词占位符（实测可用）
+  searchable      关键词搜索是否可用。有些站（实测：闪电、索尼）把搜索这条路关了：
+                  一个明说"暂不支持搜索"，一个只要 URL 里带 wd= 就回 403 拦截页。
+                  它们的最新流和 ac=detail 都是好的，所以不删掉，只是不参与检索：
+                  留在配置里喂「猜你想搜」，但 search() 会跳过它 —— 否则每次搜索都
+                  稳定失败一条，把"平均可用源"和一个本来就无能为力的红叉一起拉下来。
 """
 import json
 from dataclasses import dataclass, field
@@ -72,6 +77,8 @@ class Source:
     enabled: bool = True
     # 有些采集接口只开放 API，站点首页会返回 403/500，此时不给"打开站点"链接
     browsable: bool = True
+    # False = 搜索这条路被站点关了（最新流与 ac=detail 仍可用，只喂猜你想搜）
+    searchable: bool = True
 
 
 def load_sources(path: Path = DATA):

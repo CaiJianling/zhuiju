@@ -53,11 +53,18 @@ for s in sources:
     r = fetch_one(s, KW)
     key = f"{urlparse(s.api).scheme}://{urlparse(s.api).netloc}".lower()
     s.search_template = api_tpl.get(key) or s.search_template
-    s.enabled = bool(r["ok"])
+    s.searchable = bool(r["ok"])
+    # 站点自己把搜索这条路关了的两类（实测：一个明文回"暂不支持搜索"、一个 URL 里带上
+    # wd= 就回 403 拦截页）最新流和 ac=detail 都是好的，所以不能按"搜不到"就停用：
+    # 它们喂猜你想搜，只是不参与检索（见 Source.searchable 与 search.search()）
+    lat = r if s.searchable else fetch_one(s, "")
+    s.enabled = bool(lat["ok"])
     s.browsable = browsable(s.root or f"{key}/")
     checked.append(s)
-    print(f"{'OK ' if r['ok'] else 'FAIL'} {s.name:<8} {r['ms']:>5}ms "
-          f"count={r['count']} 首页{'可浏览' if s.browsable else '不可浏览'} {r['error'] or ''}")
+    print(f"{'OK ' if lat['ok'] else 'FAIL'} {s.name:<8} {lat['ms']:>5}ms "
+          f"count={lat['count']} "
+          f"{'搜索' if s.searchable else '仅最新流'} "
+          f"首页{'可浏览' if s.browsable else '不可浏览'} {lat['error'] or ''}")
 
 save_sources(checked, base / "zhuiju" / "data" / "sources.json")
 alive = [s for s in checked if s.enabled]

@@ -4,6 +4,7 @@
     python tests/test_smoke.py
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -162,10 +163,13 @@ try:
 finally:
     search_mod.fetch_one = _orig
 
-print("7b) 自动更新的『当天』以凌晨 2 点为界")
+print("7b) 自动更新的『当天』以几点为界（现在是设置项，默认凌晨 2 点）")
 from datetime import datetime as _dt, timedelta as _td
 from zhuiju import autoupdate as au
-H = au.REFRESH_HOUR
+from zhuiju import settings as st
+
+check("默认值就是以前写死的那个 2 点（改了默认值等于改了触发节奏，要看得见）",
+      st.DEFAULTS == {"refresh_hour": 2}, st.DEFAULTS)
 check("01:30 仍属于昨天", au.logical_day(_dt(2026, 10, 14, 1, 30)) == _dt(2026, 10, 13).date(),
       str(au.logical_day(_dt(2026, 10, 14, 1, 30))))
 check("02:00 起算新的一天", au.logical_day(_dt(2026, 10, 14, 2, 0)) == _dt(2026, 10, 14).date(),
@@ -181,6 +185,65 @@ check("needs_update 走的是逻辑日而非自然日",
       "logical_day" in (Path(__file__).resolve().parent.parent
       / "zhuiju" / "autoupdate.py").read_text(encoding="utf-8"))
 
+# 设置存哪儿：文件（不进版本库），不是 stats.db —— 这条判据要钉住，
+# 否则哪天有人"顺手"把它挪进日志库，删库重统计就会顺手把设置也删了
+check("设置写在 data/settings.json，.gitignore 里认了它",
+      st.PATH.name == "settings.json" and st.PATH.parts[-3] == "zhuiju",
+      str(st.PATH))
+check(".gitignore 里确实有这一条（不然每个人的偏好都会提交进仓库）",
+      "zhuiju/data/settings.json" in (Path(__file__).resolve().parent.parent
+      / ".gitignore").read_text(encoding="utf-8"), None)
+check("autoupdate 不再留一个 import 时算死的 REFRESH_HOUR 常量（改了要重启才会生效）",
+      "REFRESH_HOUR = int(" not in (Path(__file__).resolve().parent.parent
+      / "zhuiju" / "autoupdate.py").read_text(encoding="utf-8"), None)
+
+# 拿 .probe 下的临时文件测读写，绝不碰真配置
+_real_path, _real_env = st.PATH, os.environ.get("ZHUIJU_REFRESH_HOUR")
+tmp_settings = Path(".probe/settings_test.json")
+tmp_settings.parent.mkdir(exist_ok=True)
+if tmp_settings.exists():
+    tmp_settings.unlink()
+st.PATH = tmp_settings
+st._cached.update(mtime=None, vals={})
+try:
+    check("没文件时回默认值，来源标成 default",
+          st.refresh_hour() == 2 and st.source_of("refresh_hour") == "default", None)
+    ok, err = st.set_value("refresh_hour", "7")
+    st._cached.update(mtime=None, vals={})       # 真进程里是靠 mtime 自动重读的
+    check("保存合法值：写文件、生效、来源变成 file",
+          ok and err is None and st.refresh_hour() == 7
+          and st.source_of("refresh_hour") == "file", json.loads(tmp_settings.read_text()))
+    check("日切线跟着设置走：7 点前访问仍算昨天",
+          au.logical_day(_dt(2026, 10, 14, 6, 59)) == _dt(2026, 10, 13).date()
+          and au.logical_day(_dt(2026, 10, 14, 7, 0)) == _dt(2026, 10, 14).date(), None)
+    for bad in ("25", "-1", "abc", "", "1.5", None, "999999999999999999999"):
+        ok, err = st.set_value("refresh_hour", bad)
+        if ok or err is None:
+            check(f"非法值 {bad!r} 该拒", False, (ok, err))
+            break
+    else:
+        check("非法值一律拒掉且不落盘（半套设置比没有设置更难查）",
+              st.refresh_hour() == 7, st.refresh_hour())
+    check("不认识的键不当设置存进去", st.set_value("delete_stats", "1")[0] is False, None)
+    tmp_settings.write_text(json.dumps({"refresh_hour": 3, "junk": 9}), encoding="utf-8")
+    st._cached.update(mtime=None, vals={})
+    st.set_value("refresh_hour", 4)
+    check("写回时把文件里不认识的键清掉（设置文件不该变成垃圾场）",
+          set(json.loads(tmp_settings.read_text())) == {"refresh_hour"},
+          json.loads(tmp_settings.read_text()))
+    os.environ["ZHUIJU_REFRESH_HOUR"] = "9"
+    check("环境变量顶在文件上面，并且页面上说得清是谁定的",
+          st.refresh_hour() == 9 and st.source_of("refresh_hour") == "env", None)
+    del os.environ["ZHUIJU_REFRESH_HOUR"]
+    check("撤掉环境变量就回文件里的值（不是把文件覆盖掉）",
+          st.refresh_hour() == 4, st.refresh_hour())
+finally:
+    st.PATH = _real_path
+    st._cached.update(mtime=None, vals={})
+    tmp_settings.unlink(missing_ok=True)
+    if _real_env is not None:
+        os.environ["ZHUIJU_REFRESH_HOUR"] = _real_env
+
 print("8) 数据文件完整性")
 data = Path("zhuiju/data")
 for f in ("catalog.json", "sources.json", "templates.json"):
@@ -191,6 +254,54 @@ srcs = json.loads((data / "sources.json").read_text(encoding="utf-8"))["sources"
 check("检索源都有 api 与 kind", all(s.get("api") and s.get("kind") for s in srcs))
 check("browsable 字段已落盘", all("browsable" in s for s in srcs),
       [list(s.keys()) for s in srcs[:1]])
+check("searchable 字段已落盘（哪个源被站点关了搜索，要在配置文件里看得见，不能只写在注释里）",
+      all("searchable" in s for s in srcs), [s["id"] for s in srcs if "searchable" not in s])
+check("id 不重复（详情面板是按 id 找回那个源的，重了就互相顶掉）",
+      len({s["id"] for s in srcs}) == len(srcs),
+      sorted({s["id"] for s in srcs if [x["id"] for x in srcs].count(s["id"]) > 1}))
+neth = [s["api"].split("//", 1)[-1].split("/", 1)[0].lower() for s in srcs]
+check("同一个域名不重复收录（换源列表里会出现两条一模一样的线路）",
+      len(set(neth)) == len(neth), sorted(h for h in neth if neth.count(h) > 1))
+off = [s for s in srcs if not s["searchable"]]
+check("关掉搜索的只有实测被站点拒的那两个",
+      {s["id"] for s in off} == {"suoni", "sdzy"},
+      [(s["id"], s["name"]) for s in off])
+check("它们仍然 enabled：搜索不通但最新流与 ac=detail 都好，猜你想搜要用",
+      all(s["enabled"] for s in off), [(s["id"], s["enabled"]) for s in off])
+
+print("8b) searchable=False 的源只喂猜你想搜，不进并发检索")
+S_OK = Source(id="s_ok", name="能搜的", kind="maccms", api="http://a/api.php/provide/vod/")
+S_NS = Source(id="s_ns", name="只最新流", kind="maccms",
+              api="http://b/api.php/provide/vod/", searchable=False)
+real_fetch, real_load = search_mod.fetch_one, search_mod.load_sources
+calls = []
+
+
+def fake_fetch(src, kw, page=1, limit=20, type_id=None):
+    calls.append((src.id, kw))
+    # fetch_one 会给每一条 item 注入 source / source_name / link，merge 靠 source 归并线路，
+    # 这里必须照抄，否则测的就不是同一条路径
+    item = {"vid": 1, "title": "庆余年", "type": "电视剧", "year": "2024", "area": "大陆",
+            "remarks": "", "actor": "", "director": "", "pic": "", "notes": "",
+            "updated": "2024-05-01", "slug": "", "source": src.id,
+            "source_name": src.name, "link": ""}
+    return {"source": src.id, "source_name": src.name, "ok": True, "count": 1,
+            "total": 1, "ms": 5.0, "error": None, "items": [item]}
+
+
+search_mod.fetch_one, search_mod.load_sources = fake_fetch, (lambda *a, **k: [S_OK, S_NS])
+try:
+    r = search_mod.search("庆余年")
+    check("并发列表里没有它，sources_total 也不数它（不然「平均可用源」永远少一个）",
+          [c[0] for c in calls] == ["s_ok"] and r["sources_total"] == 1
+          and r["sources_ok"] == 1, (calls, r["sources_total"]))
+    check("结果仍然正常合并", len(r["results"]) == 1, r["results"])
+    # 猜你想搜那条路要用得着它们：feed_pool 走的是最新流，不碰 wd
+    hot_src = (Path("zhuiju") / "hot.py").read_text(encoding="utf-8")
+    check("猜你想搜按 enabled 取源（不看 searchable），回查豆瓣候选才挑 searchable",
+          "if s.enabled]" in hot_src and "[s for s in sources if s.searchable]" in hot_src, None)
+finally:
+    search_mod.fetch_one, search_mod.load_sources = real_fetch, real_load
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
