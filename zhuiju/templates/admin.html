@@ -716,7 +716,10 @@
       </form>
     </p>
 
-    <p class="atip">接口一览：<code>/api/strm/manifest</code> 分卷清单（就是"有几个包、各多少条目"的出口）、
+    <p class="atip">接口一览：<code>/api/strm/download</code> 扁平下载清单
+      （<code>{"Movies": {"movie01.zip": "地址"}, "TVs": {"tv01.zip": "地址"}}</code>，
+      地址的头就是你这次访问用的域名/端口，脚本遍历着下就行）、
+      <code>/api/strm/manifest</code> 分卷清单（每卷多少部、多少文件、包多大）、
       <code>/api/strm/index?kind=movie&amp;part=movie01</code> 某一卷的条目与线路、
       <code>/api/strm/tree?kind=tv&amp;part=tv01</code> 某一卷的文件清单（纯文本一行一个）、
       <code>/strm/zip?name=movie01.zip</code> 下载分卷包、

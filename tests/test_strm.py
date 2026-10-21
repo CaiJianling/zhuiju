@@ -504,6 +504,76 @@ st = r.get_json()
 check("状态接口带上了设置、库计数和上次结果",
       r.status_code == 200 and "settings" in st and "counts" in st, r.status_code)
 
+print("\n12b) 扁平下载清单 /api/strm/download")
+r = client.get("/api/strm/download")
+dm = r.get_json()
+check("键就两组，名字按约定的 Movies / TVs", set(dm) == {"Movies", "TVs"}, list(dm))
+check("值就是能直接 GET 的包地址，且文件名是裸卷名（没有路径）",
+      dm["Movies"] and all(v.endswith(f"/strm/zip?name={k}") and "/" not in k
+                           and k.endswith(".zip") for k, v in dm["Movies"].items()),
+      list(dm["Movies"].items())[:2])
+check("默认给绝对地址（清单常在另一台机器上照着敲，相对地址离开本站就没用）",
+      all(v.startswith("http://") for v in dm["Movies"].values()),
+      next(iter(dm["Movies"].values()), None))
+check("?abs=0 退成相对地址",
+      all(v.startswith("/strm/zip?") for v in
+          client.get("/api/strm/download?abs=0").get_json()["Movies"].values()))
+one_name, one_url = next(iter(dm["Movies"].items()))
+rr = client.get(one_url.replace("http://localhost", ""))
+check("清单里给出的地址真能下到包", rr.status_code == 200 and len(rr.get_data()) > 22,
+      (one_name, rr.status_code, len(rr.get_data())))
+check("电影卷和电视剧卷不会混（Movies 里全是 movieNN.zip）",
+      all(k.startswith("movie") for k in dm["Movies"])
+      and all(k.startswith("tv") for k in dm["TVs"]), (list(dm["Movies"]), list(dm["TVs"])))
+# 用有数据的那一组来验顺序：第 7 节重置过库，这一节里 TVs 可能本来就是空的，
+# 拿空列表断言顺序等于什么都没测
+order_grp = "Movies" if dm["Movies"] else "TVs"
+check("卷号按数值顺序排（不是 movie10 排在 movie2 前面）",
+      len(dm[order_grp]) >= 2 and
+      list(dm[order_grp]) == sorted(dm[order_grp], key=lambda x: int(re.search(r"\d+", x).group())),
+      (order_grp, list(dm[order_grp])))
+# 盘上没有对应文件的卷不该出现在下载清单里（那是死链）。
+# 这里往库里塞一条"第 77 卷"的记录，但根本不打包 —— 比把真文件改名安全：
+# send_file 之后响应对象还握着那个文件句柄，Windows 上改名会直接 PermissionError
+c = con()
+c.execute("INSERT OR REPLACE INTO zip(kind, part, path, files, titles, bytes, sig, built_at)"
+          " VALUES('movie', 77, 'movie77.zip', 1, 1, 10, 'x', ?)", (strm.now(),))
+c.commit()
+c.close()
+dm2 = strm.download_map("http://127.0.0.1:5000")
+check("文件不在盘上的卷不进下载清单（不给死链）",
+      "movie77.zip" not in dm2["Movies"], list(dm2["Movies"]))
+check("同一份清单带站点根地址时是完整 URL",
+      all(v.startswith("http://127.0.0.1:5000/strm/zip?name=") for v in dm2["TVs"].values()),
+      next(iter(dm2["TVs"].values()), None))
+c = con()
+c.execute("DELETE FROM zip WHERE part=77")
+c.commit()
+c.close()
+check("清掉那条假记录后清单回到实际状态",
+      "movie77.zip" not in strm.download_map()["Movies"])
+
+print("\n12c) 清单里的地址跟着「人是怎么访问的」走")
+r = client.get("/api/strm/download", headers={"Host": "123.com"})
+u = next(iter(r.get_json()["Movies"].values()))
+check("用 Host: 123.com 访问，URL 的头就是 http://123.com",
+      u.startswith("http://123.com/strm/zip?name="), u)
+r = client.get("/api/strm/download", headers={"Host": "123.com:8443"})
+check("带端口也照抄（本站自己监听在 8443 时不会把端口丢掉）",
+      next(iter(r.get_json()["Movies"].values())).startswith("http://123.com:8443/strm/zip?"),
+      next(iter(r.get_json()["Movies"].values())))
+r = client.get("/api/strm/download", headers={"X-Forwarded-Proto": "https",
+                                              "X-Forwarded-Host": "video.example.cn"})
+u = next(iter(r.get_json()["Movies"].values()))
+check("nginx 反代（上一跳是回环）下按 X-Forwarded-* 出 https + 对外域名",
+      u.startswith("https://video.example.cn/strm/zip?name="), u)
+r = client.get("/api/strm/download?abs=0", headers={"Host": "123.com"})
+d0 = r.get_json()
+check("?abs=0 时仍然只给相对地址（不受 Host 影响）",
+      all(v.startswith("/strm/zip?name=") for g in ("Movies", "TVs") for v in d0[g].values())
+      and bool(d0["Movies"] or d0["TVs"]),
+      {k: list(v.values())[:1] for k, v in d0.items()})
+
 print("\n13) 后台页与登录门槛")
 r = client.get("/admin")
 check("没登录时后台仍是口令页（STRM 设置不能公开改）", r.status_code == 401, r.status_code)

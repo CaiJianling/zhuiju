@@ -80,12 +80,25 @@ Emby 认多版本的条件是：同一条影片的几个文件放在同一个文
 
 | 地址 | 给什么 |
 |---|---|
+| `GET /api/strm/download` | **扁平下载清单**：`{"Movies": {"movie01.zip": "url", …}, "TVs": {"tv01.zip": "url", …}}`，脚本直接遍历下载用 |
 | `GET /api/strm/manifest` | 两类各有哪些卷、每卷多少部/多少文件/包多大、下载地址、当前设置与游标 |
 | `GET /api/strm/index?kind=movie&part=movie01&page=1&per=200` | 这一卷里有哪些片、各有几条线路、文件在哪 |
 | `GET /api/strm/tree?kind=tv&part=tv01` | 这一卷所有 strm 的相对路径，一行一个（`curl` 给脚本用） |
-| `GET /strm/zip?name=movie01.zip` | 下载分卷包 |
+| `GET /strm/zip?name=movie01.zip` | 下载分卷包（`Content-Disposition` 里就是裸卷名 `movie01.zip`） |
 | `GET /strm/file?path=movie/movie01/…/x.strm` | 只取单个 strm 文件 |
 | `GET /api/strm/status` | 在不在跑、上次跑了多少页、库里多少条、待合并多少 |
+
+`/api/strm/download` 里的地址**跟着你这次是怎么访问的走**：用 `http://123.com` 打开，
+URL 就是 `http://123.com/strm/zip?name=movie01.zip`；带端口照抄端口；走本机 nginx 反代时
+按 `X-Forwarded-Proto` / `X-Forwarded-Host` 出 https 与对外域名（只采信上一跳是回环地址的
+转发头，否则任何人都能伪造这个头）。想只要相对地址，加 `?abs=0`。
+清单里只列**盘上确实有文件**的那些卷 —— 下载清单不该塞死链；某卷没文件的真实状态去
+`manifest` 与 `/strm/zip` 的 404 里看。
+
+```bash
+# 拷到 NAS 上批量下载
+curl -s http://123.com/api/strm/download | jq -r '.Movies[], .TVs[]' | xargs -n1 curl -O
+```
 
 `/strm/zip` 不拿请求里的名字直接拼磁盘：先按 `movieNN.zip` / `tvNN.zip` 这个形状认
 （NN 就是卷号，两位补零：movie01、movie02…、tv01、tv02…），

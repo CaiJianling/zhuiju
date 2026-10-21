@@ -1201,6 +1201,41 @@ def manifest() -> dict:
         con.close()
 
 
+def download_map(base: str = "") -> dict:
+    """扁平的下载清单：文件名 -> 下载地址。
+
+        {"Movies": {"movie01.zip": "http://host:5000/strm/zip?name=movie01.zip", ...},
+         "TVs":    {"tv01.zip": "...", ...}}
+
+    和 manifest() 的分工：那一份是"这一卷有多少部、多少文件、包多大、什么时候打的"，
+    给页面和人看；这一份只回答"要下载哪些包、地址是什么"，给脚本直接用 ——
+    所以键名固定两组（Movies / TVs，跟用户约定的一致，不用再去 kinds 里找），
+    值就是能 GET 的地址。
+
+    base 传站点根地址时给绝对 URL（拷到别的机器、别的网段也能下）；
+    传空就是相对地址（同源脚本用 curl -O 够用）。
+
+    只列**盘上确实有文件**的那些卷：清单里有、文件被删了的情况留给
+    manifest() 与 /strm/zip 的 404 去说清楚，下载清单里不该塞死链。
+    """
+    ensure_schema()
+    base = str(base or "").rstrip("/")
+    out: dict = {"Movies": {}, "TVs": {}}
+    con = connect()
+    try:
+        rows = list(con.execute("SELECT kind, part, path, files, titles, bytes, built_at"
+                                " FROM zip ORDER BY kind, part"))
+    finally:
+        con.close()
+    for r in rows:
+        name = os.path.basename(str(r["path"] or ""))
+        if not name or not (ZIPS / name).is_file():
+            continue
+        key = "Movies" if r["kind"] == "movie" else "TVs"
+        out[key][name] = f"{base}/strm/zip?name={_q(name)}"
+    return out
+
+
 def _part_no(kind: str, name: str) -> int | None:
     """卷名 -> 卷号：movie01 / movie1 / MOVIE001 都认，别的算不合法。"""
     m = re.fullmatch(rf"{kind}0*(\d{{1,3}})", str(name or "").strip().lower())

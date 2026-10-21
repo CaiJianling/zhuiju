@@ -605,6 +605,18 @@ def create_app() -> Flask:
         """采集到哪了：在不在跑、上次跑了多少页、库里多少条、待导出多少。"""
         return jsonify(strmjob.status())
 
+    @app.get("/api/strm/download")
+    def api_strm_download():
+        """扁平下载清单：`{"Movies": {"movie01.zip": "url"}, "TVs": {"tv01.zip": "url"}}`。
+
+        和 /api/strm/manifest 的分工：那份讲"每卷多少部、多少文件、包多大、什么时候打的"，
+        这一份只回答"要下哪些包、地址是什么"，给脚本直接遍历下载用。
+        默认给绝对地址（?abs=0 退成相对）—— 清单常常是在另一台机器上照着敲的，
+        相对地址离开本站就没用了。
+        """
+        base = "" if (request.args.get("abs") or "1") == "0" else request.host_url.rstrip("/")
+        return jsonify(strm_mod.download_map(base))
+
     @app.get("/api/strm/index")
     def api_strm_index():
         kind = (request.args.get("kind") or "").strip().lower()
