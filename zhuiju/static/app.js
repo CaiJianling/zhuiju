@@ -954,15 +954,26 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !dpEl.hidden) closeDetail();
   });
+  /* 「这一下是不是落在面板上」。不能只问 dpEl.contains(e.target)：面板里那些会重画面板自己的
+     按钮 —— 换源那排 chip、「重试」 —— 的 onclick 先执行，openDetail() 里一句
+     `dpBody.innerHTML = ...` 就把刚被点的那个节点从文档里摘走了，等点击冒泡到 document 上时
+     contains 已经是 false，于是"点换源看"被当成"点了面板外面"，面板自己关掉自己。
+     composedPath 是派发那一刻就算好的祖先链，节点后来被摘掉也还在里面，所以先用它判；
+     真的没有 composedPath 的老浏览器才退回 contains（那种浏览器里这两个判断本来就一致）。 */
+  const inPanel = (e) => {
+    const path = e.composedPath ? e.composedPath() : null;
+    return path ? path.indexOf(dpEl) >= 0 : dpEl.contains(e.target);
+  };
   /* 点面板外面也收起：桌面点左边那片页面，手机点抽屉上方那半屏。
-     三种情况不算"外面"：① 面板自己的点击（换源那排 chip、折叠的观看地址都在这儿）；
+     三种情况不算"外面"：① 面板自己的点击（见上面 inPanel 那段：这正是"点换源反被关窗"的根因）；
      ② 卡片上那颗「详情」——开着面板点另一张卡片的意思是"换一部看"，那一下交给
      上面那个 opener 处理，命中区选择器和它共用一份，改哪儿要一起改；
      ③ 不是左键的点击：本站不劫持右键，中键是多开标签页，都不该顺手关窗。 */
   document.addEventListener('click', (e) => {
-    if (e.button !== 0 || dpEl.hidden || !e.target.closest) return;
-    if (dpEl.contains(e.target)) return;
-    if (e.target.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')) return;
+    if (e.button !== 0 || dpEl.hidden || inPanel(e)) return;
+    const t = e.target;
+    if (!t.closest) return;                 // 点在文档/窗口自身上没有 closest，不算"点了外面"
+    if (t.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')) return;
     closeDetail(false);
   });
 

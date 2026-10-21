@@ -337,10 +337,16 @@ check("滑出没播完之前不藏（期间又点开就不藏）",
 out = js[js.index("点面板外面也收起"):]
 check("点面板外面也关：只认鼠标左键，面板已经关了就不再管（右键本站不劫持）",
       "e.button !== 0 || dpEl.hidden" in out, None)
-check("面板里面的点击不算外面（换源那排 chip、折叠的观看地址都长在面板里）",
-      "if (dpEl.contains(e.target)) return;" in out, None)
+check("面板里面的点击不算外面：先按事件路径判（composedPath），不是只看 contains",
+      "if (e.button !== 0 || dpEl.hidden || inPanel(e)) return;" in out
+      and "path.indexOf(dpEl) >= 0" in js and "const inPanel = (e) =>" in js, None)
+# 这条是回归钉：换源那排 chip 与「重试」的 onclick 先跑，openDetail 里一句 innerHTML=...
+# 把被点的节点摘出文档，等冒泡到 document 时 contains 已经变 false —— 写成 contains 判据时
+# 实测就是"点『换源看』面板自己关掉自己"
+check("判据不能退回 dpEl.contains(e.target)（节点被重画摘掉后它是 false）",
+      "if (dpEl.contains(e.target)) return;" not in out, None)
 check("卡片上那颗「详情」不算外面：开着面板点另一张是换一部看，不是关窗",
-      "e.target.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')" in out
+      "t.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')" in out
       # 命中区两处共用一份说法，改 opener 必须一起改这里
       and "coarse() ? '.hcover, .cover, .dbtn' : '.dbtn'" in js, None)
 check("外面那一下不抢焦点：只有 × 与 Esc 才把焦点还给当初那颗按钮",
