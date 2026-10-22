@@ -143,8 +143,9 @@ zhuiju/
   settings.py       这台机器的运行设置（日切时间、门禁开关、验证管多久）：默认值、校验、读写 data/settings.json
   sources.py        检索源配置读写
   settings.py       这台机器的运行设置（后台能改的那几项）：默认值、校验、读写 data/settings.json、环境变量优先
-  strm.py           Emby STRM 的数据层：采集结果落 data/strm.db、线路与集数解析、按 Emby 多版本规则导出目录树、
-                    分卷（movieNN/tvNN）与打包 zip、清单与索引、下载接口用的路径校验（不联网，可离线测）
+  strm.py           Emby STRM 的数据层：采集结果落 data/strm.db、线路与集数解析、按 Emby 多版本规则导出目录树
+                    （每个 strm 一份同名 NFO、目录名可带 [tmdbid=…]）、类别判据、分卷（movieNN/tvNN）与打包 zip、
+                    清单与索引、下载接口用的路径校验（不联网，可离线测；查 TMDB 那一步在 collect_strm.py）
   strmjob.py        STRM 采集的"访问时触发"层：自己的锁与状态文件、最小间隔、进度、调 autoupdate.spawn 起子进程
   data/
     sources.json    实测可用的检索接口（含站内搜索模板、首页是否可浏览、能不能按关键词搜）
@@ -177,8 +178,9 @@ tools/                  重新采数据的维护脚本，日常使用不需要�
   refresh.py            一次完整更新的总入口（本周期已完整跑过则跳过；--skip-deep 的快版不算跑完）
                         --check-env 只报告"会用哪个解释器、依赖齐不齐"，部署排查用
   fetch_geo.py          下载 IP 归属地库与国家轮廓底图，算好 country_points.json（走 gh-proxy）
-  collect_strm.py       慢速采集近一年电影/电视剧：翻各源 videolist 更新流、游标续采、先落 strm.db，
-                        再合并导出 strm 目录树并按卷打 zip（--check 只看状态，--export-only 只导出）
+  collect_strm.py       慢速采集近一年电影/电视剧：翻各源 videolist 更新流、游标续采、先落 strm.db，再合并导出
+                        strm 目录树并按卷打 zip；也管查 TMDB 号与回填元数据（--check 看状态，--export-only 只导出，
+                        --full 全量重建，--ids-only 只查号，--backfill-only 只补旧条目的元数据）
   restart.py            确定性地重启本地站点（先杀干净旧进程，再验证新路由已生效）
                         Windows 走 WinAPI，Linux 走 /proc（非 root 时只能按 server.pid 收尾）
   check_autoupdate.py   验收访问触发的异步更新（用桩，不真跑几分钟；九个场景）
@@ -186,12 +188,14 @@ tests/
   test_smoke.py         离线：检索解析、合并分层、目录
   test_cloudparse.py    离线：网盘结果解析器（自造 HTML）
   test_seo_hot.py       离线：猜你想搜归类 / 一年窗口 / SEO 清洗与 robots、sitemap
-  test_strm.py          离线：线路与集数解析、时间范围判据、导出命名与分卷、打包、下载接口与路径防护、访问触发
+  test_strm.py          离线（244 项）：线路与集数解析、时间范围判据、导出命名/同名 NFO/分卷、类别投票、
+                        TMDB 命中判据、打包、下载接口与路径防护、后台异步保存与访问触发
   test_detail.py        离线：详情接口（按 ID / 按片名兜底 / 缓存与失败边界）与右键前端接线
   test_cloud_live.py    活体：临时端口起服务验证路由与查询，跑完自动关
   test_deploy_paths.py  离线：跨平台部署路径（解释器现找、zhuiju.env、refresh.sh 行尾、/proc 解析）
 data/upstream/          上游 JSON 缓存（build_catalog.py 自动下载）
-strm/                   Emby 用的 strm 目录树（strm/movie/movieNN/片名 (年份)/…、strm/tv/tvNN/剧名 (年份)/Season NN/…）
+strm/                   Emby 用的 strm 目录树（strm/movie/movieNN/片名 (年份)/…、strm/tv/tvNN/剧名 (年份)/Season NN/…；
+                        开了 NFO 时每个 x.strm 旁边一份同名 x.nfo，剧集根目录另有 tvshow.nfo）
 strm_zips/              分卷包 movieNN.zip、tvNN.zip（下载接口给的就是这些；两个目录都不进版本库）
 zhuiju/data/cache/      运行时缓存：hot.json（猜你想搜）、seo-*.json（/s/ 快照）
 zhuiju/data/queries.jsonl  搜过的关键词，供 sitemap 生成

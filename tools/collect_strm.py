@@ -31,6 +31,7 @@
     python tools/collect_strm.py --full           连着 --export-only 用，全量重建
     python tools/collect_strm.py --check          只看库和游标现在什么样
     python tools/collect_strm.py --ids-only       不翻页，只查缺的那部分 TMDB 号
+    python tools/collect_strm.py --backfill-only  不翻页，只给旧条目补 NFO 要用的元数据
 
 Linux/宝塔上用站点自己的解释器跑（判据见 zhuiju/autoupdate.py），别直接敲 python3。
 """
@@ -523,7 +524,7 @@ def show_check(cfg: dict) -> int:
     c = strm.db_counts()
     print(f"库：{c['vods']} 条 vod / {c['titles']} 部（电影 {c['movies']}·剧集 {c['shows']}）"
           f" · {c['sources']} 个源 · 待导出 {c['dirty']}")
-    print(f"文件：{c['files']} 个 strm   窗口 {cfg['window_days']} 天（{strm.cutoff(cfg)} 起）"
+    print(f"文件：{c['files']} 个（含同名 NFO）   窗口 {cfg['window_days']} 天（{strm.cutoff(cfg)} 起）"
           f"   每卷上限 {cfg['part_files']} 个文件   启用采集={cfg['enabled']}")
     i = strm.id_stats()
     print(f"ID：目录带 tmdbid={cfg['tag_tmdb_id']} 带 doubanid={cfg['tag_douban_id']}"
@@ -532,6 +533,12 @@ def show_check(cfg: dict) -> int:
           f" / 还没查 {i['pending']}   上游带豆瓣号的片 {i['douban_titles']} 部")
     last = strm.last_run("collect")
     print(f"上次采集：{json.dumps(last, ensure_ascii=False)[:320] if last else '没跑过'}")
+    if cfg["write_nfo"]:
+        # 只在开了 NFO 时报这一句：没开的话库里少几条简介不影响任何输出，说了是噪音
+        gap = strm.meta_gap()
+        print(f"NFO：开（每个 strm 一份同名 .nfo）· 已写 {strm.nfo_count()} 份"
+              + (f" · 还有 {gap} 条没补过元数据，它们的 NFO 只有片名和年份："
+                 f"补一次 --backfill-only" if gap else " · 元数据都补过"))
     print("游标：")
     for src, cur in sorted(strm.cursors().items()):
         print(f"  {cur['src']:<10} pg={cur['pg']:<6} done={cur['done']} "
@@ -595,15 +602,43 @@ def main() -> int:
         print(f"目录：{out['dir']}\n分卷包：{out['zip_dir']}")
         return 0
 
-    if not cfg["enabled"] and not args.ids_only:
+    if not cfg["enabled"] and not (args.ids_only or args.backfill_only):
         print("后台里「启用每日采集」是关的：要跑就把它打开；"
-              "只导出用 --export-only、只查 TMDB 号用 --ids-only —— "
-              "这两个是手动点名的动作，不受这个开关拦")
+              "只导出用 --export-only、只查 TMDB 号用 --ids-only、"
+              "只补旧条目的元数据用 --backfill-only —— "
+              "这三个是手动点名的动作，不受这个开关拦")
         return 0
 
     delay = max(0.0, int(cfg["delay_ms"]) / 1000.0)
     budget = max(30, args.budget or int(cfg["budget_seconds"]))
     since = strm.cutoff(cfg)
+    if args.backfill_only:
+        # 只补库里缺元数据的那些旧行：它们所在的那几页游标早已经翻过去了，
+        # 不专门补就永远只有片名和年份，而 NFO 值钱的部分恰恰是简介/演员/上映日
+        started = time.time()
+        con = strm.connect()
+        try:
+            pass_id, _reset = decide_pass(con)
+        finally:
+            con.close()
+        n_gap = strm.meta_gap()
+        print(f"回填元数据：库里 {n_gap} 条还没补过简介/演员/评分，"
+              f"这一轮最多花 {budget} 秒，一次问 {BACKFILL_CHUNK} 条")
+        b = backfill_meta(cfg, pass_id, since, started + budget, delay,
+                          {s.id: s for s in load_sources()})
+        print(f"  · 问 {b['chunks']} 批 / {b['asked']} 条：补上 {b['filled']}，"
+              f"上游已不认 {b['skipped']}，还剩约 {max(0, n_gap - b['asked'])} 条")
+        out = run_export("回填元数据后合并")
+        c = strm.db_counts()
+        write_json(STATE, {"date": logical_day().isoformat(), "at": strm.now(),
+                           "ok": out["ok"], "mode": "backfill-only", "backfill": b,
+                           "counts": c, "seconds": round(time.time() - started, 1),
+                           "export": {k: out[k] for k in ("written", "skipped", "removed")},
+                           "zips": out["zips"], "note": f"补 {b['filled']} 条"})
+        print(f"库里：{c['vods']} 条 vod / {c['titles']} 部   "
+              f"导出：写 {out['written']} / 未变 {out['skipped']} / 删 {out['removed']}"
+              f" · 打包 {out['zips']['made']} 卷")
+        return 0 if out["ok"] else 1
     if args.ids_only:
         # 手动点名这一支时预算全给它（正常轮里它只留两成）
         started = time.time()
@@ -761,6 +796,13 @@ def main() -> int:
     if left:
         print(f"下一轮接着翻：{'、'.join(left)}（访问网站会自动继续，"
               f"或跑 python tools/collect_strm.py --budget {budget}）")
+    if cfg["write_nfo"]:
+        gap = strm.meta_gap()
+        if gap:
+            # 只在开了 NFO 时才提示：没开的话库里少简介不影响任何输出，说了是噪音
+            print(f"提示：库里还有 {gap} 条没补过元数据（简介/演员/评分），它们的 NFO 就只有"
+                  f"片名和年份\n      补一次：python tools/collect_strm.py --backfill-only "
+                  f"--budget 240（一次问 {BACKFILL_CHUNK} 条，不占正常采集的预算）")
     return 0 if out["ok"] else 1
 
 

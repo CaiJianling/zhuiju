@@ -73,13 +73,16 @@ def check(name, cond, got=None):
         FAILS.append(name)
 
 
-def mk(title, year, type_name, frm, n=1, vid=1, pubdate="", remarks="", douban=0):
+def mk(title, year, type_name, frm, n=1, vid=1, pubdate="", remarks="", douban=0,
+       blurb="一段有头有尾的简介。", actor="张三,李四", director="王五", area="中国大陆",
+       score="8.4"):
     """造一条上游 videolist 条目。
 
     每条影片都带两条线路：一条 m3u8 直连、一条 HTML 播放器页 —— 实测多数站就是这样，
     所以"默认只收 m3u8"这条判据必须被真实形状检验，不能只喂干净的。
-    `douban` 默认 0：实测各源这一列大多是空的或填 0（11706 行里只有 548 行有号），
-    所以"没号"才是常态，要验带标签的命名时按条给。
+    简介/演员/导演/地区/评分也按真实形状给（实测一次 videolist 就全带回来了，
+    NFO 要用就是从这里来）。`douban` 默认 0：实测各源这一列大多填 0
+    （11706 行里只有 548 行有号），"没号"才是常态，要验标签命名时按条给。
     """
     eps = "#".join(f"第{i:02d}集$https://cdn.test/{vid}-{i}/index.m3u8"
                    for i in range(1, n + 1)) if n > 1 else \
@@ -89,6 +92,8 @@ def mk(title, year, type_name, frm, n=1, vid=1, pubdate="", remarks="", douban=0
     return {"vod_id": vid, "vod_name": title, "vod_year": year, "vod_pubdate": pubdate,
             "type_name": type_name, "vod_time": "2026-10-20 10:00:00",
             "vod_remarks": remarks, "vod_pic": "https://pic.test/1.jpg",
+            "vod_blurb": blurb, "vod_actor": actor, "vod_director": director,
+            "vod_area": area, "vod_douban_score": score,
             "vod_douban_id": douban,
             "vod_play_from": SEP.join([frm, "webplay"]), "vod_play_url": SEP.join([eps, html])}
 
@@ -241,8 +246,9 @@ check("集数按各源实际给的来（索尼只有 3 集就不硬凑第 4 集�
 one = strm.read_strm("movie/movie01/毒液：最后一舞 (2025)/毒液：最后一舞 (2025) - 虎牙资源.strm")
 check("文件内容就是一行 m3u8", one[0] == 200 and one[1].startswith("https://cdn.test/")
       and one[1].endswith("index.m3u8\n"), one)
-check("导出的文件数与库里的行数对得上（file 表就是这一棵树到底写了什么）",
-      len(files) == strm.db_counts()["files"], (len(files), strm.db_counts()["files"]))
+check("导出的文件数与库里的行数对得上（file 表就是这一棵树到底写了什么：strm + 同名 NFO）",
+      len([q for q in allout if q.endswith((".strm", ".nfo"))]) == strm.db_counts()["files"],
+      (len(files), strm.db_counts()["files"]))
 again = strm.export()
 check("没有脏行时增量导出一个文件都不碰（keys=0 就是 dirty 标记在起作用）",
       again["keys"] == 0 and again["written"] == 0, again)
@@ -352,7 +358,121 @@ p5c = sorted(str(p.relative_to(strm.ROOT)).replace(os.sep, "/")
              for p in strm.ROOT.rglob("*.strm"))
 check("两颗开关都关掉：整棵树回到不带标签的样子（设置和盘上必须一致）",
       not any("[" in x for x in p5c), p5c[:2])
+print("\n5c) 每个 strm 一份同名 NFO")
+import xml.etree.ElementTree as ET     # noqa: E402
+
+reset_db()
+cfg = strm.settings()
+check("「写同名 NFO」默认是开的（用户点名要这一项）", bool(cfg["write_nfo"]), cfg["write_nfo"])
+c = con()
+strm.record_vod(c, "huya", "虎牙资源", mk("毒液：最后一舞", "2025", "动作片", "hym3u8",
+                                          vid=1, pubdate="2025-12-30美国", douban=38185414),
+                cfg, 1)
+strm.record_vod(c, "apibdzy", "百度资源", mk("毒液：最后一舞", "2025", "动作片", "dbm3u8",
+                                             vid=9, pubdate="2025-12-30美国"), cfg, 1)
+strm.record_vod(c, "huya", "虎牙资源", mk("庆余年 第二季", "2026", "国产剧", "hym3u8", n=4,
+                                          vid=11, pubdate="2026-05-16中国大陆",
+                                          douban=26309763), cfg, 1)
+strm.record_vod(c, "huya", "虎牙资源", mk("A&B <测试>", "2026", "动作片", "hym3u8", vid=13,
+                                          pubdate="2026-06-01中国大陆"), cfg, 1)
+# 上游常见的"什么都没说"的一条：评分填 0.0、简介演员都空 —— NFO 里不该出现假的 0 分
+strm.record_vod(c, "huya", "虎牙资源", mk("零分无简介", "2026", "动作片", "hym3u8", vid=15,
+                                          pubdate="2026-07-01中国大陆", blurb="", actor="",
+                                          director="", area="", score="0.0"), cfg, 1)
+c.commit()
+c.close()
+zN = "movie/movie01/零分无简介 (2026)/零分无简介 (2026) - 虎牙资源.nfo"
+strm.export(full=True)
+kv = strm.title_key(strm.display_title("毒液：最后一舞"))
+strm_paths = sorted(str(p.relative_to(strm.ROOT)).replace(os.sep, "/")
+                    for p in strm.ROOT.rglob("*.strm"))
+nfo_paths = sorted(str(p.relative_to(strm.ROOT)).replace(os.sep, "/")
+                   for p in strm.ROOT.rglob("*.nfo"))
+check("每个 strm 旁边都有一份同名的 .nfo（名字差一个字 Emby 就不读了）",
+      strm_paths and all(p[:-len(".strm")] + ".nfo" in nfo_paths for p in strm_paths),
+      [p for p in strm_paths if p[:-5] + ".nfo" not in nfo_paths][:2])
+mN = "movie/movie01/毒液：最后一舞 (2025)/毒液：最后一舞 (2025) - 虎牙资源.nfo"
+root = ET.fromstring((strm.ROOT / mN.replace("/", os.sep)).read_text(encoding="utf-8"))
+check("电影那份是合法 XML、根标签 <movie>", root.tag == "movie", root.tag)
+check("字段齐到够 Emby 不再猜：片名/年份/上映日/类型/地区/导演/演员/简介/评分/来源/海报",
+      all(root.find(t) is not None for t in ("title", "originaltitle", "sorttitle", "year",
+                                             "premiered", "genre", "country", "director",
+                                             "actor", "plot", "rating", "studio", "thumb")),
+      [e.tag for e in root])
+check("豆瓣号三种写法都给（Emby 本体不认豆瓣号，插件认哪种没法在本机验证）",
+      root.findtext("doubanid") == "38185414"
+      and [u.get("type") for u in root.findall("uniqueid")] == ["douban", "douban_id"],
+      [(u.get("type"), u.text) for u in root.findall("uniqueid")])
+check("海报写上游原地址，不走本站代理（实测这些图床不要 Referer；走代理就得为每部片登记白名单）",
+      root.findtext("thumb") == "https://pic.test/1.jpg"
+      and "/img?url=" not in (strm.ROOT / mN.replace("/", os.sep)).read_text(encoding="utf-8"),
+      root.findtext("thumb"))
+check("studio 写这条片来自哪些源（地址失效时在界面上能认出是哪一家）",
+      root.findtext("studio") == "百度资源、虎牙资源", root.findtext("studio"))
+c = con()
+strm.save_id(c, kv, "movie", "毒液：最后一舞", "2025", "157336", "ok", "", 1)
+c.commit()
+c.close()
+strm.export()
+root2 = ET.fromstring((strm.ROOT / mN.replace("/", os.sep)).read_text(encoding="utf-8"))
+check("查到 TMDB 号后 NFO 里就带上（<tmdbid> 与 uniqueid type=tmdb 都给，照 Emby 自己写的那份）",
+      root2.findtext("tmdbid") == "157336"
+      and any(u.get("type") == "tmdb" for u in root2.findall("uniqueid")),
+      [(u.get("type"), u.text) for u in root2.findall("uniqueid")])
+tvN = "tv/tv01/庆余年 第二季 (2026)/Season 02/庆余年 第二季 (2026) - S02E03 - 虎牙资源.nfo"
+er = ET.fromstring((strm.ROOT / tvN.replace("/", os.sep)).read_text(encoding="utf-8"))
+check("每一集是一份 <episodedetails>，写的是这一集的季号与集号",
+      er.tag == "episodedetails" and er.findtext("season") == "2"
+      and er.findtext("episode") == "3" and er.findtext("showtitle") == "庆余年 第二季",
+      [er.tag, er.findtext("season"), er.findtext("episode")])
+shN = "tv/tv01/庆余年 第二季 (2026)/tvshow.nfo"
+sr = ET.fromstring((strm.ROOT / shN.replace("/", os.sep)).read_text(encoding="utf-8"))
+check("剧集根目录另有一份 <tvshow>：系列级的号只能写在这里",
+      sr.tag == "tvshow" and sr.findtext("doubanid") == "26309763"
+      and sr.findtext("title") == "庆余年 第二季", [e.tag for e in sr][:6])
+check("系列的号没有被抄进每一集（那会被 Emby 当成「某一集的号」）",
+      er.find("uniqueid") is None and er.find("tmdbid") is None,
+      [e.tag for e in er])
+abN = [p for p in nfo_paths if "A&amp;B" in p or "A&B" in p]
+raw = (strm.ROOT / abN[0].replace("/", os.sep)).read_text(encoding="utf-8") if abN else ""
+check("片名里的 & 被转义、夹的 HTML 标签被剥掉（坏 NFO 等于整条不认）",
+      bool(abN) and "<title>A&amp;B</title>" in raw and "<测试>" not in raw
+      and ET.fromstring(raw).findtext("title") == "A&B", raw.splitlines()[2:3])
+# 只改元数据：播放地址没变 → 采集判"同一条"，但 msig 变了要标脏，重写的是 NFO 不是 strm
+c = con()
+strm.record_vod(c, "huya", "虎牙资源", mk("毒液：最后一舞", "2025", "动作片", "hym3u8",
+                                          vid=1, pubdate="2025-12-30美国", douban=38185414,
+                                          blurb="换了个新简介，还是一句完整的话。"), cfg, 1)
+c.commit()
+c.close()
+r5 = strm.export()
+raw5 = (strm.ROOT / mN.replace("/", os.sep)).read_text(encoding="utf-8")
+check("简介变了：NFO 被重写，一条 strm 都不重写（签名只算播放地址）",
+      "新简介" in raw5 and r5["written"] >= 1 and r5["skipped"] >= 1,
+      {k: r5[k] for k in ("written", "skipped")})
+check("上游填的评分是 0 时不写 rating（写进去就是让 Emby 显示一个假的 0 分，比不写更糟）",
+      ET.fromstring((strm.ROOT / zN).read_text(encoding="utf-8")).find("rating") is None
+      and ET.fromstring((strm.ROOT / zN).read_text(encoding="utf-8")).findtext("plot") is None,
+      (strm.ROOT / zN).read_text(encoding="utf-8")[:200])
+strm.save_settings({"write_nfo": "0"})
+strm.export(full=True)
+left = sorted(strm.ROOT.rglob("*.nfo"))
+still = sorted(strm.ROOT.rglob("*.strm"))
+check("关掉开关：已有的 .nfo 全删干净（设置和盘上必须一致）", not left, [p.name for p in left][:3])
+check("删 NFO 不动 strm：一部片、一集都没少", len(still) == len(strm_paths),
+      (len(still), len(strm_paths)))
+check("清单报得出 NFO 的开与份数", strm.manifest()["nfo"] == {"write": False, "files": 0},
+      strm.manifest()["nfo"])
+strm.save_settings({"write_nfo": "1"})
+strm.export(full=True)
+check("重新打开就都写回来了", strm.manifest()["nfo"]["files"] >= len(strm_paths),
+      strm.manifest()["nfo"])
+strm.save_settings({"tag_douban_id": "0", "tag_tmdb_id": "0"})
+strm.export(full=True)
+
 print("\n6) 下架/掉出窗口时文件要跟着删")
+before = sorted(strm.ROOT.rglob("*.strm"))
+n_qny = sum(1 for p in before if "庆余年" in p.name)
 c = con()
 c.execute("DELETE FROM vod WHERE src='apibdzy'")
 gone_key = c.execute("SELECT key FROM vod WHERE title LIKE '%毒液%'").fetchone()["key"]
@@ -360,11 +480,12 @@ c.execute("DELETE FROM vod WHERE key=?", (gone_key,))
 c.commit()
 c.close()
 fourth = strm.export()
-check("库里没了的片，它的 strm 文件被删掉", fourth["removed"] >= 1, fourth)
+check("库里没了的片，它的 strm 与同名 NFO 一起被删掉", fourth["removed"] >= 2, fourth)
 rest = sorted(str(p.relative_to(strm.ROOT)).replace(os.sep, "/")
               for p in strm.ROOT.rglob("*.strm"))
-check("被删的是它那两条，庆余年一条没少",
-      not any("毒液" in r for r in rest) and sum(1 for r in rest if "庆余年" in r) >= 7, rest)
+check("被删的只有毒液那两条，庆余年一集都没少",
+      not any("毒液" in r for r in rest) and sum(1 for r in rest if "庆余年" in r) == n_qny,
+      (n_qny, sorted(r for r in rest if "庆余年" in r)))
 check("空目录被清掉（Windows 上留一堆空目录很碍眼）",
       not (strm.ROOT / "movie" / "movie01" / "毒液：最后一舞 (2025)").exists())
 
@@ -388,7 +509,8 @@ strm.export(full=True)
 m1 = strm.part_paths("movie", "movie01")
 m2 = strm.part_paths("movie", "movie02")
 check("超出每卷上限后开了第二卷", m1 and m2, (len(m1), len(m2)))
-check("第一卷被填满到上限", len(m1) == 6, len(m1))
+check("第一卷被填满到上限（名额只数 strm，开不开同名 NFO 都不该改变卷的切法）",
+      len([p for p in m1 if p.endswith(".strm")]) == 6, len(m1))
 c = con()
 per_folder = {}
 for r in c.execute("SELECT key, part FROM file GROUP BY key, part"):
@@ -424,9 +546,11 @@ with zipfile.ZipFile(zpath) as z:
     check("包内每个 strm 都以它所在文件夹名开头（Emby 认多版本就认这一条）",
           all(n.split("/")[-2] in n.split("/")[-1] and " - " in n.split("/")[-1]
               for n in names if n.endswith(".strm")), names[:2])
-    check("包里不再有 .nfo 这种东西（识别靠目录名里的 ID 标签，不靠 NFO 文件）",
-          not any(n.endswith(".nfo") for n in names),
-          [n for n in names if n.endswith(".nfo")][:3])
+    check("每个 strm 在包里都配一份同名 .nfo（Emby 认的就是「同名 sidecar」，名字差一字它不读）",
+          names and all(n[:-len(".strm")] + ".nfo" in names
+                        for n in names if n.endswith(".strm")), names[:2])
+    check("电影那一份是 <movie> 根标签（剧集另有 tvshow.nfo，见第 5c 节）",
+          any(n.endswith(".nfo") for n in names))
     check("包里的文件数与这一卷清单一模一样",
           len(names) == len([p for p in strm.part_paths("movie", "movie01")]),
           (len(names), len(strm.part_paths("movie", "movie01"))))
@@ -735,13 +859,30 @@ r = client.post("/admin/strm/settings", data={"csrf": tok, "window_days": "90",
                                              "m3u8_only": "1", "exclude_srcs": "",
                                              "min_interval_minutes": "30"},
                 follow_redirects=False)
-check("保存设置 302 回后台并锚定到那一节",
-      r.status_code == 302 and "/admin" in r.headers["Location"] and "#strm" in r.headers["Location"],
-      r.headers.get("Location"))
+check("保存设置 302 回到 Emby STRM 那个标签（只带 #strm 锚点不够：那一节被 CSS 藏着，"
+      "看着就像跳回了后台首页）",
+      r.status_code == 302 and "tab=strm" in r.headers["Location"]
+      and "#strm" in r.headers["Location"], r.headers.get("Location"))
 check("设置真的写进了库", strm.settings()["window_days"] == 90, strm.settings())
 r = client.post("/admin/strm/settings", data={"csrf": "deadbeef", "window_days": "999"},
                 follow_redirects=False)
 check("csrf 不对时改不动设置", r.status_code == 400 and strm.settings()["window_days"] == 90)
+# 异步那条路：页面不重载，接口回一句 JSON + 刷新要用的两份文案
+r = client.post("/admin/strm/settings", headers={"X-Requested-With": "fetch"},
+                data={"csrf": tok, "window_days": "180"}, follow_redirects=False)
+j = r.get_json() or {}
+check("带 X-Requested-With: fetch 的提交回 JSON，不是一跳 302",
+      r.status_code == 200 and j.get("ok") is True and "已保存" in (j.get("msg") or ""),
+      (r.status_code, j.get("msg")))
+check("JSON 里带着那两句话（JS 刷新读的就是它，和模板渲染同一份文案）",
+      "目录名 ID 标签" in (j.get("lines") or {}).get("ids", "")
+      and (j.get("lines") or {}).get("nfo", "").startswith("NFO："), j.get("lines"))
+check("校验没过时也回 JSON 并且说清哪儿不对（异步提交不能只给个红叉）",
+      client.post("/admin/strm/settings", headers={"X-Requested-With": "fetch"},
+                  data={"csrf": tok, "window_days": "3"}).get_json()["ok"] is False,
+      None)
+check("窗口 3 天这种非法值没写进库", strm.settings()["window_days"] == 180,
+      strm.settings()["window_days"])
 
 print("\n13c) 页面上的 ID 那一行与「重查没命中的」按钮")
 strm.save_settings({"window_days": "365", "tag_douban_id": "1", "tag_tmdb_id": "1",
@@ -763,9 +904,14 @@ check("密钥那一栏是 password 输入框且不回显存着的值（页面源
       and 'value="testkey12345678"' not in page,
       re.findall(r'<input[^>]*tmdb_api_key[^>]*>', page)[:1])
 check("已经存了 key 时页面上要有「已经存着了」这句提示", "已经存着了" in page)
-check("重查那颗按钮在页面上，并把当前「查过没有」的条数写在按钮上",
-      'action="/admin/strm/recheck"' in page and "重查 TMDB 说「没有」的那些（现在 1 条）" in page,
+check("重查那颗按钮在页面上（份数不写在按钮上：一按就清，标签上的数字当场变假）",
+      'action="/admin/strm/recheck"' in page and "重查 TMDB 说「没有」的那些" in page,
       re.findall(r"重查 TMDB[^<]*", page)[:1])
+check("NFO 那一行也在页面上，说得出开/关与代价",
+      'id="strm-nfo"' in page and re.search(r"NFO：(开|关)", page),
+      re.findall(r"NFO：[^<]{0,60}", page)[:1])
+check("这一节里的表单都是异步提交的（JS 拦住 submit 走 fetch，页面不重载）",
+      "X-Requested-With" in page and "bindForms()" in page, None)
 n_before = len(SPAWNED)
 # 前面几次 GET /admin 可能已经顺手拉起过一轮，锁里那个 PID（测试进程自己）还活着，
 # 那样 start_now() 只会回"已经有一轮在跑"。先把锁和状态清掉，测的才是这颗按钮本身。
@@ -996,6 +1142,63 @@ r1 = col.resolve_ids(cfg_i, time.time() + 1, 0)
 check("「每轮最多查几部」设成 0 就是显式关掉，不该再去捞待办名单",
       r1["asked"] == 0 and "0" in r1["stopped"], r1)
 
+print("\n15d) 回填元数据：只问没补过的，上游不认的写哨兵")
+# 模拟"补字段之前采进来的老行"：msig 是空的（新写的行都带着 msig）
+c = con()
+c.execute("INSERT INTO vod(src,vid,src_name,key,title,year,kind,type_name,lines,url_count,"
+          "m3u8_count,sig,dirty,pass) VALUES('huya','901','虎牙资源','laohu','老片没补过',"
+          "'2026','movie','动作片','[{\"from\":\"h\",\"eps\":[{\"name\":\"正片\","
+          "\"url\":\"https://x/901.m3u8\"}]}]',1,1,'s9',1,1)")
+c.execute("UPDATE vod SET msig=NULL WHERE vid='901'")
+c.commit()
+c.close()
+check("meta_gap 数的就是这种没补过的行", strm.meta_gap() >= 1, strm.meta_gap())
+
+
+class FakeSrc:
+    id, name, api, params = "huya", "虎牙资源", "https://x/api.php/provide/vod/", {}
+
+
+asked = []
+
+
+def fake_fetch_ids(src, vids):
+    asked.append((src.id, list(vids)))
+    return {"ok": True, "error": None, "items": [mk("老片没补过", "2026", "动作片", "h",
+                                                    vid=int(v)) for v in vids
+                                                  if v != "902"]}
+
+
+real_fetch_ids = col.fetch_ids
+col.fetch_ids = fake_fetch_ids
+c = con()
+c.execute("INSERT INTO vod(src,vid,src_name,key,title,year,kind,type_name,lines,url_count,"
+          "m3u8_count,sig,dirty,pass) VALUES('huya','902','虎牙资源','diaoshou','已下架的片',"
+          "'2026','movie','动作片','[{\"from\":\"h\",\"eps\":[{\"name\":\"正片\","
+          "\"url\":\"https://x/902.m3u8\"}]}]',1,1,'s8',1,1)")
+c.commit()
+c.close()
+b = col.backfill_meta(strm.settings(), 9, strm.cutoff(), time.time() + 60, 0.0,
+                      {"huya": FakeSrc()})
+check("一次按 ids 批量问（不是逐条 detail，也不是重翻整年）",
+      b["chunks"] >= 1 and all(len(v) <= col.BACKFILL_CHUNK for _s, v in asked), (b, asked))
+check("补上的那条现在有简介了，msig 也不再是空",
+      con().execute("SELECT blurb FROM vod WHERE vid='901'").fetchone()[0] not in (None, ""))
+check("上游已经不认的那个 ID 写了 gone 哨兵（否则每轮都当\"还没补\"重问，白敲上游）",
+      con().execute("SELECT msig FROM vod WHERE vid='902'").fetchone()[0] == "gone",
+      con().execute("SELECT msig FROM vod WHERE vid='902'").fetchone()[0])
+c = con()
+c.execute("UPDATE vod SET msig=NULL WHERE vid='901'")     # 再造一条"没补过"的
+c.commit()
+c.close()
+n_before_gap = strm.meta_gap()
+col.fetch_ids = lambda src, vids: {"ok": False, "items": [], "error": "HTTP 500"}
+b2 = col.backfill_meta(strm.settings(), 9, strm.cutoff(), time.time() + 60, 0.0,
+                       {"huya": FakeSrc()})
+check("源今天不通就那一支直接停，不把整库标成\"补过了\"",
+      b2["filled"] == 0 and strm.meta_gap() == n_before_gap, (b2, strm.meta_gap()))
+col.fetch_ids = real_fetch_ids
+
 print("\n16) 结构：库里到底存了什么（数据先落库再导出这条要求）")
 tables = [x[0] for x in sqlite3.connect(str(strm.DB)).execute(
     "SELECT name FROM sqlite_master WHERE type='table'")]
@@ -1004,8 +1207,10 @@ check("八张表都在（vod=采集数据、cur=断点、part=分卷、file=已�
       {"vod", "cur", "part", "file", "zip", "run", "setting", "idmap"} <= set(tables), tables)
 c = con()
 cols = {r["name"] for r in c.execute("PRAGMA table_info(vod)")}
-check("vod 表里存了线路、脏标记、轮次与上映日期",
-      {"lines", "dirty", "pass", "sig", "pubdate", "kind", "key"} <= cols, sorted(cols))
+check("vod 表里存了线路、脏标记、轮次、上映日期与 NFO 要用的那几个元数据字段",
+      {"lines", "dirty", "pass", "sig", "msig", "pubdate", "kind", "key",
+       "blurb", "actor", "director", "area", "douban_id", "douban_score", "pic"} <= cols,
+      sorted(cols))
 runs = [r["kind"] for r in c.execute("SELECT kind FROM run ORDER BY id")]
 check("采集/导出都留了运行记录（页面上那句'上次跑得怎么样'从这里来）",
       "export" in runs, runs)

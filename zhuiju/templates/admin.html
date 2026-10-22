@@ -588,7 +588,9 @@
      禁用 JavaScript 时这一节照样说得清"在不在跑"（只是不会自己更新） #}
   <section class="asect" id="strm" data-grp="strm" data-running="{{ 1 if sjob.running else 0 }}">
     <h2>Emby STRM <span class="asub">近一年电影 / 电视剧采集 → strm 目录树 → 分卷 zip</span></h2>
-    {% if smsg %}<p class="loginnote">{{ smsg }}</p>{% endif %}
+    {# 操作结果那一句：原来只在有提示时渲染，异步保存后要就地填这句话，所以元素常驻、
+       没内容时 hidden（留着空 <p> 会顶出一段间距，比句子里突然多出空白好） #}
+    <p class="loginnote" id="strm-msg"{% if not smsg %} hidden{% endif %}>{{ smsg }}</p>
 
     {% if sjob.running %}
     <p class="fresh run" id="strm-state"><i class="dot s-run"></i>正在后台采集
@@ -614,17 +616,11 @@
     {% if st.note %}
     <p class="atip">上一轮各源停在哪：{{ st.note }}</p>
     {% endif %}
-    {# ID 标签那一行：三个数缺一不可看 —— 开关开了但 key 没配，或者 key 配了但
-       一部都还没查，页面上不说清楚人就只会看到"名字里怎么还没有 [tmdbid=]" #}
-    <p class="atip">目录名 ID 标签：<b>tmdbid
-      {%- if smeta.ids.tag_tmdb_id %} 开{%- else %} 关{%- endif %}</b> ·
-      doubanid {%- if smeta.ids.tag_douban_id %} 开{%- else %} 关{%- endif %} ·
-      TMDB key {%- if smeta.ids.tmdb_key %} 已配{%- else %} <b>没配</b>（这一支不会打接口）{%- endif %}
-      —— 查到号 {{ smeta.ids.ok }} 部 / 确认没有 {{ smeta.ids.none }} 部 / 没查成 {{ smeta.ids.bad }} 部 /
-      还没查 {{ smeta.ids.pending }} 部（共 {{ smeta.ids.titles }} 部）。
-      上游自带豆瓣号的是 {{ smeta.ids.douban_titles }} 部。
-      {%- if st.ids %} 上一轮：问了 {{ st.ids.asked }} 部、命中 {{ st.ids.ok }} 部
-      {%- if st.ids.stopped %} · 停在「{{ st.ids.stopped }}」{% endif %}。{% endif %}</p>
+    {# 这两句话从 strm.status_lines() 来 —— Python 里只有这一份文案。
+       这一节现在是异步刷新的（保存/按按钮不重载页面），模板里拼一份、JS 里再拼一份，
+       迟早会出现在"页面说没配 key、JS 说已配"的那种对不上 #}
+    <p class="atip" id="strm-ids">{{ sjob.lines.ids }}</p>
+    <p class="atip" id="strm-nfo">{{ sjob.lines.nfo }}</p>
 
     <div class="cols" data-grp="strm">
       <section class="asect" id="strm-zips" data-grp="strm">
@@ -759,10 +755,11 @@
         <button type="submit" class="fbtn">全量重建（改了窗口就按这个）</button>
       </form>
       {# TMDB 判过"确实没有"的那些不再自动重问（那是白打接口），但 TMDB 会往后补条目，
-         所以留一颗手动重查的按钮 —— 清完顺手起一轮，不然页面上数字不动 #}
+         所以留一颗手动重查的按钮。份数不写在按钮上 —— 按钮一按就把那些清了，
+         标签上的数字会当场变成假的（要看在哪儿，看上面那句 ID 那一行） #}
       <form method="post" action="{{ url_for('admin_strm_recheck') }}" class="inline">
         <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button type="submit" class="fbtn">重查 TMDB 说「没有」的那些（现在 {{ smeta.ids.none }} 条）</button>
+        <button type="submit" class="fbtn">重查 TMDB 说「没有」的那些</button>
       </form>
     </p>
 
@@ -1029,6 +1026,9 @@
   var state = document.getElementById('strm-state');
   var kpi = document.getElementById('strm-kpi');
   var curBody = document.getElementById('strm-cur');
+  var msg = document.getElementById('strm-msg');
+  var idsLine = document.getElementById('strm-ids');
+  var nfoLine = document.getElementById('strm-nfo');
   if (!sec || !state) return;
 
   // 与模板里那一份 stop_cn 同口径（一个在 Python/Jinja，一个在这里，改一处要记得改另一处）
@@ -1086,9 +1086,52 @@
     if (!kpi) return;
     kpi.textContent = '库里 ' + (c.vods || 0) + ' 条（' + (c.titles || 0) + ' 部：电影 ' +
       (c.movies || 0) + ' · 剧集 ' + (c.shows || 0) + '）· 来自 ' + (c.sources || 0) + ' 个源 · ' +
-      (c.urls || 0) + ' 条可播地址 · 已写 ' + (c.files || 0) + ' 个 strm · 待合并 ' +
+      (c.urls || 0) + ' 条可播地址 · 已写 ' + (c.files || 0) + ' 个文件 · 待合并 ' +
       (c.dirty || 0) + ' 条。窗口 ' + (cfg.window_days || '') + ' 天' +
       (pr.since ? '（' + pr.since + ' 起）' : '') + '。';
+  }
+
+  /* ID 标签与 NFO 那两句话：文案由 strm.status_lines() 在 Python 里拼，
+     这里只换 textContent —— 两边各写一份句子迟早会对不上 */
+  function paintLines(s) {
+    var l = s.lines || {};
+    if (idsLine && l.ids != null) idsLine.textContent = l.ids;
+    if (nfoLine && l.nfo != null) nfoLine.textContent = l.nfo;
+  }
+
+  /* 这一节里的表单全部异步提交：整页重载会把滚动位置弹回顶部，而人改完一个数
+     通常紧接着要看它生效没有。没 JS 时这个监听器根本不会挂上，表单还是普通提交，
+     而服务端那条 redirect 现在带着 tab="strm"，也会回到这一节 ——
+     以前只带锚点，那一节被 CSS 藏着，看起来就像"保存后跳回后台首页"。 */
+  function bindForms() {
+    Array.prototype.forEach.call(sec.querySelectorAll('form'), function (f) {
+      f.addEventListener('submit', function (ev) {
+        var btn = f.querySelector('button');
+        ev.preventDefault();
+        if (msg) { msg.hidden = true; msg.textContent = ''; }
+        if (btn) btn.disabled = true;
+        fetch(f.action, {
+          method: 'POST',
+          body: new FormData(f),
+          headers: { 'X-Requested-With': 'fetch' },
+          credentials: 'same-origin'
+        }).then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (msg) { msg.textContent = d.msg || '完成'; msg.hidden = false; }
+            if (d.running) wasRunning = true;
+            tick();                        // 立刻补一次，把改完的那几个数带回来
+          })
+          .catch(function () {
+            // 答不上来（服务刚重启、登录过期、被门禁挡了）就老实说没提交上，
+            // 让人自己再按一次或刷新页面 —— 悄悄退回普通提交只会把同一个错再演一遍
+            if (msg) {
+              msg.textContent = '这次没提交上：接口没答话。刷新一下页面再用普通方式提交一次。';
+              msg.hidden = false;
+            }
+          })
+          .then(function () { if (btn) btn.disabled = false; });
+      });
+    });
   }
 
   function paintCursor(s) {
@@ -1168,6 +1211,7 @@
           paintState(s);
           paintKpi(s);
           paintCursor(s);
+          paintLines(s);
           remeasure();
           if (wasRunning && !s.running) refreshParts();   // 一轮收尾：分卷表跟一次
           wasRunning = !!s.running;
@@ -1193,6 +1237,7 @@
     if (!document.hidden) tick();
   });
 
+  bindForms();
   if (wasRunning) schedule(10000); else schedule(60000);
 })();
 </script>

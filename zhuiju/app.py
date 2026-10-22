@@ -192,8 +192,11 @@ def _strm_notice(args, st: dict) -> str:
         return f"清掉 {n} 条「查过确实没有」的 TMDB 结论" + tail
     if args.get("strm_set"):
         return (f"已保存：窗口 {cfg['window_days']} 天 · 每卷 {cfg['part_files']} 个文件 · "
-                f"每请求间隔 {cfg['delay_ms']}ms · 每轮预算 {cfg['budget_seconds']}s。"
-                "改了时间范围的话按一次「全量重建」，旧窗口采进来的才会从库里清掉")
+                f"每请求间隔 {cfg['delay_ms']}ms · 每轮预算 {cfg['budget_seconds']}s · "
+                f"NFO {'开' if cfg.get('write_nfo') else '关'} · "
+                f"ID 标签 tmdbid {'开' if cfg.get('tag_tmdb_id') else '关'}"
+                f"/doubanid {'开' if cfg.get('tag_douban_id') else '关'}。"
+                "改了时间范围或这两颗开关，要再按一次「全量重建」才会落到文件上")
     why = str(args.get("why") or "")[:120]
     if args.get("strm_run") == "1":
         return ("已拉起后台任务：" + why) if why else "已拉起一轮后台任务"
@@ -802,6 +805,26 @@ def create_app() -> Flask:
         return (body, 200, {"Content-Type": "text/plain; charset=utf-8",
                             "Cache-Control": "no-cache"})
 
+    def _strm_back(**params):
+        """这一节的操作完成后回哪儿。
+
+        AJAX（页面上那几颗按钮带 X-Requested-With: fetch）→ 回一句 JSON，
+        页面不重载、滚动位置不动，提示就地显示；表单 → 照旧重定向（没 JS 时这是唯一出口）。
+
+        两条都必须回到 Emby STRM 那个标签：只带 `#strm` 锚点是不够的 —— 那一节挂在
+        `tab="strm"` 上，而显示哪一组块是 CSS 按 `body[data-tab]` 决定的
+        （见 app.css 那四条规则）。少了 tab 就会变成"点了保存，页面回到总览"，
+        看起来像没保存上（实测就是这么被误判成设置没生效的）。
+        """
+        if (request.headers.get("X-Requested-With") or "").lower() == "fetch":
+            st = strmjob.status()
+            return jsonify({"ok": not params.get("strm_err"),
+                            "msg": _strm_notice(params, st),
+                            "running": bool(st.get("running")),
+                            "lines": st.get("lines"),
+                            "counts": st.get("counts"), "settings": st.get("settings")})
+        return redirect(url_for("admin", tab="strm", _anchor="strm", **params))
+
     @app.post("/admin/strm/settings")
     def admin_strm_settings():
         """后台改采集设置（含时间范围）：写进 strm.db，立刻生效不用重启。"""
@@ -812,11 +835,10 @@ def create_app() -> Flask:
         try:
             _cfg, err = strm_mod.save_settings(request.form.to_dict())
         except Exception as exc:  # noqa: BLE001 - 保存失败要说人话，不该把后台页变成 500
-            return redirect(url_for("admin", strm_err=f"{type(exc).__name__}: {exc}"[:160],
-                                    _anchor="strm"))
+            return _strm_back(strm_err=f"{type(exc).__name__}: {exc}"[:160])
         if err:
-            return redirect(url_for("admin", strm_err=err[:160], _anchor="strm"))
-        return redirect(url_for("admin", strm_set="1", _anchor="strm"))
+            return _strm_back(strm_err=err[:160])
+        return _strm_back(strm_set="1")
 
     @app.post("/admin/strm/run")
     def admin_strm_run():
@@ -826,8 +848,8 @@ def create_app() -> Flask:
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
         out = strmjob.start_now()
-        return redirect(url_for("admin", strm_run="1" if out.get("ok") else "0",
-                                why=str(out.get("error") or out.get("pid") or "")[:60], _anchor="strm"))
+        return _strm_back(strm_run="1" if out.get("ok") else "0",
+                          why=str(out.get("error") or out.get("pid") or "")[:60])
 
     @app.post("/admin/strm/recheck")
     def admin_strm_recheck():
@@ -844,12 +866,10 @@ def create_app() -> Flask:
         try:
             n = strm_mod.reset_ids(state="none")
         except Exception as exc:  # noqa: BLE001
-            return redirect(url_for("admin", strm_err=f"{type(exc).__name__}: {exc}"[:160],
-                                    _anchor="strm"))
+            return _strm_back(strm_err=f"{type(exc).__name__}: {exc}"[:160])
         out = strmjob.start_now()
-        return redirect(url_for("admin", strm_recheck=n,
-                                strm_run="1" if out.get("ok") else "0",
-                                why=str(out.get("error") or "")[:60], _anchor="strm"))
+        return _strm_back(strm_recheck=n, strm_run="1" if out.get("ok") else "0",
+                          why=str(out.get("error") or "")[:60])
 
     @app.post("/admin/strm/export")
     def admin_strm_export():
@@ -864,16 +884,13 @@ def create_app() -> Flask:
             return _login_page("表单已过期，请重新提交", 400)
         full = (request.form.get("mode") or "") == "full"
         if strmjob.running():
-            return redirect(url_for("admin", strm_run="0", why="已经有一轮任务在跑，等它结束再导出",
-                                    _anchor="strm"))
+            return _strm_back(strm_run="0", why="已经有一轮任务在跑，等它结束再导出")
         try:
             autoupdate.spawn(strmjob.SCRIPT, strmjob.LOG, strmjob.LOCK,
                              args=["--export-only"] + (["--full"] if full else []))
         except Exception as exc:  # noqa: BLE001
-            return redirect(url_for("admin", strm_run="0", why=f"{type(exc).__name__}: {exc}"[:120],
-                                    _anchor="strm"))
-        return redirect(url_for("admin", strm_run="1", why="全量重建并打包" if full else "增量导出并打包",
-                                _anchor="strm"))
+            return _strm_back(strm_run="0", why=f"{type(exc).__name__}: {exc}"[:120])
+        return _strm_back(strm_run="1", why="全量重建并打包" if full else "增量导出并打包")
 
     @app.get("/admin")
     def admin():

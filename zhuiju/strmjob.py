@@ -132,9 +132,18 @@ def status() -> dict:
         counts = strm.db_counts()
     except Exception:  # noqa: BLE001
         counts = {"error": "统计库读不出来"}
+    # 那两句话（ID 标签 / NFO）在这里拼一次就好：模板渲染和 JS 刷新读的是同一份。
+    # 写在模板里再在 JS 里拼一遍，迟早会一个说"没配 key"一个说"已配"。
+    # 传状态文件里那一轮 ids 进去：开关开着却一个号都没查到是哪一种情况，
+    # 只有跑过之后才知道，而这句话正是给人看"为什么没动静"的。
+    try:
+        lines = strm.status_lines(cfg, (s or {}).get("ids") if isinstance(s, dict) else None)
+    except Exception:  # noqa: BLE001 - 说不清状态不该让整页读不出别的东西
+        lines = {"ids": "ID 标签：读不出来", "nfo": "NFO：读不出来"}
     return {
         "running": bool(alive),
         "settings": cfg,
+        "lines": lines,
         "next_in": 0 if alive else next_in(cfg),
         "last_trigger": _last[1],
         "state": {k: s.get(k) for k in ("at", "date", "ok", "pass", "seconds", "requests",

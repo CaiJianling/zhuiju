@@ -979,6 +979,23 @@ def reset_ids(con=None, state: str = "none") -> int:
             con.close()
 
 
+def meta_gap(con=None) -> int:
+    """还有多少条没补过元数据（NFO 里就只有片名和年份）。
+
+    判据用 msig 空不空，不用 blurb 空不空：上游本来就有真没填简介的条目，
+    补过一次之后 msig 就有值了，不该被当成"还没补"反复问。
+    `--backfill-only` 那一支的进度也是数这个。
+    """
+    own = con is None
+    con = con or connect()
+    try:
+        return int(con.execute(
+            "SELECT COUNT(*) FROM vod WHERE msig IS NULL OR msig=''").fetchone()[0])
+    finally:
+        if own:
+            con.close()
+
+
 def id_stats(con=None) -> dict:
     """这一项目前到什么程度了：命中多少、确认没有多少、还剩多少没查。"""
     own = con is None
@@ -1243,10 +1260,76 @@ def nfo_document(kind: str, item: dict, ids: dict | None, cfg: dict,
                 + f"  <season>{int(sea)}</season>\n"
                 + f"  <episode>{int(ep_no)}</episode>\n"
                 + "</episodedetails>\n")
-    body = nfo_common(item, ids, kind)
+    body = nfo_common(item, ids)
     if kind == "tvshow":
         return head + "<tvshow>\n" + body + "</tvshow>\n"
     return head + "<movie>\n" + body + "</movie>\n"
+
+
+def ids_line(cfg: dict | None = None, stats: dict | None = None,
+             last: dict | None = None) -> str:
+    """后台「ID 标签」那一句话。
+
+    为什么在 Python 里拼整句而不是在模板里排 span：这一行改成了异步刷新
+    （保存设置/按按钮不重载页面），文案写两份就一定会对不上一次 ——
+    模板说"没配 key"而 JS 说"已配"是最难查的那种错。
+    """
+    cfg = cfg or settings()
+    st = stats if stats is not None else id_stats()
+    return ("目录名 ID 标签：tmdbid " + ("开" if cfg.get("tag_tmdb_id") else "关")
+            + " / doubanid " + ("开" if cfg.get("tag_douban_id") else "关")
+            + " · TMDB key " + ("已配" if str(cfg.get("tmdb_api_key") or "").strip()
+                                else "没配（这一支不会打接口）")
+            + f" —— 查到号 {st['ok']} 部 / 确实没有 {st['none']} 部 / "
+            + f"没查成 {st['bad']} 部 / 还没查 {st['pending']} 部（共 {st['titles']} 部）· "
+            + f"上游自带豆瓣号 {st['douban_titles']} 部"
+            + (f"；上一轮问了 {last['asked']} 部、命中 {last['ok']} 部"
+               f"{'，停在「' + last['stopped'] + '」' if last.get('stopped') else ''}"
+               if last else ""))
+
+
+def nfo_line(cfg: dict | None = None, files: int | None = None) -> str:
+    """后台「NFO」那一句话（同上一条的理由：异步刷新不能有两份文案）。
+
+    份数要数一次 `path LIKE '%.nfo'`，那是全表扫（后缀匹配用不上主键），二十几万行
+    几十毫秒 —— 这一句只出现在后台那一页和它的轮询里，不值得为它维护一个计数器：
+    计数器会和 file 表对不上，那种错比慢更难查。
+    """
+    cfg = cfg or settings()
+    if not cfg.get("write_nfo"):
+        return ("NFO：关 —— Emby 只靠 `片名 (年份)` 这套文件名在线刮削；"
+                "要本地元数据就打开「每个 strm 旁边写一份同名 NFO」再按一次全量重建")
+    n = files if files is not None else nfo_count()
+    return (f"NFO：开 —— 每个 strm 旁边一份同名 .nfo（剧集另有 tvshow.nfo 承载系列号）· "
+            f"已写 {n} 份 · 代价是文件数与包里条目翻倍，Emby 也多读一倍")
+
+
+def nfo_count(con=None) -> int:
+    own = con is None
+    con = con or connect()
+    try:
+        return int(con.execute(
+            "SELECT COUNT(*) FROM file WHERE path LIKE '%.nfo'").fetchone()[0])
+    finally:
+        if own:
+            con.close()
+
+
+def status_lines(cfg: dict | None = None, last: dict | None = None, con=None) -> dict:
+    """后台那一节要的两句话（模板渲染和 JS 刷新都从这里取，全站只有这一份文案）。
+
+    `last` 是状态文件里上一轮的 ids（问了几个、命中多少、为什么停着）：
+    只有跑过的人才知道"开关开了却一个号都没查到"是哪一种情况，这句必须带上。
+    """
+    cfg = cfg or settings()
+    own = con is None
+    con = con or connect()
+    try:
+        return {"ids": ids_line(cfg, id_stats(con), last),
+                "nfo": nfo_line(cfg, nfo_count(con))}
+    finally:
+        if own:
+            con.close()
 
 
 def plan(key: str, rows: list[sqlite3.Row], cfg: dict, ids: dict | None = None) -> list[dict]:
