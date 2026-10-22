@@ -305,8 +305,8 @@ gobtn = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
 check("主按钮前景是 --on-accent 而不是语义色", "var(--on-accent)" in gobtn.get("color", ""),
       gobtn.get("color"))
 check("主按钮与输入框同一套圆角", gobtn.get("border-radius") == "8px", gobtn.get("border-radius"))
-unified = re.search(r"\.pbtn, \.pager a, \.jumpbtn, \.themebtn, \.fbtn \{", css)
-check("翻页/跳转/主题/筛选胶囊合并成一处定义", unified is not None)
+unified = re.search(r"\.pbtn, \.pager a, \.jumpbtn, \.themebtn, \.fbtn, \.frontbtn \{", css)
+check("翻页/跳转/主题/筛选/回前台胶囊合并成一处定义", unified is not None)
 check("旧的分立胶囊定义已删除", css.count(".pbtn {\n") == 0 and css.count(".pager a {\n") == 0)
 check("主题切换渐变只在切换期间生效",
       ".theme-anim" in css and "prefers-reduced-motion" in css)

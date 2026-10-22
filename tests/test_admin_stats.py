@@ -1297,5 +1297,32 @@ check("局部刷新的基址也带 tab（否则原地翻两页后地址栏丢了
 check("目录高亮跟着滚动走，并用 requestAnimationFrame 节流",
       "requestAnimationFrame(mark)" in de and 'data-to="' in de, None)
 
+print("\n28) 后台与前台之间那两个入口")
+home = c3.get("/").get_data(as_text=True)
+m = re.search(r'<a class="frontbtn" href="([^"]+)"', ov)
+check("后台标题行有「回前台」，四张标签上都一样（不只总览有）",
+      m is not None and all('class="frontbtn"' in p for p in (ov, de, st_, se)),
+      m.group(1) if m else None)
+check("那颗指向的就是首页，不是当前页自己（写成 admin_url 就出不去了）",
+      m is not None and m.group(1) == "/", m.group(1) if m else None)
+check("登录前那一屏也有回前台：进不去口令的人同样要能走",
+      "输入口令" in (lg := app_mod.create_app().test_client().get("/admin").get_data(as_text=True))
+      and 'class="frontbtn"' in lg, None)
+check("前台页脚最有一条后台入口，且带 nofollow（robots.txt 那条 Disallow 之外的第二道）",
+      re.search(r'<a class="footadm" href="/admin" rel="nofollow"', home) is not None,
+      re.findall(r'<a class="footadm"[^>]*>', home))
+check("它在页脚最后那行（.dim），不是明晃晃摆在正文里",
+      home.index('class="dim"') < home.index('class="footadm"') < home.index("</footer>"), None)
+check("它跟旁边那行字同一个色、不带下划线（看着就不像个链接），hover 才显出来",
+      ".footadm { color: var(--unknown); text-decoration: none; }" in cssx
+      and ".foot .dim { font-size: 12px; color: var(--unknown); }" in cssx
+      and ".footadm:hover" in cssx and ".footadm:focus-visible" in cssx, None)
+check("回前台那颗复用页面上那套胶囊按钮样式（不再另写一份配色）",
+      ".pbtn, .pager a, .jumpbtn, .themebtn, .fbtn, .frontbtn {" in cssx
+      and ".frontbtn:hover" in cssx, None)
+check("手机上这两颗的可点区域一起撑到够按（页脚那颗本来就小）",
+      ".frontbtn" in re.search(r"\.pbtn, \.submit, \.jumpbtn[^\n]*", cssx).group(0)
+      and ".footadm { padding: 9px 5px; margin: -9px -5px; }" in cssx, None)
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

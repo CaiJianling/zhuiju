@@ -232,7 +232,10 @@
 <footer class="foot">
   <div class="wrap">
     <p>本工具只做第三方公开接口的聚合查询，不存储、不转发任何影视内容；结果链接指向外部站点，请注意甄别广告、跳转与个人信息安全。</p>
-    <p class="dim">仅供个人技术学习与找片参考，请支持正版。 · 本地运行，数据不出这台电脑</p>
+    <p class="dim">仅供个人技术学习与找片参考，请支持正版。 · 本地运行，数据不出这台电脑
+      {# 后台入口做得很轻：不是一个按钮，跟旁边那行字同色、不带下划线，看着就是一句普通说明。
+         robots.txt 早就 Disallow: /admin，这里再挂一个 nofollow，不给任何抓取队列留线索 #}
+      · <a class="footadm" href="{{ url_for('admin') }}" rel="nofollow" title="后台统计">统计</a></p>
   </div>
 </footer>
 

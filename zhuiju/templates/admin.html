@@ -15,6 +15,8 @@
 <header class="topbar">
   <div class="wrap">
     <h1>后台统计 <span class="ver">需要口令</span>
+      {# 看统计的人下一步多半是"去前台看一眼这条查询长什么样"，回前台摆在标题这一行 #}
+      <a class="frontbtn" href="{{ url_for('index') }}">回前台</a>
       <button class="themebtn" type="button" data-theme-toggle
               title="点击在 跟随系统 / 亮色 / 暗色 之间切换"></button></h1>
     <p class="lede">历次查询记录：可按 IP、关键词、日期范围过滤并翻页。
