@@ -493,7 +493,11 @@
   }
 
   function renderPager(d) {
-    const hasMore = d.hits >= 8 && d.results.length >= 8;
+    // 判"还有下一页"只看服务端给的那句：有没有哪个源把这一页正好填满（search.py 的 PAGE_LIMIT）。
+    // 以前判的是"接口报的命中数够不够 8 条"—— hits 是各家这一页报的条数之和（有的写的是全站
+    // 命中总数），跟下一页有没有东西没关系，于是《庆余年》明明合并完只有 14 部，「下一页」还亮着，
+    // 点进去一片空。results.length 再兜一道：这一页合完就是 0 条，别再邀请人往下翻。
+    const hasMore = !!d.has_more && d.results.length > 0;
     pager.hidden = !(hasMore || d.page > 1);
     pagemark.textContent = '第 ' + d.page + ' 页';
     prevBtn.disabled = d.page <= 1;

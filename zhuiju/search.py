@@ -26,6 +26,10 @@ NOISE_RE = re.compile(
 # 单源超时与整体预算：宁可少几个源，也不让页面卡住
 SOURCE_TIMEOUT = 6.0
 BUDGET = 7.0
+# 每页向每个源要多少条。这一个数同时是"翻页有没有下一页"的判据：
+# 某个源正好给满 PAGE_LIMIT 条，说明它这一页之后还有存货；一个源都没给满，
+# 就是所有源都到底了。上游报的 total / 命中数不能拿来判这个（见 search()）。
+PAGE_LIMIT = 20
 
 
 def clean_text(s) -> str:
@@ -98,7 +102,7 @@ def parse_maccms(payload: dict) -> list[dict]:
 PARSERS = {"maccms": parse_maccms}
 
 
-def fetch_one(src: Source, kw: str, page: int = 1, limit: int = 20,
+def fetch_one(src: Source, kw: str, page: int = 1, limit: int = PAGE_LIMIT,
               type_id=None) -> dict:
     """返回 {source, ok, count, items, ms, error}
 
@@ -388,11 +392,19 @@ def search(kw: str, sources: list[Source] | None = None,
              if r["source"] in [s.id for s in sources] else 99)
     ok = [r for r in per if r["ok"]]
     merged, dropped = merge(per, kw)
+    # 还有下一页吗 —— 只看"有没有哪个源把这一页正好给满 PAGE_LIMIT 条"：给满了说明它
+    # 后面还有存货，一个都没给满就是所有源都到底了。
+    # 不能拿 hits 判：那是各家接口这一页报的条数之和（有的写的是全站命中总数），
+    # 跟"下一页还有没有东西"没关系 —— 《庆余年》合并后 14 部却亮着「下一页」、
+    # 点进去一片空，就是这么来的。
+    has_more = any(r["ok"] and r["count"] >= PAGE_LIMIT for r in per)
     return {
         "keyword": kw,
         "page": page,
         "results": merged,
         "dropped_noise": dropped,
+        "limit": PAGE_LIMIT,
+        "has_more": has_more,
         "status": [{k: r[k] for k in ("source", "source_name", "ok", "count", "ms", "error")}
                    for r in per + [e for e in extra if e["source"] not in
                                    {p["source"] for p in per}]],

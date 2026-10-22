@@ -309,5 +309,54 @@ try:
 finally:
     search_mod.fetch_one, search_mod.load_sources = real_fetch, real_load
 
+print("\n8c) 有没有下一页：只认「这一页有没有被填满」")
+L = search_mod.PAGE_LIMIT
+S_OK2 = Source(id="s_ok2", name="另一个能搜的", kind="maccms", api="http://c/api.php/provide/vod/")
+
+
+def fill_fetch(n_by_src):
+    """按 {源 id: 这一页返回几条} 打桩；条数由 count 与 items 一起如实给。"""
+    def f(src, kw, page=1, limit=L, type_id=None):
+        n = n_by_src.get(src.id, 0)
+        items = []
+        for i in range(n):
+            items.append({"vid": i + 1, "title": f"庆余年{i}号", "type": "电视剧", "year": "2024",
+                          "area": "大陆", "remarks": "", "actor": "", "director": "", "pic": "",
+                          "notes": "", "updated": "2024-05-01", "slug": "", "source": src.id,
+                          "source_name": src.name, "link": ""})
+        return {"source": src.id, "source_name": src.name, "ok": True, "count": n,
+                "total": n * 9, "ms": 3.0, "error": None, "items": items}
+    return f
+
+
+search_mod.load_sources = lambda *a, **k: [S_OK, S_OK2, S_NS]
+try:
+    search_mod.fetch_one = fill_fetch({"s_ok": L - 1})
+    r = search_mod.search("庆余年")
+    check("单源差一条没填满 = 这个源到底了，不该亮「下一页」（旧判据 hits>=8 会亮）",
+          r["has_more"] is False and r["hits"] >= 8 and len(r["results"]) >= 8,
+          {k: r[k] for k in ("hits", "has_more")} | {"n": len(r["results"])})
+    search_mod.fetch_one = fill_fetch({"s_ok": L})
+    r = search_mod.search("庆余年")
+    check("正好填满一页才算还有下一页", r["has_more"] is True, r["hits"])
+    search_mod.fetch_one = fill_fetch({"s_ok": 7, "s_ok2": 13})
+    r = search_mod.search("庆余年")
+    check("两源合起来 20 条但谁都没填满 → 没有下一页（hits 加总正好等于页长也不行）",
+          r["hits"] == L and r["has_more"] is False, (r["hits"], r["has_more"]))
+    search_mod.fetch_one = fill_fetch({"s_ok": 0})
+    r = search_mod.search("庆余年")
+    check("空的一页：has_more 与结果数都为 0，翻页条该整条收掉",
+          r["has_more"] is False and r["results"] == [] and r["limit"] == L, r["hits"])
+    # 前端只认服务端这一句，且"这一页一条都没合出来"时不再邀请人往下翻
+    appjs = (Path("zhuiju") / "static" / "app.js").read_text(encoding="utf-8")
+    body = appjs[appjs.index("function renderPager"):appjs.index("function pagerOnFail")]
+    check("renderPager 用的是 d.has_more，旧的 hits 算术已不在这一屏（注释里提一句不算）",
+          "const hasMore = !!d.has_more && d.results.length > 0;" in body
+          and "d.hits >= 8" not in body and "hits >=" not in body, None)
+    check("这一页合完是 0 条时「下一页」按住（不然点进去还是空的）",
+          "d.results.length > 0" in body, None)
+finally:
+    search_mod.fetch_one, search_mod.load_sources = real_fetch, real_load
+
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
