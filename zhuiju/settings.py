@@ -23,15 +23,29 @@ BASE = Path(__file__).resolve().parent.parent
 PATH = BASE / "zhuiju" / "data" / "settings.json"
 
 # 默认值同时是"合法的键有哪些"的唯一清单：页面上渲染什么、存什么、认什么，都从这里出
-DEFAULTS = {"refresh_hour": 2}
+DEFAULTS = {"refresh_hour": 2, "human_gate": 1, "human_hours": 12}
 # 每项的范围与说法。下限 0 上限 23 是因为这就是"几点"，写 24 会被当成 0 天的下一天，
 # 负数更是直接把逻辑日推到明天去。
+# kind 只管**页面上怎么渲染**（number 还是 开/关 下拉），校验一律按 0..max 的整数走：
+# 少一种类型就少一处"表单和后端各判各的"的口子
 SPEC = {
     "refresh_hour": {
         "label": "每日更新时间（小时）",
         "hint": "到这个点之后的第一次访问才真的跑更新；这一整天没人访问就不会跑（本站不用系统计划任务）。",
-        "min": 0, "max": 23,
+        "min": 0, "max": 23, "kind": "int",
         "env": "ZHUIJU_REFRESH_HOUR",
+    },
+    "human_gate": {
+        "label": "真人滑块验证",
+        "hint": "关掉就等于全站对脚本敞开：所有页面与接口都不再要 cookie（搜索引擎爬虫豁免那条逻辑本身也不走了）。",
+        "min": 0, "max": 1, "kind": "bool",
+        "env": "ZHUIJU_HUMAN_GATE",
+    },
+    "human_hours": {
+        "label": "验证通过后管多久（小时）",
+        "hint": "只影响签发的 cookie 有效期；改小了已经发出去的那枚还是按老时长走完（签名里带的是签发那一刻的到期时间）。",
+        "min": 1, "max": 720, "kind": "int",
+        "env": "ZHUIJU_HUMAN_HOURS",
     },
 }
 
@@ -115,3 +129,23 @@ def set_value(key: str, raw):
 def refresh_hour() -> int:
     """每天几点算新的一天（逻辑日分界）。autoupdate.logical_day() 用它。"""
     return effective()["refresh_hour"]
+
+
+def human_gate() -> bool:
+    """全站真人门禁开不开。关掉等于对脚本敞开，页面上会写明这一点。"""
+    return effective()["human_gate"] == 1
+
+
+def human_hours() -> int:
+    """滑块通过后签发的 cookie 管多少小时。"""
+    return effective()["human_hours"]
+
+
+def fields() -> list:
+    """后台「设置」那一节要渲染的每一项：(键, 说法, 当前生效值)。
+
+    表单从 DEFAULTS 生成而不是在模板里写死字段：加一项设置只改这一处，
+    不会出现"后端认这个键、页面上没有那一格"或者反过来。
+    """
+    eff = effective()
+    return [(k, SPEC[k], eff[k]) for k in DEFAULTS]

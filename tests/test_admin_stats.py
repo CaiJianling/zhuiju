@@ -30,6 +30,8 @@ TMP = Path(tempfile.mkdtemp(prefix="zhuiju_admin_test_"))
 admin_mod.CONFIG = TMP / "admin.json"
 # 「每日更新时间」那项设置也一样：后台测试会真的 POST 保存，不能写进本机那份配置里
 settings_mod.PATH = TMP / "settings.json"
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(TMP)
 stats_mod.DB = TMP / "stats.db"
 stats_mod.DATA = TMP
 stats_mod._ready = False
@@ -1182,12 +1184,24 @@ check("页面上写清了存哪个文件、为什么不放库里",
 check("页头那句也说了每天几点触发、去哪儿改（只看第一屏的人也该找得到）",
       "点后第一次访问才会触发" in sp
       and re.search(r'href="/admin\?tab=settings"', sp) is not None, None)
+# 门禁这一格在总览那一屏：现在这个文件里门禁是关的（gate_off），所以该出现"门禁未开"那个数，
+# 而不是"验证过 N 条"—— 这一条同时钉住"三种放行方式分开数"没有退化成一个总数
+check("总览那一格把放行方式分开数（门禁关着时不冒充成「验证过 0 条，剩下全是机器人」）",
+      "滑块验证过" in sp and "门禁未开" in sp
+      and re.search(r'<b>\d+</b>\s*<span>滑块验证过（另有 爬虫豁免 0 · 门禁未开 \d+）', sp) is not None,
+      re.findall(r"<span>滑块验证过[^<]*", sp)[:1])
 r = c3.post("/admin/settings", data={"csrf": tok, "refresh_hour": "8"})
 check("保存合法值：302 回列表并带 saved 标记",
       r.status_code == 302 and "settings_saved=1" in r.headers["Location"],
       r.headers.get("Location"))
+def saved_settings():
+    """读临时那份设置文件。断言只各看自己那一键：human_gate 是 gate_off 写进去的 0，
+    拿整份字典相等去比就把两件事搅在一起，改任何一项设置都会假红。"""
+    return json.loads((TMP / "settings.json").read_text(encoding="utf-8"))
+
+
 saved = json.loads((TMP / "settings.json").read_text(encoding="utf-8"))
-check("值落到配置文件里（不是写进 stats.db）", saved == {"refresh_hour": 8}, saved)
+check("值落到配置文件里（不是写进 stats.db）", saved["refresh_hour"] == 8, saved)
 con = stats_mod.connect()
 try:
     has_tbl = con.execute("SELECT 1 FROM sqlite_master WHERE name='settings'").fetchone()
@@ -1207,13 +1221,12 @@ check("越界的值（25）被拒：跳回页面带 err 标记",
       bad.headers.get("Location"))
 bp = c3.get("/admin?settings_err=1").get_data(as_text=True)
 check("拒的时候一句都不写盘，原来的值还在（半套设置比没设置更难查）",
-      "没存上" in bp and json.loads((TMP / "settings.json").read_text(encoding="utf-8"))
-      == {"refresh_hour": 8}, bp[bp.index("没存上"):bp.index("没存上") + 60])
+      "没存上" in bp and saved_settings()["refresh_hour"] == 8,
+      bp[bp.index("没存上"):bp.index("没存上") + 60])
 noauth = app_mod.create_app().test_client()
 rn = noauth.post("/admin/settings", data={"csrf": "x", "refresh_hour": "3"})
 check("没登录改不动设置（401 给登录页，不落盘）",
-      rn.status_code == 401 and json.loads(
-          (TMP / "settings.json").read_text(encoding="utf-8")) == {"refresh_hour": 8}, rn.status_code)
+      rn.status_code == 401 and saved_settings()["refresh_hour"] == 8, rn.status_code)
 rc = c3.post("/admin/settings", data={"refresh_hour": "3"})
 check("缺 csrf 的提交被当成过期表单挡掉", rc.status_code in (400, 401), rc.status_code)
 check("表单本身带 min/max（绕开浏览器才走到上面那条服务端校验）",
@@ -1226,7 +1239,7 @@ try:
 finally:
     del os.environ["ZHUIJU_REFRESH_HOUR"]
 check("撤掉环境变量后回到文件里的 8 点（环境变量不写文件）",
-      json.loads((TMP / "settings.json").read_text(encoding="utf-8")) == {"refresh_hour": 8}, None)
+      saved_settings()["refresh_hour"] == 8, saved_settings())
 check("autoupdate 的日切判据和页面上那个数是同一个（都读 settings.refresh_hour）",
       "settings.refresh_hour()" in (BASE / "zhuiju" / "autoupdate.py").read_text(encoding="utf-8"),
       None)

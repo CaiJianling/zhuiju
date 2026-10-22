@@ -19,6 +19,10 @@ python -m venv .venv
 打开 <http://127.0.0.1:5000/> 。想换端口：`set ZHUIJU_PORT=8000 && .venv\Scripts\python.exe run.py`。
 Linux（含宝塔面板）不是这一套命令：解释器路径、`zhuiju.env`、权限与验收清单在 [docs/deploy.md](docs/deploy.md)。
 
+**第一次打开会先看到一块滑块**（真人验证，拖一下就行，之后 12 小时内不再问）。
+不想开这一道的，在后台「设置」里把「真人滑块验证」选成"关"；它挡得住随手抓页面的脚本，
+挡不住铁了心的人，能确认的是哪来的 —— 见 [docs/human.md](docs/human.md)。
+
 后台统计在 <http://127.0.0.1:5000/admin>。**第一次进去会直接领你把口令改成自己定的**
 （那时用的还是首次启动随机生成、只在控制台打印过一次的那个），保存即写回
 `zhuiju/data/admin.json` 并生效，不用重启。后台那一页每项统计的口径见 [docs/admin.md](docs/admin.md)。
@@ -58,6 +62,7 @@ Linux（含宝塔面板）不是这一套命令：解释器路径、`zhuiju.env`
 | 详情面板怎么点开、观看点击怎么落库、后台为什么默认只看最近一周、`[hidden]` 那个坑 | [docs/detail.md](docs/detail.md) |
 | 手机 / 平板怎么排、主题（亮/暗/跟随系统）、配色体检 | [docs/mobile-theme.md](docs/mobile-theme.md) |
 | 数据自动更新（访问时触发）的判据、失败冷却、GitHub 数据为什么一律走国内镜像 | [docs/autoupdate.md](docs/autoupdate.md) |
+| 真人滑块验证：挡得住什么、挡不住什么，爬虫怎么豁免，cookie 里有什么 | [docs/human.md](docs/human.md) |
 | 后台统计每一项的口径：聚合、浏览器与来源识别、真人/脚本/说不清三档与行为判读、IP 归属地地图 | [docs/admin.md](docs/admin.md) |
 | Emby STRM：把近一年的资源导成媒体库 | [docs/strm.md](docs/strm.md) |
 | 部署到 Linux（宝塔面板）、端口与反向代理、nginx 挂域名 | [docs/deploy.md](docs/deploy.md) |
@@ -130,6 +135,8 @@ zhuiju/
   geoip.py          离线 IP 归属地：纯标准库读 ip2region xdb + 国家轮廓转内嵌 SVG 路径
   agent.py          User-Agent 识别（浏览器/系统/设备/爬虫）与 Referer 来源判定，纯标准库
   admin.py          后台口令配置读写、口令校验、首次登录判断、登录失败限流、反代下取真实客户端 IP
+  human.py          真人滑块门禁：一次性挑战、签发/校验匿名 cookie、搜索引擎爬虫豁免（UA + 反查 DNS）
+  settings.py       这台机器的运行设置（日切时间、门禁开关、验证管多久）：默认值、校验、读写 data/settings.json
   sources.py        检索源配置读写
   settings.py       这台机器的运行设置（后台能改的那几项）：默认值、校验、读写 data/settings.json、环境变量优先
   strm.py           Emby STRM 的数据层：采集结果落 data/strm.db、线路与集数解析、按 Emby 多版本规则导出目录树、
@@ -150,7 +157,7 @@ zhuiju/
     cache/hot.json  猜你想搜缓存   cache/mirror_used.json  这次上游数据实际走的哪个镜像
     cache/img/      海报的磁盘缓存（sha1 命名的图片 + index.json；7 天 / 200MB，删掉即清空）
   templates/index.html, admin.html, admin_password.html, _theme.html
-  static/app.css, app.js, theme.js
+  static/app.css, app.js, theme.js, slider.js   slider.js 是滑块那套组件（首页与验证页共用一份实现）
 tools/                  重新采数据的维护脚本，日常使用不需要跑
   build_catalog.py      上游 resources.json -> 本地目录（requests 走 gh-proxy 镜像链，记下实际用的源）
   harvest_apis.py       从 15 个 TVBox 配置地址里抽取候选采集接口
@@ -256,6 +263,9 @@ zhuiju.env.example  部署配置模板：拷成 zhuiju.env 就能指定站点外
 ## 限制与说明
 
 - 采集接口是第三方公益站，稳定性、片源完整度都不受控；某个源挂了直接影响结果数，页面顶部会标出是哪个源，可多试几种关键词写法（只留主标题、去掉"第 X 季"）。
+- **滑块验证不是安全边界**：它把"随手 GET 的脚本"变成"要照流程发请求的脚本"，挡不住铁了心的人
+  （挑战与校验都在这台机器上）。真正的产物是那枚签名 cookie 给后台的"这是真人"硬凭据。
+  细节、爬虫豁免规则和关掉它的方式见 [docs/human.md](docs/human.md)。
 - `tools/probe_sources.py` 只验证"能返回片名"，不验证点开能不能真播。
 - **网盘这一类拿不到结果，而且是原理性的限制**（不是没配好）：细节和已经试过的路子见下面「网盘那两块为什么补不上」。
 - 76 个直达站点里 18 个有已验证的站内搜索路径，其余 58 个退回首页，页面上逐条标注了。

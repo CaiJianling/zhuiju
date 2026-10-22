@@ -1,0 +1,12 @@
+{# 滑块那一小块。首页（cookie 过期时弹出来）与门禁页 /verify 共用这一份标记 +
+   同一份实现 static/slider.js：两处各写一份，就成了"这边的验证改了、那边还是老规则"
+   那种最难查的对不齐。 #}
+<div class="slip" data-slip>
+  <p class="slip-q">把下面的滑块拖进缺口里</p>
+  <div class="slip-track" data-track>
+    <i class="slip-hole" data-hole aria-hidden="true"></i>
+    <button class="slip-knob" type="button" data-knob
+            aria-label="按住滑块拖到缺口里；不方便用鼠标的话，点一下滑块再用左右方向键"></button>
+  </div>
+  <p class="slip-msg" data-msg role="status">拖好就自动验证，不用点提交。</p>
+</div>

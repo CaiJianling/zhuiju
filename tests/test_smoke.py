@@ -168,8 +168,14 @@ from datetime import datetime as _dt, timedelta as _td
 from zhuiju import autoupdate as au
 from zhuiju import settings as st
 
-check("默认值就是以前写死的那个 2 点（改了默认值等于改了触发节奏，要看得见）",
-      st.DEFAULTS == {"refresh_hour": 2}, st.DEFAULTS)
+check("默认值都写在代码里，且日切仍是以前那个 2 点（改默认值等于改触发节奏）",
+      st.DEFAULTS["refresh_hour"] == 2 and st.DEFAULTS["human_gate"] == 1
+      and st.DEFAULTS["human_hours"] == 12, st.DEFAULTS)
+check("设置项清单与默认值一一对应（加一项忘了给默认，页面上就不会出现那一格）",
+      set(st.SPEC) == set(st.DEFAULTS), (sorted(st.SPEC), sorted(st.DEFAULTS)))
+check("后台表单按 kind 决定渲染成数字框还是开/关",
+      {k: v["kind"] for k, v in st.SPEC.items()}
+      == {"refresh_hour": "int", "human_gate": "bool", "human_hours": "int"}, None)
 check("01:30 仍属于昨天", au.logical_day(_dt(2026, 10, 14, 1, 30)) == _dt(2026, 10, 13).date(),
       str(au.logical_day(_dt(2026, 10, 14, 1, 30))))
 check("02:00 起算新的一天", au.logical_day(_dt(2026, 10, 14, 2, 0)) == _dt(2026, 10, 14).date(),

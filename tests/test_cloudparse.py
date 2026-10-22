@@ -9,6 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from zhuiju.cloudsearch import parse_results  # noqa: E402
+import tempfile
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(tempfile.mkdtemp(prefix="zhuiju_gateoff_"))
 
 FAILS = []
 

@@ -161,6 +161,11 @@
       {%- for x in agg.by_who %}<a href="{{ admin_url(who=x.who) }}">{{ x.n }}</a>{{ ' / ' if not loop.last }}{% endfor -%}
       {%- if not agg.by_who %}—{% endif -%}</b>
       <span>{% for x in agg.by_who %}{{ who_cn[x.who] }}{% if not loop.last %} / {% endif %}{% endfor %}{% if not agg.by_who %}像真人 / 脚本 / 说不清{% endif %}</span></div>
+    {# 放行方式：这是门禁那本账，和上面那排"像真人/脚本/说不清"不是同一件事——
+       上面那排是**猜**的（看 UA 写的是什么），这一排是**确定**的（有没有本站签发的 cookie）。
+       两个数并排放，才看得出猜得准不准（爬虫豁免那一格就是专门用来对账的） #}
+    <div class="stat"><b>{{ agg.by_verified.get('yes', 0) }}</b>
+      <span>滑块验证过（另有 爬虫豁免 {{ agg.by_verified.get('crawler', 0) }} · 门禁未开 {{ agg.by_verified.get('off', 0) }}）</span></div>
   </div>
   <p class="rangehint">
     {%- if day_all %}当前是<b>全部历史</b>（库里最多留 {{ keep_days }} 天）·
@@ -607,6 +612,13 @@
     {% if st.note %}
     <p class="atip">上一轮各源停在哪：{{ st.note }}</p>
     {% endif %}
+    {% if smeta.nfo.write %}
+    <p class="atip">NFO：已写 {{ smeta.nfo.files }} 份（每个片名目录一份）。海报
+      {%- if smeta.nfo.poster_via_site %}走本站代理 <code>{{ smeta.nfo.base or '（还没有对外地址，暂时写原图）' }}</code>
+      —— 来源：{{ smeta.nfo.base_from }}{% if smeta.nfo.base_from == '最近访问地址' %}，
+      要固定就在下面「本站对外地址」里填一个{% endif %}
+      {%- else %}直接写上游原图地址（第三方图床多半有防盗链，Emby 可能取不到）{% endif %}。</p>
+    {% endif %}
 
     <div class="cols" data-grp="strm">
       <section class="asect" id="strm-zips" data-grp="strm">
@@ -764,18 +776,31 @@
   <section class="asect" id="settings" data-grp="settings">
     <h2>设置 <span class="asub">这台机器上的运行设置 · 存在 <code>zhuiju/data/{{ setinfo.path }}</code>（不进版本库，也不放进统计库）</span></h2>
     {% if settings_err %}
-    <p class="loginerr">刚才那个值没存上：「{{ setinfo.spec.label }}」要填 {{ setinfo.spec.min }}–{{ setinfo.spec.max }}
-      之间的整数。表单里的 <code>min/max</code> 已经挡过一次，走到这句说明是绕开表单提交的。</p>
+    <p class="loginerr">刚才有值没存上：这几项都只认<strong>范围内的整数</strong>
+      （每日更新时间 0–23、验证管多久 1–720 小时、门禁只能是开或关）。
+      表单里的 <code>min/max</code> 已经挡过一次，走到这句说明是绕开表单提交的。</p>
     {% endif %}
     <form class="admform" method="post" action="{{ url_for('admin_settings') }}">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label class="admfield"><span>{{ setinfo.spec.label }}</span>
-        <input type="number" name="refresh_hour" min="{{ setinfo.spec.min }}"
-               max="{{ setinfo.spec.max }}" step="1" value="{{ setinfo.hour }}"></label>
-      <span class="dim setnow">现在生效的是 <b>{{ '%02d' | format(setinfo.hour) }}:00</b>
-        {%- if setinfo.source == 'env' %}，由环境变量 <code>{{ setinfo.spec.env }}</code> 顶着（在这儿改了也会被它盖回去）
-        {%- elif setinfo.source == 'file' %}，来自 <code>{{ setinfo.path }}</code>
-        {%- else %}，还是默认值，没改过{% endif -%}</span>
+      {# 表单从 settings.SPEC 生成：加一项设置只改 zhuiju/settings.py，
+         不用回来补一格 —— 补漏的后果是"后端认这个键、页面上看不见那一格" #}
+      {% for key, spec, val in setfields %}
+      <label class="admfield"><span>{{ spec.label }}</span>
+        {% if spec.kind == 'bool' %}
+        <select name="{{ key }}">
+          <option value="1" {% if val %}selected{% endif %}>开</option>
+          <option value="0" {% if not val %}selected{% endif %}>关</option>
+        </select>
+        {% else %}
+        <input type="number" name="{{ key }}" min="{{ spec.min }}" max="{{ spec.max }}"
+               step="1" value="{{ val }}">
+        {% endif %}
+      </label>
+      {% if setsrc[key] == 'env' %}
+      <span class="dim setnow">{{ spec.label }}现在被环境变量 <code>{{ spec.env }}</code> 顶着，
+        在这儿改了也会被它盖回去</span>
+      {% endif %}
+      {% endfor %}
       <button class="gobtn" type="submit">保存</button>
     </form>
     <p class="atip">{{ setinfo.spec.hint }}
@@ -784,6 +809,25 @@
       改完<b>立刻生效、不用重启</b>：判据每次现读这个文件（按 mtime 缓存，不额外加读盘）。
       注意把时间往后调（比如 2 点改 8 点）而今天 4 点已经跑过的话，新口径下那天属于"昨天"，
       下一次访问会立刻补跑一轮 —— 这是对的，不是设置没生效。</p>
+    <ul class="sethint">
+      {% for key, spec, val in setfields %}
+      {# 每一项的说明跟着 SPEC 走：写在模板里就会和 settings.py 里的 hint 各说一套 #}
+      {% if key != 'refresh_hour' %}
+      <li><b>{{ spec.label }}</b>：{{ spec.hint }}</li>
+      {% endif %}
+      {% endfor %}
+    </ul>
+    <p class="atip"><b>滑块验证挡得住什么、挡不住什么，这里说清楚</b>：
+      挡得住直接 GET 页面和接口的脚本、无差别抓站的爬虫、把本站当免费搜索接口刷的人——它们要么拿不到
+      cookie，要么得先实现一整套"取挑战 → 按服务端给的缺口位置拖进容差 → 带上耗时与轨迹采样提交"，
+      而且提交一次就作废、按来源限流。<strong>挡不住铁了心的人</strong>：挑战与校验都在这台机器上，
+      照着 <code>static/slider.js</code> 发请求就能过。服务端能确认的只有"这枚 cookie 是不是我签的、
+      有没有过期"，所以这一层真正的收益是<strong>把无成本滥用变成有成本滥用</strong>，
+      以及让后台第一次有了"这是真人"的硬凭据（总览那格「放行方式」里的"验证过"就是它）——
+      以前分真人和脚本全靠猜 UA。
+      搜索引擎爬虫走豁免：<strong>UA 命中已知爬虫名 + 反查 DNS 落在它的官方域名</strong>，两条都要，
+      光看 UA 等于不设防（<code>curl -A Googlebot</code> 谁都会）；内网与回环地址不豁免，
+      真爬虫不会从科室局域网里出来。关掉这一项等于全站对脚本敞开，只有在纯本机自用时才合适。</p>
     <p class="atip">为什么存在文件而不是 <code>stats.db</code>：那个库记的是<b>发生过什么</b>
       （每一次搜索、每一次点开），这一项是<b>以后要怎么做</b>；库会被 <code>KEEP_DAYS</code> 裁剪、
       也可能整个删掉重新统计，而且它是本机隐私数据（IP / UA / 关键词），不该跟设置绑在同一个命运上。

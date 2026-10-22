@@ -20,6 +20,8 @@ TMP = Path(tempfile.mkdtemp(prefix="zhuiju_agent_test_"))
 admin_mod.CONFIG = TMP / "admin.json"
 stats_mod.DB = TMP / "stats.db"
 stats_mod.DATA = TMP
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(TMP)
 stats_mod._ready = False
 stats_mod.ensure_schema()
 

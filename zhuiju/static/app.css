@@ -876,6 +876,10 @@ code {
 /* 「设置」那一行里跟在输入框后面的"现在生效的是几点"：它不是可填的东西，
    别和字段一样高，贴着输入框底边排就好 */
 .setnow { font-size: var(--fs-sm); margin-right: auto; }
+/* 「设置」那一节里每一项的说明：短列表，不加边框不占卡片，读起来像说明不像表单 */
+.sethint { margin: 10px 0 0; padding: 0 0 0 16px; font-size: var(--fs-sm); color: var(--dim); line-height: 1.6; }
+.sethint li { margin: 2px 0; }
+.sethint b { color: var(--ink-2); font-weight: 600; }
 
 /* ---------------- 后台：标签页 + 侧边目录 ----------------
    只显示当前标签那一组块，靠的是 body[data-tab]（服务端给的，不是 JS 写的）
@@ -1587,6 +1591,111 @@ html.hasjs .dpcover img.noanim { transition: none }
   .dpanel { transition: none; }
   .dpskel i { animation: none; }
 }
+
+/* ---------------- 真人滑块（门禁页 + 首页过期时弹出）----------------
+   缺口和滑块用同一条换算式定位（--p 是 0..100 的位置，轨道内净宽扣掉滑块自己的宽度），
+   所以 JS 里那个 KW 一改，这里的 --kw 也要一起改，否则"看着对准了却没过"。 */
+.slip { margin: 14px 0 6px; }
+.slip-q { margin: 0 0 9px; font-size: var(--fs-sm); color: var(--ink-2); }
+.slip-track {
+  --kw: 44px;
+  position: relative;
+  height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.slip-hole {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  /* left / width 由 slider.js 按"现量的滑块宽度"算成像素：
+     用 CSS 比例公式画的话，窄屏把滑块加宽之后缺口就会偏半格（用户看到"对准了却说不匹配"） */
+  left: 0;
+  width: var(--kw);
+  border: 1px dashed var(--brand);
+  border-radius: 999px;
+  background: var(--brand-soft);
+  opacity: .8;
+}
+.slip-knob {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: calc((100% - var(--kw)) * var(--p, 0) / 100);
+  width: var(--kw);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--brand);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--brand-ink);
+  cursor: grab;
+  touch-action: none;                 /* 不然手机上拖滑块会变成滚页面，一点都拖不动 */
+  box-shadow: var(--shadow-s);
+}
+.slip-knob:active { cursor: grabbing; }
+.slip-knob::before { content: "⇥"; }
+.slip-knob:disabled { cursor: default; opacity: .55; }
+.slip-knob:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.slip-msg { margin: 8px 0 0; font-size: var(--fs-sm); color: var(--dim); }
+.slip-msg.good { color: var(--ok); }
+.slip-msg.bad { color: var(--bad); }
+/* 门禁页：整页就一张居中的卡片。
+   卡片之前靠"离顶几成屏高"的 margin 摆位，页面本身还是从上往下流，宽屏上卡片孤零零贴在顶上、
+   下面一大片空白；卡片外那行提示又跟着 .wrap 铺到 1680px，看着就是歪的。
+   现在由 main 用 grid 把卡片压在视口正中（上下留白跟着屏高走），所有文字都在卡片里。 */
+body.gate main {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;                  /* 手机地址栏收放时 100vh 会矮一截，dvh 支持就用它 */
+  padding: 32px 24px;
+  box-sizing: border-box;
+}
+body.gate .gatecard {
+  width: min(460px, 100%);
+  margin: 0;
+  padding: 22px 24px 18px;
+  box-shadow: var(--shadow-m);
+}
+.gatecard h1 { margin: 0; font-size: 18px; }
+.gatecard .lede { margin: 5px 0 16px; font-size: var(--fs-sm); color: var(--ink-2); line-height: 1.65; }
+.gatenote { margin: 0 0 10px; font-size: var(--fs-sm); color: var(--ink); }
+.gatecard .slip { margin: 0; }          /* 卡片自己有内边距，这块不用再让一段距离 */
+.gate-more { margin: 16px 0 0; padding-top: 13px; border-top: 1px solid var(--line); }
+.gate-more summary { cursor: pointer; font-size: var(--fs-sm); color: var(--dim); }
+.gate-more p { margin: 9px 0 0; font-size: var(--fs-sm); color: var(--dim); line-height: 1.65; }
+.gatefoot { margin: 13px 0 0; padding-top: 13px; border-top: 1px solid var(--line);
+  font-size: var(--fs-sm); color: var(--dim); line-height: 1.65; }
+.gatefoot a, .gate-more a { padding: 6px 4px; margin: -6px -4px; }   /* 手指也点得着 */
+@media (max-width: 560px) {
+  body.gate .gatecard { padding: 18px 16px 14px; }
+  /* --kw 只改轨道这一处：滑块和缺口都从它取宽度。
+     原来写在 .slip-knob 上，缺口那边拿不到，窄屏就正好错开一格 */
+  .slip-track { --kw: 52px; height: 52px; }
+}
+/* 首页弹出来的那一层：不用 <dialog>（老 Safari 上不认），就一个居中卡片 + 遮罩 */
+.slipwrap {
+  position: fixed;
+  inset: 0;
+  z-index: 90;                        /* 详情面板是 80：cookie 过期时弹的这块要压在它上面
+                                         （面板本身已经打开着，用户正在看的正是它） */
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, .45);
+}
+.slipwrap .slipcard {
+  width: min(420px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-l);
+  box-shadow: var(--shadow-m);
+  padding: 16px 18px 18px;
+}
+.slipwrap h2 { margin: 0 0 4px; font-size: 15px; }
+.slipwrap p.reason { margin: 0 0 4px; font-size: var(--fs-sm); color: var(--dim); }
 
 /* ---------------- 手机 / 平板 ----------------
    下面的值都是量出来的，不是拍的。改之前用 360 / 390 / 430 / 768 / 1440 五档 iframe 量到：

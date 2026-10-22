@@ -69,6 +69,8 @@ FLUSH_REQUESTS = 150   # 每发这么多请求就合并导出一次（"到一定
 FLUSH_SECONDS = 240    # 或者每过这么多秒一次
 TIMEOUT = 12
 MAX_FAILS = 3          # 同一个源连续失败几次就这一轮先放弃它
+BACKFILL_CHUNK = 20    # 回填元数据时一次问多少个 ID（实测上游接受批量 ids）
+BACKFILL_SHARE = 0.35  # 回填最多占一轮预算的三成五：补老数据不该把"采新片"挤掉
 
 # 各线程共用的计数器。导出要写几千个文件，所以用非阻塞锁：谁有空谁做，别人不等。
 _shared = {"requests": 0, "pages": 0, "new": 0, "changed": 0,
@@ -170,6 +172,90 @@ def maybe_flush(label: str = "") -> None:
         print(f"  · 轮内导出失败：{type(exc).__name__}: {exc}", flush=True)
     finally:
         _shared["flushing"].release()
+
+
+def fetch_ids(src, vids: list[str]) -> dict:
+    """按一批 ID 取条目：`ac=videolist&ids=a,b,c` 实测一次能带回 20 条完整条目。
+
+    比逐条 `ac=detail` 省一个数量级请求，也比"重新翻一遍整年"便宜得多 ——
+    回填老数据的字段就靠它。
+    """
+    params = {"ac": "videolist", "ids": ",".join(str(v) for v in vids), "limit": PAGE_LIMIT}
+    params.update(src.params or {})
+    try:
+        r = source_session(src).get(src.api, params=params, timeout=TIMEOUT, verify=False)
+        body = (r.text or "").strip()
+        if r.status_code != 200 or body[:1] not in "{[":
+            return {"ok": False, "items": [], "error": f"HTTP {r.status_code}" if r.status_code != 200 else "非 JSON"}
+        payload = unwrap(r.json())
+        return {"ok": True, "items": [x for x in (payload.get("list") or [])
+                                      if isinstance(x, dict)], "error": None}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "items": [], "error": f"{type(exc).__name__}"[:60]}
+    finally:
+        bump(requests=1)
+
+
+def backfill_meta(cfg: dict, pass_id: int, since, end_at: float, delay: float,
+                  by_id: dict, limit_rows: int = 0) -> dict:
+    """给库里"只存了名字和地址、没存元数据"的旧行补 NFO 要用的那几个字段。
+
+    为什么单独要这条路：那些行是补字段之前采进来的，翻页游标早就走到它们后面去了，
+    不回填的话 NFO 里就只有片名和年份 —— 而 NFO 值钱的部分恰恰是简介、演员、上映日、
+    豆瓣号。按 (源, ID) 批量取一次就能补齐，不用重翻整年。
+
+    上游已经不认的这个 ID（下架/改ID）会被判成 skip：那里给 msig 写一个 'gone' 哨兵，
+    否则每次跑都把它当"还没补"重问一遍，白敲上游也永远补不上。
+    """
+    out = {"chunks": 0, "asked": 0, "filled": 0, "skipped": 0, "left": 0}
+    con = strm.connect()
+    try:
+        sql = ("SELECT src, vid FROM vod WHERE (msig IS NULL OR msig='')"
+               " ORDER BY src, vid" + (f" LIMIT {int(limit_rows)}" if limit_rows else ""))
+        todo = [(r["src"], r["vid"]) for r in con.execute(sql)]
+        out["left"] = len(todo)
+        groups: dict[str, list[str]] = {}
+        for s, v in todo:
+            groups.setdefault(s, []).append(v)
+        for sid, vids in groups.items():
+            src = by_id.get(sid)
+            if src is None:          # 源被停用了：这些行补不了，标哨兵别再每轮重问
+                con.executemany("UPDATE vod SET msig='gone' WHERE src=? AND vid=?",
+                                [(sid, v) for v in vids])
+                con.commit()
+                continue
+            for i in range(0, len(vids), BACKFILL_CHUNK):
+                if time.time() >= end_at:
+                    return out
+                chunk = vids[i:i + BACKFILL_CHUNK]
+                out["chunks"] += 1
+                out["asked"] += len(chunk)
+                page = fetch_ids(src, chunk)
+                if not page["ok"]:
+                    break            # 这个源今天不通就算了，下一轮再补
+                got = {}
+                for it in page["items"]:
+                    got[str(it.get("vod_id"))] = it
+                for v in chunk:
+                    it = got.get(v)
+                    if it is None:
+                        con.execute("UPDATE vod SET msig='gone' WHERE src=? AND vid=?",
+                                    (sid, v))
+                        out["skipped"] += 1
+                        continue
+                    if strm.record_vod(con, sid, src.name, it, cfg, pass_id, since) == "skip":
+                        con.execute("UPDATE vod SET msig='gone' WHERE src=? AND vid=?",
+                                    (sid, v))
+                        out["skipped"] += 1
+                    else:
+                        out["filled"] += 1
+                con.commit()
+                progress(note=f"回填元数据：{src.name} 已补 {out['filled']} 条")
+                if delay:
+                    time.sleep(delay)
+        return out
+    finally:
+        con.close()
 
 
 def crawl_src(src, cfg: dict, pass_id: int, since, end_at: float, delay: float,
@@ -343,6 +429,8 @@ def main() -> int:
     ap.add_argument("--export-only", action="store_true", help="不采集，只导出+打包")
     ap.add_argument("--full", action="store_true", help="导出走全量重建")
     ap.add_argument("--check", action="store_true", help="只打印库与游标状态")
+    ap.add_argument("--backfill-only", action="store_true",
+                    help="只回填老条目的元数据（简介/演员/上映日/豆瓣号），不翻页")
     args = ap.parse_args()
 
     strm.ensure_schema()
@@ -361,9 +449,10 @@ def main() -> int:
         print(f"目录：{out['dir']}\n分卷包：{out['zip_dir']}")
         return 0
 
-    if not cfg["enabled"]:
-        print("后台里「启用每日采集」是关的：要跑就把它打开，"
-              "或者只导出用 python tools/collect_strm.py --export-only")
+    if not cfg["enabled"] and not args.backfill_only:
+        print("后台里「启用每日采集」是关的：要跑就把它打开；"
+              "只导出用 --export-only、只补老条目的元数据用 --backfill-only —— "
+              "这两个是手动点名的动作，不受这个开关拦")
         return 0
 
     delay = max(0.0, int(cfg["delay_ms"]) / 1000.0)
@@ -405,8 +494,28 @@ def main() -> int:
     # 轮转调度：每批只让 workers 个源各翻 BATCH_PAGES 页，翻完就换手。
     # 以前是一次把所有源交给线程池 —— 实测 10 分钟只有 4 个源有数据，
     # 其余 13 个源整轮都在排队（每个 worker 抱住一个源翻到预算结束）。
-    # 近一年的量本来就要跨天续采，公平比深度重要：先让每个源都往前挪几页，
-    # 用户才谈得上"多个源都能选线路"。
+    # 先补老条目的元数据（NFO 要用），再翻新页；自动那档只吃一小段预算，
+    # 手动 --backfill-only 才用满整轮
+    by_id = {s.id: s for s in load_sources()}
+    bf_end = end_at if args.backfill_only else started + budget * BACKFILL_SHARE
+    pending_bf = strm.connect()
+    try:
+        n_todo = pending_bf.execute(
+            "SELECT COUNT(*) FROM vod WHERE msig IS NULL OR msig=''").fetchone()[0]
+    finally:
+        pending_bf.close()
+    if n_todo:
+        print(f"回填元数据：库里还有 {n_todo} 条没有简介/演员/上映日，"
+              f"先按 ID 批量补（最多 {int((bf_end - time.time()) / 60)} 分钟）")
+        b = backfill_meta(cfg, pass_id, since, bf_end, delay, by_id)
+        print(f"  · 问 {b['chunks']} 批 / {b['asked']} 条：补上 {b['filled']}，"
+              f"上游已不认 {b['skipped']}，还剩约 {max(0, n_todo - b['asked'])} 条")
+    if args.backfill_only:
+        out = run_export("回填元数据后合并")
+        c = strm.db_counts()
+        print(f"库里：{c['vods']} 条 vod / {c['titles']} 部   "
+              f"导出：写 {out['written']} / 未变 {out['skipped']} · 打包 {out['zips']['made']} 卷")
+        return 0 if out["ok"] else 1
     agg: dict[str, dict] = {sr.id: {"src": sr.id, "name": sr.name, "pages": 0, "new": 0,
                                     "changed": 0, "same": 0, "skip": 0, "stop": "",
                                     "error": "", "last_pg": 0, "last_time": "",

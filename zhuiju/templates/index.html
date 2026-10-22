@@ -215,6 +215,18 @@
     </header>
     <div class="dpbody" id="dp-body"></div>
   </aside>
+
+  {# ---------- 滑块验证：只在"cookie 过期了还在用"的时候弹 ----------
+     正常入口不是这里，而是服务端那一层门禁（没验证过的人根本拿不到这一页）。
+     这块存在是因为 12 小时会到点：人还在这页上，接口回 423，就地补一次验证，
+     不用把人甩回门禁页重新来一遍。 #}
+  <div class="slipwrap" id="slipwrap" hidden>
+    <div class="slipcard" role="dialog" aria-modal="true" aria-labelledby="slip-title">
+      <h2 id="slip-title">需要再验一次你是真人</h2>
+      <p class="reason">上次验证到现在已经过了，接口先不认这次的请求了。</p>
+      {% include "_slider.html" %}
+    </div>
+  </div>
 </main>
 
 <footer class="foot">
@@ -234,6 +246,8 @@
 }
 </script>
 <script src="{{ url_for('static', filename='app.js') }}?v={{ asset_v }}"></script>
+{# slider.js 要在 app.js 之前：app.js 收到 423 时要用它，同一页里两个脚本的先后是确定的 #}
+<script src="{{ url_for('static', filename='slider.js') }}?v={{ asset_v }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}?v={{ asset_v }}"></script>
 </body>
 </html>

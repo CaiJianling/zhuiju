@@ -13,6 +13,10 @@ BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 
 from zhuiju import hot, seo  # noqa: E402
+import tempfile
+import urllib.parse
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(tempfile.mkdtemp(prefix="zhuiju_gateoff_"))
 
 FAILS = []
 
@@ -310,7 +314,7 @@ check("系统要求减少动态效果时不播（CSS 与 JS 各挡一次）",
       and "prefers-reduced-motion: reduce" in js, None)
 check("动效挂在整行容器上而不是每张卡上（一次合成，九张卡不会各自错开拍）",
       ".hotgrid.in-right" in kf and ".hotcard.in-" not in kf, None)
-runf = js[js.index("async function run(rawKw, page)"):js.index("async function getJSON(")]
+runf = js[js.index("async function run("):js.index("async function getJSON(")]
 check("空关键词走和「首页」那颗按钮同一套重置，不是只把猜你想搜显出来",
       "if (!kw) {" in runf and "goHome();" in runf.split("if (!kw) {")[1][:200],
       re.findall(r"if \(!kw\) \{.{0,120}", runf, re.S)[:1])
@@ -367,6 +371,44 @@ check("认不出类别丢掉几条也写在标题上", "dropped_kind" in sub and
 check("「最近一年/半年」跟着缓存里的 window_days 走，旧缓存不会提前说新话",
       "seo.hot.window_days or 0" in sub and ">= 365" in sub, None)
 check("起算日期仍然写出来（窗口放宽了多少天，看这个数就知道）", "seo.hot.since" in sub, None)
+
+print("\n14) 搜索时地址栏要带上关键词（/s/<关键词> 那个可收录地址）")
+js14 = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+run14 = js14[js14.index("async function run("):js14.index("/* ---------------- 真人门禁")]
+check("落地地址的拼法只有一处（landingUrl），翻页与换词都走它",
+      js14.count("function landingUrl(") == 1 and "landingUrl(kw, page)" in js14, None)
+check("换关键词 push 一条历史，同一个词翻页只 replace",
+      "if (isNewWord) history.pushState" in js14 and "else history.replaceState" in js14, None)
+check("isNewWord 是在改 state.kw 之前问的（顺序反了就永远是 replace）",
+      run14.index("const isNewWord = kw !== state.kw;") < run14.index("state.kw = kw"), None)
+check("地址与 meta 只在搜索成功那一路同步",
+      run14.index("syncUrl(kw, page, isNewWord);") < run14.index("} else {"), None)
+# 后退/前进那一次地址已经是目标了，不用再写一遍地址栏；但 meta 必须跟着换，
+# 否则按一次后退就成了"屏幕是庆余年、标题写着繁花"（实测踩过）
+check("从后退/前进进来时只跳过写地址栏，不跳过同步 meta",
+      "syncSeo(kw, sdata);\n        if (!fromUrl) syncUrl(kw, page, isNewWord);" in js14, None)
+check("同步的是当前这一词：title / canonical / description / og / JSON-LD 一起",
+      all(k in js14 for k in ("document.title = title", "link[rel=canonical]",
+                              'meta[name=description]', 'meta[property="og:url"]',
+                              'script[type="application/ld+json"]')), None)
+check("后退/前进接住了：地址是 /s/<词> 就搜那个词，不再出现「地址 A、屏幕 B」",
+      "addEventListener('popstate'" in js14
+      and "location.pathname.match(/^" in js14 and "$/);" in js14
+      and "run(input.value, p, true)" in js14,
+      re.findall(r"location\.pathname\.match\([^\n]*", js14)[:1])
+check("从落地页换词时把服务端那份旧摘要整块收起来（.ssr-done 只藏标题，那行旧描述会留着）",
+      "if (s) s.hidden = true;" in run14, None)
+
+c14 = app_mod.create_app().test_client()
+r14 = c14.get("/?kw=" + urllib.parse.quote("庆余年"), follow_redirects=False)
+check("禁用 JS 时按回车也能落到同一个地址：/?kw=… 302 到 /s/…",
+      r14.status_code == 302 and r14.headers["Location"] == "/s/%E5%BA%86%E4%BD%99%E5%B9%B4",
+      (r14.status_code, r14.headers.get("Location")))
+r15 = c14.get("/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/124.0"})
+check("首页本身不再被这条逻辑影响（没带 kw 就是 200）", r15.status_code == 200, r15.status_code)
+r16 = c14.get("/?kw=" + urllib.parse.quote("庆"), follow_redirects=False)
+check("短到不合法的关键词不转（否则会拿一个必然被弹回的地址来回踢皮球）",
+      r16.status_code == 200, r16.status_code)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

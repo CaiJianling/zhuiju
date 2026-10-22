@@ -232,9 +232,18 @@ def main() -> int:
     probe = root + "/api/catalog?kw=&link_kw=zz"
 
     def ready() -> bool:
+        """423 也算"起来了"。
+
+        真人门禁开着时，这个脚本客户端没有 cookie，任何路由都会先被挡成 423 ——
+        但那恰恰证明进程活着、而且是这版代码在应答（旧进程没有 /api/catalog 的 link_kw
+        特征，只会给 404）。不这么写的话，一上门禁 restart.py 就永远报"60 秒内没应答"，
+        而站点其实好好的（实测踩过：日志里 423 一条接一条，重启脚本却判定失败）。
+        """
         try:
             with urllib.request.urlopen(probe, timeout=4) as r:
-                return b'"link_kw"' in r.read()
+                return r.status == 200 and b'"link_kw"' in r.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code == 423
         except Exception:  # noqa: BLE001
             return False
 

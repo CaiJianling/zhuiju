@@ -31,6 +31,7 @@ from zhuiju import stats as stats_mod      # noqa: E402
 from zhuiju import strm                    # noqa: E402
 from zhuiju import strmjob                 # noqa: E402
 
+SEP = "$$$"          # 上游分线路的分隔符，实测 17 个源一致
 FAILS = []
 TMP = Path(tempfile.mkdtemp(prefix="zhuiju_strm_test_"))
 
@@ -40,6 +41,8 @@ stats_mod.DATA = TMP
 stats_mod._ready = False
 strm.DB = TMP / "strm.db"
 strm.DATA = TMP / "strmdata"
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(TMP)
 strm.ROOT = TMP / "strm"
 strm.ZIPS = TMP / "strm_zips"
 strm._ready = False
@@ -84,13 +87,25 @@ def mk(title, year, type_name, frm, n=1, vid=1, pubdate="", remarks=""):
     return {"vod_id": vid, "vod_name": title, "vod_year": year, "vod_pubdate": pubdate,
             "type_name": type_name, "vod_time": "2026-10-20 10:00:00",
             "vod_remarks": remarks, "vod_pic": "https://pic.test/1.jpg",
-            # 上游真实形状是"两条线路名对两个线路块"（火狐就是 hhyun$$$hhm3u8）；
-            # 名字少写一条就会退成"线路N"，那条分支另有专门的用例
-            "vod_play_from": f"{frm}$$$webplay", "vod_play_url": f"{eps}$$${html}"}
+            # 上游一条 videolist 里连简介、演员、导演、地区、豆瓣号都带着（实测字段齐全），
+            # NFO 要用就得按真实形状喂，不能只给名字和地址
+            "vod_blurb": f"《{title}》的剧情简介：一桩发生在 2026 年的故事。",
+            "vod_actor": "张三,李四", "vod_director": "王五", "vod_area": "中国大陆",
+            "vod_douban_id": 1234567, "vod_douban_score": "8.4",
+            "vod_play_from": SEP.join([frm, "webplay"]), "vod_play_url": SEP.join([eps, html])}
 
 
 def con():
     return strm.connect()
+
+
+def _plot_of(doc: str) -> str:
+    """从一份 NFO 文本里取 <plot>，取不到就返回空串（断言里好读）。"""
+    import xml.etree.ElementTree as _ET
+    try:
+        return _ET.fromstring(doc).findtext("plot") or ""
+    except Exception:  # noqa: BLE001 - 解析不了本身就是失败，交给断言报出来
+        return ""
 
 
 def reset_db():
@@ -221,8 +236,9 @@ strm.record_vod(c, "suoni", "索尼资源", mk("庆余年 第二季", "2026", "�
 c.commit()
 c.close()
 out = strm.export(full=True)
-files = sorted(str(p.relative_to(strm.ROOT)).replace(os.sep, "/")
-               for p in strm.ROOT.rglob("*.strm"))
+allout = sorted(str(p.relative_to(strm.ROOT)).replace(os.sep, "/")
+                for p in strm.ROOT.rglob("*") if p.is_file())
+files = [q for q in allout if q.endswith(".strm")]
 check("电影：片名 (年份)/片名 (年份) - 源名.strm",
       "movie/movie01/毒液：最后一舞 (2025)/毒液：最后一舞 (2025) - 虎牙资源.strm" in files, files[:4])
 check("电影：同一个文件夹里两条线路 = Emby 的多版本",
@@ -236,8 +252,9 @@ check("集数按各源实际给的来（索尼只有 3 集就不硬凑第 4 集�
 one = strm.read_strm("movie/movie01/毒液：最后一舞 (2025)/毒液：最后一舞 (2025) - 虎牙资源.strm")
 check("文件内容就是一行 m3u8", one[0] == 200 and one[1].startswith("https://cdn.test/")
       and one[1].endswith("index.m3u8\n"), one)
-check("导出的文件数与库里的行数对得上",
-      len(files) == strm.db_counts()["files"], (len(files), strm.db_counts()["files"]))
+check("导出的文件数与库里的行数对得上（file 表把 .strm 和 .nfo 一起记）",
+      len(files) + len([q for q in allout if q.endswith(".nfo")]) == strm.db_counts()["files"],
+      (len(files), strm.db_counts()["files"]))
 again = strm.export()
 check("没有脏行时增量导出一个文件都不碰（keys=0 就是 dirty 标记在起作用）",
       again["keys"] == 0 and again["written"] == 0, again)
@@ -256,6 +273,156 @@ third = strm.export()
 check("只有变过的那条被重写", third["written"] == 1 and third["skipped"] >= 1, third)
 check("变过的内容确实落到文件里",
       "new-1" in strm.read_strm("movie/movie01/毒液：最后一舞 (2025)/毒液：最后一舞 (2025) - 虎牙资源.strm")[1])
+
+print("\n5b) NFO 与海报代理地址")
+import xml.etree.ElementTree as ET     # noqa: E402
+
+from zhuiju import imgproxy            # noqa: E402
+# 代理白名单那份清单必须指到临时目录：不然测试会把真机上的
+# zhuiju/data/cache/img_urls.json 改掉，站点重启后海报白名单就成了测试造的假数据
+imgproxy._urls_file = TMP / "img_urls.json"
+imgproxy._allowed = {}
+imgproxy._loaded = True          # 不去读真清单，从空表开始
+nfo_path = [q for q in strm.part_paths("movie", "movie01") if q.endswith(".nfo")]
+check("每个片名目录都有一份 movie.nfo", bool(nfo_path), nfo_path)
+doc = (strm.ROOT / nfo_path[0].replace("/", os.sep)).read_text(encoding="utf-8")
+root = ET.fromstring(doc)        # 解析不了就是坏 NFO，Emby 对坏 NFO 是整条不认
+check("NFO 是合法 XML", root.tag == "movie", root.tag)
+check("NFO 带上了 Emby 用得上的字段",
+      all(root.find(t) is not None for t in ("title", "originaltitle", "year", "genre",
+                                             "plot", "actor", "director", "studio", "thumb")),
+      [e.tag for e in root])
+check("豆瓣号两种写法都给了（插件认哪种没法在本机验证）",
+      [u.text for u in root.findall("uniqueid")] == ["1234567", "1234567"],
+      [(u.get("type"), u.text) for u in root.findall("uniqueid")])
+# 海报：设了本站地址就该走 /img 代理，并且地址进了白名单（不登记会被代理拒掉）
+strm.save_settings({"site_base_url": "http://192.168.1.20:5000"})
+c = con()
+c.execute("UPDATE vod SET dirty=1")
+c.commit()
+c.close()
+strm.export()
+doc2 = (strm.ROOT / nfo_path[0].replace("/", os.sep)).read_text(encoding="utf-8")
+thumb = ET.fromstring(doc2).findtext("thumb") or ""
+check("NFO 里的海报指向本站 /img 代理，且是绝对地址（Emby 在另一台机器上也要能取）",
+      thumb.startswith("http://192.168.1.20:5000/img?url="), thumb[:70])
+conx = con()
+raw_pic = conx.execute("SELECT pic FROM vod WHERE pic<>'' LIMIT 1").fetchone()["pic"]
+conx.close()
+check("海报原地址已登记进图片代理白名单（不登记 /img 会当成外部滥用拒掉）",
+      imgproxy.allowed(raw_pic), raw_pic[:50])
+check("登记是批量一次写盘（清单到几万条时逐条重写会写爆磁盘）",
+      (TMP / "img_urls.json").is_file() and len(json.loads(
+          (TMP / "img_urls.json").read_text(encoding="utf-8"))) >= 1)
+check("manifest 报得出 NFO 的份数与实际生效的地址来源",
+      strm.manifest()["nfo"]["files"] >= 1
+      and strm.manifest()["nfo"]["base"] == "http://192.168.1.20:5000"
+      and strm.manifest()["nfo"]["base_from"] == "后台设置",
+      strm.manifest()["nfo"])
+# 元数据变了（msig）只该重写 NFO，那些 strm 文件的签名没变，不该被重写
+conx = con()
+conx.execute("UPDATE vod SET blurb='换了个新简介' ")
+conx.commit()
+conx.close()
+c2 = con()
+c2.execute("UPDATE vod SET dirty=1 WHERE 1")
+c2.commit()
+c2.close()
+r3 = strm.export()
+check("只改元数据时 NFO 被重写、strm 一个都不重写",
+      r3["written"] >= 1 and r3["skipped"] >= 1
+      and "新简介" in (strm.ROOT / nfo_path[0].replace("/", os.sep)).read_text(encoding="utf-8"),
+      {k: r3[k] for k in ("written", "skipped")})
+# 特殊字符必须转义：片名带 & 或 < 不转义会写出解析不了的 NFO
+conx = con()
+conx.execute("INSERT INTO vod(src,vid,src_name,key,title,year,kind,type_name,lines,url_count,"
+             "m3u8_count,sig,msig,dirty,pass) VALUES('huya','9','虎牙资源','axb','A&B <测试>',"
+             "'2026','movie','动作片','[{\"from\":\"hym3u8\",\"eps\":[{\"name\":\"正片\","
+             "\"url\":\"https://x/y.m3u8\"}]}]',1,1,'s','m',1,1)")
+conx.commit()
+conx.close()
+strm.export()
+bad = [q for q in strm.part_paths("movie", "movie01")
+       if q.endswith(".nfo") and "A&B" in q]
+_doc = ET.fromstring((strm.ROOT / bad[0].replace("/", os.sep)).read_text(encoding="utf-8")) if bad else None
+_raw = (strm.ROOT / bad[0].replace("/", os.sep)).read_text(encoding="utf-8") if bad else ""
+# 片名里那个 <测试> 会被 clean_text 当 HTML 标签剥掉（上游标题确实常夹 <b>、<em>），
+# 所以这里能验的是两件事：剩下的 & 有没有被转义、剥完的标题还能不能被解析
+check("片名里的 & 在 NFO 里被转义（不转义就是坏 NFO，Emby 对坏 NFO 是整条不认）",
+      bool(bad) and "A&amp;B" in _raw and _doc is not None
+      and _doc.findtext("title") == "A&B", (_raw.splitlines()[1] if _raw else None))
+check("片名里夹的 HTML 标签被剥掉，不会带着尖括号进 NFO",
+      bool(bad) and "<测试>" not in _raw, _raw[:120])
+check("类型也写进去了（genre 取的是归并后的多数写法，不是某一条源的类型串）",
+      bool(bad) and _doc is not None and _doc.findtext("genre") == "动作片",
+      [_doc.findtext("genre")] if _doc is not None else None)
+# 关掉开关：NFO 文件要跟着删掉，不能留下一堆和设置不符的文件
+strm.save_settings({"write_nfo": "0"})
+c2 = con()
+c2.execute("UPDATE vod SET dirty=1")
+c2.commit()
+c2.close()
+strm.export()
+left = [q for q in strm.ROOT.rglob("*.nfo")]
+check("关掉「写 NFO」后已有 NFO 被删掉（设置和盘上必须一致）", not left, left[:3])
+strm.save_settings({"write_nfo": "1", "site_base_url": ""})
+c2 = con(); c2.execute("UPDATE vod SET dirty=1"); c2.commit(); c2.close()
+strm.export()
+check("重新打开并标脏后又写回来了（不标脏导出本来就不碰任何文件）",
+      bool([q for q in strm.ROOT.rglob("*.nfo")]))
+# 实测踩到的三个坑：0.0 的假评分、记成 localhost 的海报地址、断在半句的简介
+c = con()
+c.execute("INSERT INTO vod(src,vid,src_name,key,title,year,kind,type_name,lines,url_count,"
+          "m3u8_count,sig,msig,dirty,pass,douban_score,blurb,pic) "
+          "VALUES('huya','77','虎牙资源','score0','零分片','2026','movie','动作片',"
+          "'[{\"from\":\"h\",\"eps\":[{\"name\":\"正片\",\"url\":\"https://x/z.m3u8\"}]}]',"
+          "1,1,'s2','m2',1,1,'0.0',?,'https://pic.test/z.jpg')",
+          (("这是一段有头有尾的简介句子。" * 40),))   # 420 字、句末标点每隔 14 字一个
+c.commit()
+c.close()
+strm.save_settings({"site_base_url": ""})
+c = con()
+c.execute("UPDATE vod SET dirty=1")
+c.commit()
+c.close()
+strm.export()
+zfile = [q for q in strm.part_paths("movie", "movie01")
+         if "零分片" in q and q.endswith(".nfo")]
+zdoc = (strm.ROOT / zfile[0].replace("/", os.sep)).read_text(encoding="utf-8") if zfile else ""
+check("上游填的 0.0 分不写进 NFO（写了 Emby 就显示一个假的零分，比不写更糟）",
+      "<rating>" not in zdoc and "<votes>" not in zdoc, zdoc[:200])
+strm.save_settings({"write_nfo": "1"})
+c = con()
+c.execute("UPDATE vod SET douban_score='8.7' WHERE vid='77'")
+c.execute("UPDATE vod SET dirty=1")
+c.commit()
+c.close()
+strm.export()
+zdoc2 = (strm.ROOT / zfile[0].replace("/", os.sep)).read_text(encoding="utf-8")
+check("真给了分才写 rating", "<rating>8.7</rating>" in zdoc2, zdoc2[:200])
+check("简介停在整句上，不在 400 字中间断成半句",
+      _plot_of(zdoc2).endswith("。") and len(_plot_of(zdoc2)) <= 400, _plot_of(zdoc2)[-24:])
+# localhost 不能作为对外地址写进 NFO：Emby 通常在另一台机器上
+strm.remember_host("http://localhost:5000")
+check("记访问地址时把 localhost 挡掉（本机测是好的、NAS 上取不到图，最难查）",
+      strm._raw_setting("_last_host") != "http://localhost:5000",
+      strm._raw_setting("_last_host"))
+c = con()
+c.execute("INSERT OR REPLACE INTO setting(key,value) VALUES('_last_host','http://127.0.0.1:5000')")
+c.commit()
+c.close()
+check("就算库里已经存了回环地址，用的时候也当没有（退回写上游原图）",
+      strm.effective_base() == "", strm.effective_base())
+con0 = con()
+con0.execute("UPDATE vod SET dirty=1")
+con0.commit()
+con0.close()
+strm.export()
+raw_thumb = ET.fromstring((strm.ROOT / zfile[0].replace("/", os.sep))
+                          .read_text(encoding="utf-8")).findtext("thumb") or ""
+check("拿不到可用对外地址时，NFO 里退回写上游原图地址（而不是一个打不开的 localhost）",
+      raw_thumb.startswith("https://pic.test/"), raw_thumb[:60])
+strm.save_settings({"site_base_url": "http://192.168.1.20:5000"})
 
 print("\n6) 下架/掉出窗口时文件要跟着删")
 c = con()
@@ -301,7 +468,8 @@ for r in c.execute("SELECT key, part FROM file GROUP BY key, part"):
 check("同一部片的所有文件都在同一卷里（跨卷就是海报墙上两条同名影片）",
       all(len(v) == 1 for v in per_folder.values()), per_folder)
 check("两个源的版本名不撞车（撞了就只剩一条线路，另一条被覆盖）",
-      len({p.split("/")[-1] for p in m1}) == len(m1), m1)
+      len({p.split("/")[-1] for p in m1 if p.endswith(".strm")})
+      == len([p for p in m1 if p.endswith(".strm")]), m1)
 c.close()
 c = con()
 strm.record_vod(c, "huya", "虎牙资源", mk("新来的第5号电影", "2026", "动作片", "hym3u8", vid=305),
@@ -325,13 +493,16 @@ with zipfile.ZipFile(zpath) as z:
     check("包内既不带 movie/ 那层、也不带 movie01/ 那层，直接是片名目录",
           names and all(not n.startswith(("movie", "tv")) for n in names)
           and all(n.count("/") >= 1 for n in names), names[:3])
-    check("包内每个文件名都以它所在文件夹名开头（Emby 认多版本就认这一条）",
+    check("包内每个 strm 都以它所在文件夹名开头（Emby 认多版本就认这一条）",
           all(n.split("/")[-2] in n.split("/")[-1] and " - " in n.split("/")[-1]
-              for n in names), names[:2])
+              for n in names if n.endswith(".strm")), names[:2])
+    check("NFO 用固定的 movie.nfo 这个名字放在片名目录里（Emby/Kodi 只认这几个名字）",
+          any(n.endswith("/movie.nfo") for n in names), [n for n in names if n.endswith(".nfo")])
     check("包里的文件数与这一卷清单一模一样",
           len(names) == len([p for p in strm.part_paths("movie", "movie01")]),
           (len(names), len(strm.part_paths("movie", "movie01"))))
-    first = z.read(names[0]).decode("utf-8")
+    sn = [n for n in names if n.endswith(".strm")]
+    first = z.read(sn[0]).decode("utf-8")
     check("包里的 strm 内容就是 m3u8 一行", first.startswith("http") and first.strip().endswith(".m3u8"),
           first[:60])
 again = strm.export()["zips"]
@@ -493,7 +664,7 @@ check("清单里 zip 字段也是裸文件名（下载接口认的就是它）",
       strm.manifest()["kinds"]["movie"]["parts"][:1])
 r = client.get("/strm/zip?name=../../zhuiju/data/admin.json")
 check("包名不合法时 400（挡掉任意文件下载）", r.status_code == 400, r.status_code)
-one_path = strm.part_paths("movie", "movie01")[0]
+one_path = [q for q in strm.part_paths("movie", "movie01") if q.endswith(".strm")][0]
 r = client.get("/strm/file?path=" + quote(one_path))
 check("GET /strm/file 取单个 strm", r.status_code == 200 and r.get_data(as_text=True).startswith("http"),
       r.status_code)

@@ -72,6 +72,10 @@ SPEC: dict[str, tuple] = {
     # 默认不带：解压到媒体库根就直接是「片名 (年份)/…」，和 Emby 一个文件夹一部片的
     # 常规布局对齐；想按卷整目录删除的人可以打开这一项。
     "zip_part_dir": ("包内带卷号目录（movie01/…）", 0, 1, 0),
+    "write_nfo": ("每个片名目录写一份 NFO", 0, 1, 1),
+    "poster_via_site": ("NFO 里的海报走本站图片代理", 0, 1, 1),
+    # 走代理就得拼出绝对地址；留空时退到"最近一次有人访问后台用的那个地址"
+    "site_base_url": ("本站对外地址（http://IP:端口）", 0, 0, ""),
     "budget_seconds": ("每轮采集时间预算（秒）", 60, 7200, 900),
     "delay_ms": ("每次请求间隔（毫秒）", 0, 5000, 400),
     "workers": ("同时翻几个源", 1, 8, 3),
@@ -97,6 +101,18 @@ SPEC_HELP = {
                     "打开后多一层卷号目录 `movie01/片名 (年份)/…`，好处是"
                     "\"这一卷不要了\"能整目录删掉。改这里会重打所有卷；"
                     "已经解压过的先别改——旧路径那套还留在库里，同一部片会出现两次。",
+    "write_nfo": "在每个片名目录里写一份 movie.nfo / tvshow.nfo：年份、上映日、类型、简介、"
+                 "导演演员、豆瓣号、海报地址都在里面。Emby 扫库时 NFO 优先于按文件名猜，"
+                 "同名翻拍片和只有年份的片子命中会明显变好。文本压得动，"
+                 "实测 4312 部只让包大 1.8MB。",
+    "poster_via_site": "NFO 里的海报写成本站 `/img?url=…` 地址，由本站代取（补 Referer、"
+                       "忽略自签证书、缓存）。第三方图床大多有防盗链，直接写原地址 "
+                       "Emby 常常拿不到图。关掉就写上游原图地址。注意：走代理会把海报地址"
+                       "登记进代理白名单，片数一多要抬高上限（默认 3000 会把先登记的挤掉，"
+                       "连首页猜你想搜的图都受影响）。",
+    "site_base_url": "本站对外访问的地址，形如 http://192.168.1.20:5000 —— NFO 里的海报是"
+                     "绝对地址，Emby 在另一台机器上要能按这个地址访问到本站。"
+                     "留空就用最近一次有人打开后台时用的地址。",
     "budget_seconds": "一轮采集最多跑多久。近一年全量一轮跑不完是设计内的，"
                       "预算用完就停，下一次访问接着翻。",
     "delay_ms": "每个请求之间睡多久（各源分别算）。调到 0 就是贴着上游打，不建议。",
@@ -107,16 +123,35 @@ SPEC_HELP = {
 }
 
 
+# 文本型设置：不能用"上下界"去判类型（site_base_url 的界是 0/0，会被误判成开关）
+TEXT_KEYS = ("exclude_srcs", "site_base_url")
+
+
 def spec_rows(cfg: dict | None = None) -> list[dict]:
     """给后台表单的一行行描述（顺序就是 SPEC 的定义顺序，控件类型也在这里判）。"""
     cfg = cfg or settings()
     rows = []
     for k, (label, lo, hi, default) in SPEC.items():
-        kind = ("text" if k == "exclude_srcs"
+        kind = ("text" if k in TEXT_KEYS
                 else "bool" if hi <= 1 else "int")
         rows.append({"key": k, "label": label, "value": cfg[k], "lo": lo, "hi": hi,
                      "default": default, "kind": kind, "help": SPEC_HELP.get(k, "")})
     return rows
+
+
+URL_RE = re.compile(r"^https?://[A-Za-z0-9._\-]+(:\d{1,5})?(/[^\s\"'<>]*)?$")
+
+
+def clean_base(raw: str) -> str:
+    """校验"本站对外地址"：只收 http(s)://主机[:端口][/前缀]，去掉结尾的斜杠。
+
+    这个值会被写进 NFO 给 Emby 访问，所以宁可严：带空格、带引号、带 javascript: 的
+    一律不收（收了你也不知道它会在哪个客户端被拼成什么）。
+    """
+    s = str(raw or "").strip().rstrip("/")
+    if not s:
+        return ""
+    return s if URL_RE.match(s) else ""
 
 _init_lock = threading.Lock()
 _ready = False
@@ -135,12 +170,19 @@ CREATE TABLE IF NOT EXISTS vod (
   type_name  TEXT,
   remarks    TEXT,
   pic        TEXT,
+  blurb      TEXT,                -- 简介（vod_blurb，空时退 vod_content）
+  actor      TEXT,
+  director   TEXT,
+  area       TEXT,
+  douban_id  TEXT,                -- 上游带的豆瓣号：写进 NFO，装了豆瓣插件的 Emby 能精确命中
+  douban_score TEXT,
   updated    TEXT,                -- 上游 vod_time（更新时间）
   pubdate    TEXT,                -- 上游 vod_pubdate（上映日期，实测形如 "2026-10-09中国大陆"）
   lines      TEXT NOT NULL,       -- [{from, eps:[{name,url}]}]
   url_count  INTEGER NOT NULL DEFAULT 0,
   m3u8_count INTEGER NOT NULL DEFAULT 0,
   sig        TEXT NOT NULL,       -- lines 的短哈希：变了才标脏、才重写 strm
+  msig       TEXT,                -- 元数据的短哈希：变了只重写 NFO，不算"翻到新片"
   dirty      INTEGER NOT NULL DEFAULT 0,
   pass       INTEGER NOT NULL DEFAULT 0,   -- 最近在哪一轮采集里见到它
   first_seen TEXT,
@@ -228,7 +270,13 @@ CREATE TABLE IF NOT EXISTS setting (
 
 # 后加的列：CREATE TABLE IF NOT EXISTS 不会改已有表，老库要单独补一次
 # （和 stats.py 同一套路）。补不上也不能把站点挡下来，记进 MIGRATE_ERROR 让后台能说清。
-EXTRA_COLUMNS = (("vod", "pubdate", "TEXT"),)
+# 语义分工要说清：sig 只管**播放地址**（决定"这一页是不是新内容"，采集的早停靠它），
+# msig 只管**元数据**（简介/演员/豆瓣分变了只该让 NFO 重写，不该让采集以为翻到了新片）。
+EXTRA_COLUMNS = (("vod", "pubdate", "TEXT"),
+                 ("vod", "blurb", "TEXT"), ("vod", "actor", "TEXT"),
+                 ("vod", "director", "TEXT"), ("vod", "area", "TEXT"),
+                 ("vod", "douban_id", "TEXT"), ("vod", "douban_score", "TEXT"),
+                 ("vod", "msig", "TEXT"))
 MIGRATE_ERROR = ""
 
 
@@ -289,7 +337,7 @@ def settings() -> dict:
     out = {}
     for k, (_label, _lo, _hi, default) in SPEC.items():
         v = raw.get(k)
-        if k == "exclude_srcs":
+        if k in TEXT_KEYS:
             out[k] = str(v if v is not None else default)
             continue
         try:
@@ -310,6 +358,13 @@ def save_settings(pairs: dict) -> tuple[dict, str | None]:
         if k not in pairs:
             continue
         raw = str(pairs.get(k) or "").strip()
+        if k == "site_base_url":
+            base = clean_base(raw)
+            if raw and not base:
+                errs.append(f"「{label}」要写成 http://IP:端口 这样（不能带空格、引号或脚本）")
+                continue
+            nxt[k] = base
+            continue
         if k == "exclude_srcs":
             # 源 id 就是 [a-z0-9_-] 这个形状；空格和奇怪字符不进库，免得拼 SQL/比 id 时出岔子
             ids = [x for x in re.split(r"[,\s]+", raw.lower())
@@ -559,6 +614,53 @@ def sig_of(lines: list[dict]) -> str:
     return hashlib.md5(body.encode("utf-8")).hexdigest()[:16]
 
 
+# 元数据字段：全部来自上游 videolist 一次请求，不需要额外联网
+META_LIMITS = {"blurb": 400, "actor": 200, "director": 80, "area": 40,
+               "douban_id": 16, "douban_score": 8}
+
+
+def _cut_sentence(text: str, limit: int) -> str:
+    """截到 limit 字以内，并尽量停在整句上。
+
+    实测直接按字数切会断成"在命运与时间的交织"这种半句，写进 NFO 里看着像坏数据；
+    所以先切够，再回退到最后一个句末标点（找不到就照原样截，不能为了找标点把
+    整段 400 字都吐出去）。
+    """
+    s = str(text or "").strip()
+    if len(s) <= limit:
+        return s
+    head = s[:limit]
+    for mark in ("。", "！", "？", "…", ";", ";", ". "):
+        i = head.rfind(mark)
+        if i >= limit * 0.5:                 # 太靠前的就别退了，等于丢了一大段信息
+            return head[:i + len(mark)].rstrip()
+    return head.rstrip()
+
+
+def meta_of(vod: dict) -> dict:
+    """从上游条目里取 NFO 要用的那几个字段。
+
+    简介优先 vod_blurb（短的那份），空了才退到 vod_content —— 后者常常带着
+    `<p>` 标签和上千字剧情，实测最长的有 5KB 多，全存下来 NFO 就没法看了，
+    所以两条都截到 400 字。豆瓣号有些站填 0（不是空），0 当没有。
+    """
+    blurb = clean_text(vod.get("vod_blurb", "")) or clean_text(vod.get("vod_content", ""))
+    did = str(vod.get("vod_douban_id") or "").strip()
+    return {
+        "blurb": _cut_sentence(blurb, META_LIMITS["blurb"]),
+        "actor": clean_text(vod.get("vod_actor", ""))[:META_LIMITS["actor"]],
+        "director": clean_text(vod.get("vod_director", ""))[:META_LIMITS["director"]],
+        "area": clean_text(vod.get("vod_area", ""))[:META_LIMITS["area"]],
+        "douban_id": "" if did in ("0", "") else did[:META_LIMITS["douban_id"]],
+        "douban_score": clean_text(vod.get("vod_douban_score", ""))[:META_LIMITS["douban_score"]],
+    }
+
+
+def msig_of(meta: dict) -> str:
+    body = json.dumps(meta, ensure_ascii=False, sort_keys=True)
+    return hashlib.md5(body.encode("utf-8")).hexdigest()[:16]
+
+
 # --------------------------------------------------------------------------- 落库（采集侧）
 def record_vod(con, src_id: str, src_name: str, vod: dict, cfg: dict,
                pass_id: int, since: date | None = None) -> str:
@@ -589,32 +691,42 @@ def record_vod(con, src_id: str, src_name: str, vod: dict, cfg: dict,
     if max(len(l["eps"]) for l in lines) > MOVIE_EP_MAX:
         kind = "tv"                         # 站点把剧标成电影了（见 MOVIE_EP_MAX 的注释）
     sig = sig_of(lines)
+    meta = meta_of(vod)
+    ms = msig_of(meta)
     url_count = sum(len(l["eps"]) for l in lines)
     m3u8_count = sum(1 for l in lines for e in l["eps"] if _M3U8.search(e["url"]))
     payload = json.dumps(lines, ensure_ascii=False, separators=(",", ":"))
     stamp = now()
     vid = str(vod.get("vod_id"))
-    row = con.execute("SELECT sig FROM vod WHERE src=? AND vid=?", (src_id, vid)).fetchone()
+    row = con.execute("SELECT sig, msig FROM vod WHERE src=? AND vid=?",
+                      (src_id, vid)).fetchone()
     args = (src_name, key, title, year, pubdate, kind, clean_text(vod.get("type_name", "")),
             clean_text(vod.get("vod_remarks", "")), clean_text(vod.get("vod_pic", "")),
-            updated, payload, url_count, m3u8_count, sig)
+            meta["blurb"], meta["actor"], meta["director"], meta["area"],
+            meta["douban_id"], meta["douban_score"],
+            updated, payload, url_count, m3u8_count, sig, ms)
     if row is None:
         con.execute(
             "INSERT INTO vod(src, vid, src_name, key, title, year, pubdate, kind, type_name,"
-            " remarks, pic, updated, lines, url_count, m3u8_count, sig, dirty, pass,"
-            " first_seen, last_seen) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " remarks, pic, blurb, actor, director, area, douban_id, douban_score,"
+            " updated, lines, url_count, m3u8_count, sig, msig, dirty, pass,"
+            " first_seen, last_seen) VALUES(" + ",".join("?" * 27) + ")",
             (src_id, vid) + args + (1, pass_id, stamp, stamp))
         return "new"
-    same = row["sig"] == sig
+    # 两个指纹各管一件事：sig（播放地址）变了算"翻到新内容"，采集的增量早停看它；
+    # msig（元数据）变了只把行标脏去重写 NFO，不该让采集以为这片子是新的。
+    play_changed = row["sig"] != sig
+    dirty = 1 if (play_changed or (row["msig"] or "") != ms) else 0
     # dirty 用 MAX(旧值, 本次结论)：没变的话**不能**把脏标记清成 0 ——
     # 只有 export() 才有资格清脏。采集跑到一半进程被杀、还没来得及导出时，
     # 下一轮把这些行判成"没变"就会把待导出状态抹掉，那批 strm 永远写不出来。
     con.execute(
         "UPDATE vod SET src_name=?, key=?, title=?, year=?, pubdate=?, kind=?, type_name=?,"
-        " remarks=?, pic=?, updated=?, lines=?, url_count=?, m3u8_count=?, sig=?,"
+        " remarks=?, pic=?, blurb=?, actor=?, director=?, area=?, douban_id=?,"
+        " douban_score=?, updated=?, lines=?, url_count=?, m3u8_count=?, sig=?, msig=?,"
         " dirty=MAX(dirty, ?), pass=?, last_seen=? WHERE src=? AND vid=?",
-        args + (0 if same else 1, pass_id, stamp, src_id, vid))
-    return "same" if same else "changed"
+        args + (dirty, pass_id, stamp, src_id, vid))
+    return "changed" if play_changed else "same"
 
 
 def prune_source(con, src_id: str, pass_id: int) -> int:
@@ -741,6 +853,30 @@ def merged_versions(rows: list[sqlite3.Row], cfg: dict) -> dict:
     year = max(years, key=lambda k: (years[k], k)) if years else (rows[0]["year"] or "")
     type_name = max(types, key=lambda k: types[k]) if types else ""
     kind = rows[0]["kind"] if rows[0]["kind"] in KINDS else "movie"
+    # 元数据取"各源里最完整的那一份"：同一个片在 A 站只有名字、在 B 站有简介和演员表，
+    # 就该用 B 站那份。逐字段取最长非空，而不是整行挑一条 —— 实测各源填的字段
+    # 参差不齐（虎牙常缺简介、百度缺导演），整行挑会白丢掉别源有的信息。
+    def longest(field: str) -> str:
+        vals = [clean_text(r[field] or "") for r in rows]
+        return max([v for v in vals if v], key=len) if any(vals) else ""
+
+    pub = ""
+    for r in rows:
+        pd, _y = pub_date({"vod_pubdate": r["pubdate"] or ""})
+        if pd:
+            pub = pd.isoformat()
+            break
+    if not pub:                      # 只有年份的（实测淘片全是 "2026"）也带上，别空着
+        for r in rows:
+            m = re.search(r"(19|20)\d{2}", str(r["pubdate"] or ""))
+            if m:
+                pub = m.group(0)
+                break
+    meta = {"blurb": longest("blurb"), "actor": longest("actor"),
+            "director": longest("director"), "area": longest("area"),
+            "douban_id": longest("douban_id"), "douban_score": longest("douban_score"),
+            "pic": longest("pic"), "pubdate": pub, "remarks": longest("remarks"),
+            "sources": sorted({r["src_name"] for r in rows})}
     versions = []
     for r in sorted(by_src.values(), key=lambda x: (-int(x["url_count"] or 0), x["src_name"])):
         try:
@@ -756,8 +892,170 @@ def merged_versions(rows: list[sqlite3.Row], cfg: dict) -> dict:
             "season": season_hint(title, r["type_name"] or type_name),
             "lines": lines,
         })
-    return {"kind": kind, "title": title, "year": year,
-            "type_name": type_name, "versions": versions}
+    return {"kind": kind, "title": title, "year": year, "type_name": type_name,
+            "meta": meta, "versions": versions}
+
+
+LOOPBACK = ("localhost", "127.0.0.1", "::1", "[::1]", "")
+
+
+def _usable_base(b: str) -> str:
+    """回环地址一律当"没有对外地址"。
+
+    两处都要判：记的时候（remember_host）和用的时候（effective_base）。
+    只判前者的话，之前存进去的那条 `http://localhost` 会一直留着 ——
+    实测就是这样：库里 `_last_host` 已经是 http://localhost，
+    写出来的 NFO 海报地址 Emby 在 NAS 上根本打不开。
+    """
+    b = clean_base(b)
+    host = re.sub(r"^https?://", "", b).split("/")[0].split(":")[0]
+    return "" if host in LOOPBACK else b
+
+
+def effective_base(cfg: dict | None = None) -> str:
+    """NFO 里那个绝对地址该用哪个站点根。
+
+    优先用后台填的 site_base_url；留空时退到"最近一次有人打开后台页用的地址"——
+    那个地址至少是真人真用过的（反代下已被 TrustForwarded 修正成对外域名），
+    比写死 127.0.0.1 有用：Emby 通常在另一台机器上。回环地址不算数。
+    """
+    cfg = cfg or settings()
+    base = _usable_base(cfg.get("site_base_url") or "")
+    if base:
+        return base
+    return _usable_base(_raw_setting("_last_host") or "")
+
+
+def remember_host(base: str) -> None:
+    """记下"这次访问用的是哪个地址"，给 site_base_url 留空时兜底。
+
+    只在值真的变了时写库：这是每次访问后台都会经过的地方，
+    而写库是长事务里的一次额外提交。
+    """
+    base = _usable_base(base)      # 回环地址当"没有"，理由见 _usable_base
+    if not base or _raw_setting("_last_host") == base:
+        return
+    ensure_schema()
+    con = connect()
+    try:
+        con.execute("INSERT INTO setting(key, value) VALUES('_last_host', ?)"
+                    " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (base,))
+        con.commit()
+    except sqlite3.Error:      # 记不上就算了，NFO 会退到上游原图地址
+        pass
+    finally:
+        con.close()
+
+
+def _raw_setting(key: str) -> str:
+    ensure_schema()
+    con = connect()
+    try:
+        r = con.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
+        return str(r["value"]) if r else ""
+    except sqlite3.Error:
+        return ""
+    finally:
+        con.close()
+
+
+def poster_url(pic: str, cfg: dict) -> tuple[str, bool]:
+    """NFO 里海报那一行写什么。返回 (地址, 是否需要登记进代理白名单)。
+
+    走本站代理的理由和首页海报走代理是同一个：第三方图床认 Referer
+    （豆瓣无 Referer 回 418、带本站 Referer 回 403），有些站还挂在自签证书上。
+    Emby 自己取图时不会带这些头，所以直接写原地址常常是拿不到图的。
+    """
+    pic = str(pic or "").strip()
+    if not pic.startswith("http"):
+        return "", False
+    if not cfg.get("poster_via_site", 1):
+        return pic, False
+    base = effective_base(cfg)
+    if not base:
+        return pic, False          # 拼不出绝对地址就别写相对路径，Emby 不认
+    return f"{base}/img?url={_q(pic)}", True
+
+
+def x(s) -> str:
+    """NFO 里的文本一律转义：片名带 & 和 < 是常事（实测有《A&B》这种），
+    不转义会写出一份解析失败的 NFO，Emby 对坏 NFO 的处理是整条不认。"""
+    from xml.sax.saxutils import escape
+    return escape(str(s or ""))
+
+
+def nfo_document(item: dict, cfg: dict) -> tuple[str, str, str]:
+    """一个片名目录的 NFO -> (文件名, 内容, 要登记进代理白名单的原图地址)。
+
+    电影写 movie.nfo、剧集写 tvshow.nfo —— 这两个名字是 Emby/Kodi 通用的，
+    放错名字等于没写（它不会去读 show.nfo 这种东西）。
+    """
+    meta = item.get("meta") or {}
+    kind = item["kind"]
+    title = x(item["title"])
+    year = re.search(r"(19|20)\d{2}", str(item["year"] or ""))
+    pub = str(meta.get("pubdate") or "")
+    pic, need = poster_url(meta.get("pic", ""), cfg)
+    # 类型在 item 那一层（各源归并出来的多数写法），不在 meta 里 —— 早先取
+    # meta.get("type_name") 时 NFO 里根本没有 <genre>，Emby 的类型栏是空的
+    genres = "".join(f"  <genre>{x(g)}</genre>\n"
+                     for g in re.split(r"[ /、,，]+", str(item.get("type_name") or "")) if g.strip())
+    actors = "".join(f"  <actor><name>{x(a.strip())}</name><role>主演</role></actor>\n"
+                     for a in re.split(r"[/,，、]", str(meta.get("actor") or ""))
+                     if a.strip())[:2000]          # 演员表有的源写了几十个，截一下
+    body = [f"<{'movie' if kind == 'movie' else 'tvshow'}>\n",
+            f"  <title>{title}</title>\n",
+            f"  <originaltitle>{title}</originaltitle>\n",
+            f"  <sorttitle>{title}</sorttitle>\n"]
+    if year:
+        body.append(f"  <year>{year.group(0)}</year>\n")
+    if pub:
+        # premiered 要的是 YYYY-MM-DD；只有年份时写 premiered 会让 Emby 以为 1 月 1 日，
+        # 所以那种情况只给 year，别硬凑一个假日期
+        tag = "premiered" if kind == "movie" else "premiered"
+        if len(pub) >= 10:
+            body.append(f"  <{tag}>{pub[:10]}</{tag}>\n")
+            body.append(f"  <releasedate>{pub[:10]}</releasedate>\n")
+    body.append(genres)
+    if meta.get("area"):
+        body.append(f"  <country>{x(meta['area'])}</country>\n")
+    if meta.get("director"):
+        for d in re.split(r"[/,，、]", str(meta["director"]))[:4]:
+            if d.strip():
+                body.append(f"  <director>{x(d.strip())}</director>\n")
+    body.append(actors)
+    if meta.get("blurb"):
+        # 渲染端再截一次：库里那列是 record_vod 截过的，但 NFO 的长度不该依赖
+        # "每一行都是从 record_vod 进来的"这个假设（迁移、手工修数据、以后加的写入口
+        # 都可能塞进更长的），截在这里才是"由构造保证 NFO 不会长成 5KB"
+        body.append(f"  <plot>{x(_cut_sentence(meta['blurb'], META_LIMITS['blurb']))}</plot>\n")
+    # 评分只在上游真给了分的时候写：实测多数源填的是 "0.0"，写进 NFO 就是让 Emby
+    # 显示一个假的"0 分"，比不写更糟；votes（评分人数）我们没有，就不写假数据
+    sc = str(meta.get("douban_score") or "").strip()
+    try:
+        if float(sc) > 0:
+            body.append(f"  <rating>{x(sc)}</rating>\n")
+    except ValueError:
+        pass
+    if meta.get("douban_id"):
+        # 豆瓣号有两种常见写法，插件认哪种我们没法在本机验证，就两种都写：
+        # Emby 本体对不认识的 uniqueid type 是直接忽略的，多写一条不影响它按名称+年份刮削
+        did = x(meta["douban_id"])
+        body.append(f"  <uniqueid type=\"douban\">{did}</uniqueid>\n"
+                    f"  <uniqueid type=\"douban_id\">{did}</uniqueid>\n")
+    if pic:
+        body.append(f"  <thumb>{x(pic)}</thumb>\n")
+    # 来源写进 NFO 的 studio：Emby 的"制片人/工作室"栏正好能显示这条片是哪个源给的，
+    # 出问题时（比如某源地址失效）在界面上就能认出来
+    srcs = "、".join((meta.get("sources") or [])[:4])
+    if srcs:
+        body.append(f"  <studio>{x(srcs)}</studio>\n")
+    body.append("</movie>\n" if kind == "movie" else "</tvshow>\n")
+    # 第三个值是**要登记进代理白名单的地址**，用的是上游原图那条：
+    # /img 校验的是它收到的 url 参数（就是原地址），登记代理后的地址等于什么都没登记
+    # —— 实测就是这么被自己拒掉的。只有真走了代理才需要登记，写原地址时本站不参与取图。
+    return ("movie.nfo" if kind == "movie" else "tvshow.nfo"), "".join(body), \
+        (str(meta.get("pic") or "") if need else "")
 
 
 def plan(key: str, rows: list[sqlite3.Row], cfg: dict) -> list[dict]:
@@ -806,6 +1104,15 @@ def plan(key: str, rows: list[sqlite3.Row], cfg: dict) -> list[dict]:
                         "sig": hashlib.md5(url.encode("utf-8")).hexdigest()[:16],
                         "kind": kind, "key": key, "ep": shown, "label": label,
                         "title": item["title"], "year": item["year"]})
+    # NFO：一个片名目录一份，Emby 扫到时优先读它而不是猜文件名。
+    # 放在去重之前 —— 它和 strm 共用同一套"路径唯一 + 内容签名"的写入逻辑，
+    # 元数据变了只有 NFO 的签名变，那些 strm 文件的签名没变就不会被重写。
+    if cfg.get("write_nfo", 1):
+        nname, doc, poster = nfo_document(item, cfg)
+        out.append({"path": f"{folder}/{nname}", "url": "", "content": doc,
+                    "sig": hashlib.md5(doc.encode("utf-8")).hexdigest()[:16],
+                    "kind": kind, "key": key, "ep": "", "label": "NFO",
+                    "title": item["title"], "year": item["year"], "poster": poster})
     # 同一路径只留一条（两个源版本名撞车时以先出现的为准）：
     # 一个路径两个内容会写出"半部片"，谁后写谁说了算，导出结果就不稳定了
     seen: dict[str, dict] = {}
@@ -885,6 +1192,9 @@ def export(full: bool = False, note: str = "", keys_limit: int = 0) -> dict:
         if keys_limit:
             keys = keys[:keys_limit]
         alloc = PartAlloc(con, int(cfg["part_files"]))
+        # NFO 里指向 /img 的海报地址必须先登记进代理白名单，否则 Emby 拿着地址来取
+        # 会被当成"本站没发出过的图"拒掉（那是防公共代理的那一条）
+        posters: set[str] = set()
         for key in keys:
             rows = list(con.execute("SELECT * FROM vod WHERE key=? ORDER BY src_name", (key,)))
             old = {r["path"]: r["sig"] for r in con.execute(
@@ -897,6 +1207,8 @@ def export(full: bool = False, note: str = "", keys_limit: int = 0) -> dict:
             for it in items:
                 rel = f"{kind}/{part_name(kind, part)}/{it['path']}"
                 keep[rel] = it
+                if it.get("poster"):
+                    posters.add(it["poster"])
             for path, sig in old.items():
                 if path not in keep:
                     _unlink(ROOT / path.replace("/", os.sep))
@@ -925,6 +1237,13 @@ def export(full: bool = False, note: str = "", keys_limit: int = 0) -> dict:
             # 期间站点里任何写入（后台保存设置）都会被 WAL 的单一写者挡死
             if touched % 200 == 0:
                 con.commit()
+        if posters:
+            # 一批一次写盘：逐条 register() 会把整份清单重写 N 遍（清单到几万条是几 MB 一份）
+            from . import imgproxy
+            try:
+                registered = imgproxy.register_many(sorted(posters))
+            except Exception:  # noqa: BLE001 - 登记不上只是海报取不到图，不该让导出失败
+                registered = 0
         if not full:
             con.execute("UPDATE vod SET dirty=0 WHERE dirty=1")
         else:
@@ -1111,6 +1430,13 @@ HOWTO = """# Emby 接入说明（这一棵树和这些包都是程序生成的�
    `剧名 (2026) - S01E03 - 虎牙资源.strm`。
 4. strm 里写的就是上游的 m3u8 直链，播放不经过本站。上游换地址了要靠下一轮采集
    重写文件，然后让 Emby 做一次「扫描新建和更新的文件」。
+5. 每个片名目录里还有一份 NFO（`movie.nfo` / `tvshow.nfo`）：年份、上映日、类型、
+   地区、简介、导演演员、豆瓣号、海报地址。Emby 扫到时 NFO 优先于按文件名猜，
+   同名翻拍片命中会明显变好。海报**不在包里** —— NFO 里写的是本站 `/img` 代理地址，
+   Emby 刮削时自己来取一张、存进它自己的元数据目录，所以包体积和不写 NFO 时基本一样
+   （NFO 是文本，4312 部打进包里只多约 1.8MB）。
+   前提：Emby 那台机器要能访问到本站，且后台「本站对外地址」填的是它能到的地址
+   （留空则用最近一次有人打开后台时用的地址）。取不到图只影响海报，不影响播放。
 
 ## 二、直接挂目录
 不想拷包就把项目里的 `strm/movie`、`strm/tv` 直接指给 Emby
@@ -1142,6 +1468,14 @@ def _manifest(con, cfg: dict | None = None) -> dict:
            "window_days": int(cfg["window_days"]), "since": cutoff(cfg).isoformat(),
            "m3u8_only": bool(cfg["m3u8_only"]),
            "part_files": int(cfg["part_files"]),
+           "nfo": {"write": bool(cfg.get("write_nfo", 1)),
+                   "poster_via_site": bool(cfg.get("poster_via_site", 1)),
+                   # 实际生效的站点根：后台填的优先，没有就是"最近有人访问后台用的地址"
+                   "base": effective_base(cfg),
+                   "base_from": ("后台设置" if _usable_base(cfg.get("site_base_url") or "")
+                                 else ("最近访问地址" if effective_base(cfg)
+                                       else "没有可用的对外地址，暂时写上游原图")),
+                   "files": 0},
            "counts": db_counts(con), "kinds": {}}
     for kind in KINDS:
         # 说法跟着"包内带不带卷号目录"这个设置走：写死一种，改了设置页面就在说假话
@@ -1177,6 +1511,8 @@ def _manifest(con, cfg: dict | None = None) -> dict:
                 "index_url": f"/api/strm/index?kind={kind}&part={part_name(kind, r['part'])}",
                 "tree_url": f"/api/strm/tree?kind={kind}&part={part_name(kind, r['part'])}",
             })
+    out["nfo"]["files"] = int(con.execute(
+        "SELECT COUNT(*) FROM file WHERE path LIKE '%.nfo'").fetchone()[0])
     out["sources"] = [{"id": r["src"], "name": r["src_name"], "vods": r["n"],
                        "titles": r["keys"], "m3u8_urls": r["m3u8"]}
                       for r in con.execute(

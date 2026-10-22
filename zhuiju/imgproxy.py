@@ -34,7 +34,9 @@ TIMEOUT = 8.0
 CACHE_MAX = 120
 MEM_TTL = 3600               # 内存里一小时
 DISK_TTL = 7 * 86400         # 磁盘上 7 天：海报换了我自己会拿到新地址（URL 变了就是新键）
-DISK_MAX = 200 << 20         # 磁盘缓存总量上限，超了按最久没动的丢
+# 磁盘缓存总量：Emby 取走的图它会自己存进元数据目录，本站这份只是"第一次别各敲一遍图床"，
+# 所以默认 200MB 够用；片数上万想少打几次上游就用这个键抬高
+DISK_MAX = int(os.environ.get("ZHUIJU_IMG_DISK_MAX_MB", "200")) << 20
 
 # 按域名给防盗链补 Referer
 REFERERS = {
@@ -53,7 +55,13 @@ _urls_file = Path(__file__).resolve().parent / "data" / "cache" / "img_urls.json
 # 用 dict 而不是 set：要保持登记顺序，超量时才能丢掉最早登记的
 _allowed: dict[str, None] = {}
 _loaded = False
-ALLOWED_MAX = 3000
+# 上限原来写死 3000，那是"只代理首页发出去的那几十张图"的规模。
+# Emby STRM 那条路要把**每部片**的海报地址写进 NFO 让 Emby 来取，片数上万，
+# 3000 会把先登记的挤掉 —— 而且挤掉的不只是海报：首页猜你想搜那些图也在同一份清单里。
+# 更要紧的是这份上限是**每个进程各自**的：采集进程登记完，web 进程下次渲染首页
+# 又会把清单裁回自己的上限，海报地址当场失效。所以默认值抬高，并且两个进程都读同一个键。
+# 60000 条 × 约 100 字节 ≈ 6MB 内存与一份 6MB 的 JSON，本地工具够用。
+ALLOWED_MAX = int(os.environ.get("ZHUIJU_IMG_ALLOWED_MAX", "60000")) or 60000
 # 只有本站主动发出过的图片地址才允许代理；关掉它等于开了个公共代理
 STRICT = os.environ.get("ZHUIJU_IMG_OPEN", "0") != "1"
 
@@ -93,6 +101,38 @@ def register_all(items) -> None:
     for it in items or []:
         if isinstance(it, dict) and it.get("pic"):
             register(it["pic"])
+
+
+def register_many(urls) -> int:
+    """一次登记一批地址，只在真有新东西时把清单写**一次**盘。
+
+    不能拿逐条 register() 去顶这件事：那函数每接受一个新地址就把整份 JSON 重写一遍，
+    清单到几万条时是几 MB 一份 —— 导出一次等于白写几百 MB，还会在 WAL/磁盘上抖很久。
+    返回真正新增了多少条。
+    """
+    global _allowed, _loaded
+    if not _loaded:
+        _load_allowed()
+    fresh = 0
+    for u in urls or []:
+        if not u or not str(u).startswith(("http://", "https://")):
+            continue
+        if u in _allowed:
+            continue
+        _allowed[u] = None
+        fresh += 1
+    if not fresh:
+        return 0
+    while len(_allowed) > ALLOWED_MAX:
+        _allowed.pop(next(iter(_allowed)))
+    try:
+        _urls_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _urls_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(list(_allowed), ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_urls_file)         # 先写临时文件再换：这份清单丢了，NFO 里的海报就全变 403
+    except OSError:
+        pass
+    return fresh
 
 
 def allowed(url: str) -> bool:

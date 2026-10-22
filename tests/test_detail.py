@@ -18,6 +18,9 @@ sys.path.insert(0, str(BASE))
 
 from zhuiju import hot  # noqa: E402
 from zhuiju import search as search_mod  # noqa: E402
+import tempfile
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(tempfile.mkdtemp(prefix="zhuiju_gateoff_"))
 
 FAILS = []
 

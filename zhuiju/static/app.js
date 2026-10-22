@@ -192,6 +192,16 @@
   form.addEventListener('submit', (e) => { e.preventDefault(); run(input.value, 1); });
   $('home').addEventListener('click', goHome);
 
+  /* 浏览器后退/前进：地址就是状态的一部分，落在 /s/<词> 就搜那个词。
+     不接这个事件的话，按一次后退就变成"地址是 A、屏幕是 B"——比压根没有历史更让人不信服 */
+  window.addEventListener('popstate', () => {
+    const m = location.pathname.match(/^\/s\/(.+)$/);
+    if (!m) { goHome(); return; }
+    const p = Math.max(1, parseInt(new URLSearchParams(location.search).get('page') || '1', 10) || 1);
+    input.value = decodeURIComponent(m[1]);
+    run(input.value, p, true);
+  });
+
   function goHome() {
     // 落地页 /s/<关键词> 上必须真的跳回 /，否则 URL 还停在关键词页，等于重复内容
     if (boot.kw) { location.href = '/'; return; }
@@ -225,8 +235,61 @@
   prevBtn.addEventListener('click', () => run(state.kw, state.page - 1));
   nextBtn.addEventListener('click', () => run(state.kw, state.page + 1));
 
-  async function run(rawKw, page) {
+  /* ---------------- 地址栏与 SEO 元信息跟着搜索走 ----------------
+     每个关键词的固定地址是 /s/<关键词>（可被收录、服务端渲染摘要那份）。JS 接管后是本地换数据、
+     不动地址栏，于是有两个毛病：
+       ① 地址里没有关键词 —— 把链接复制给别人，等于给了一个空首页；
+       ② 更糟的是在 /s/A 这一页再搜 B，地址还停在 A —— 那是给 B 的内容挂着 A 的 canonical，
+          自己造重复内容，正是这套 SEO 想避免的事。
+     所以：换关键词 push 一条历史（后退键能回到上一个词），同一个词翻页只 replace
+     （后退不该一格一格走过整本翻页），并把 title / canonical / og / JSON-LD 一起同步。 */
+  function landingUrl(kw, page) {
+    return '/s/' + encodeURIComponent(kw) + (page > 1 ? '?page=' + page : '');
+  }
+
+  function syncSeo(kw, sdata) {
+    const one = location.origin + landingUrl(kw, 1);
+    const items = (sdata && sdata.results) || [];
+    const title = '《' + kw + '》影视资源怎么找 - 追剧资源搜索';
+    const desc = '《' + kw + '》相关影视资源 ' + items.length + ' 部，来自 '
+      + ((sdata && sdata.sources_ok) || 0) + ' 个采集接口，含网盘、磁力与资源站直达入口。';
+    const set = (sel, attr, val) => {
+      const el = document.head.querySelector(sel);
+      if (el) el.setAttribute(attr, val);
+    };
+    document.title = title;
+    set('link[rel=canonical]', 'href', one);
+    set('meta[name=description]', 'content', desc);
+    set('meta[property="og:title"]', 'content', title);
+    set('meta[property="og:description"]', 'content', desc);
+    set('meta[property="og:url"]', 'content', one);
+    // JSON-LD 也换成当前这个词的 ItemList（形状与服务端那份一致）。
+    // 爬虫看到的仍是服务端渲染的那一份（它不执行这段 JS），
+    // 这里同步是为了"另存/分享这一页"时不带旧词的结构性数据 —— 宁可新写一份，别留着对不上
+    const ld = document.querySelector('script[type="application/ld+json"]');
+    if (ld) {
+      ld.textContent = JSON.stringify({
+        '@context': 'https://schema.org', '@type': 'ItemList',
+        name: '《' + kw + '》相关影视资源', numberOfItems: items.length,
+        itemListElement: items.slice(0, 12).map((it, i) => ({
+          '@type': 'ListItem', position: i + 1, name: it.title,
+          url: location.origin + '/s/' + encodeURIComponent(it.title)
+        }))
+      });
+    }
+  }
+
+  function syncUrl(kw, page, isNewWord) {
+    const url = landingUrl(kw, page);
+    if (location.pathname + location.search === url) return;      // 落地页进来就是它，不用重写
+    const st = { kw: kw, page: page };
+    if (isNewWord) history.pushState(st, '', url);
+    else history.replaceState(st, '', url);
+  }
+
+  async function run(rawKw, page, fromUrl) {
     const kw = (rawKw || '').trim();
+    const isNewWord = kw !== state.kw;      // 必须在改 state.kw 之前问
     if (!kw) {
       // 没关键词就等于"不要结果了"：走和「首页」那颗按钮完全一样的重置。
       // 早先这里只是把猜你想搜显出来、输入框聚焦，结果面板、统计条和
@@ -260,7 +323,10 @@
     let searchOk = false;
     try {
       const [sr, dr, cr] = await Promise.allSettled([
-        getJSON('/api/search?kw=' + encodeURIComponent(kw) + '&page=' + page, ctrl.signal),
+        // 第三个参数是"验证通过后重跑这个动作"：搜索是这一屏的主流程，
+        // 拖完滑块必须把这次结果直接填回来，不能让用户再输一遍关键词
+        getJSON('/api/search?kw=' + encodeURIComponent(kw) + '&page=' + page, ctrl.signal,
+                () => run(kw, page)),
         getJSON('/api/deeplinks?kw=' + encodeURIComponent(kw), ctrl.signal),
         // 目录按分类浏览，片名只用来拼"搜此片"
         getJSON('/api/catalog?kw=&category=' + encodeURIComponent(state.category) +
@@ -274,6 +340,17 @@
         renderSources(sdata);
         renderResults(sdata, ms);
         renderPager(sdata);
+        // 服务端那份摘要是**上一个关键词**的，换词之后整块收起来：
+        // `.ssr-done` 只藏标题和列表，那行说明（旧词的描述）会留在页上，看着像搜错了词
+        if (isNewWord) {
+          const s = document.getElementById('ssr');
+          if (s) s.hidden = true;
+        }
+        // 地址与 meta 分开处理：从"后退/前进"进来的那一次地址已经是它了，不用再写一遍，
+        // 但 title / canonical / JSON-LD **必须跟着换** —— 否则按一次后退就出现
+        // "屏幕是庆余年、标题写着繁花"（实测踩过这条）
+        syncSeo(kw, sdata);
+        if (!fromUrl) syncUrl(kw, page, isNewWord);
       } else {
         resultsEl.innerHTML = emptyCard('检索接口无响应', '请检查本机网络，或稍后重试。第三方公开接口可能临时失效。');
         meta.textContent = '查询失败 · 用时 ' + ms + 'ms';
@@ -292,8 +369,42 @@
     return searchOk;
   }
 
-  async function getJSON(url, signal) {
+  /* ---------------- 真人门禁 ----------------
+     接口回 423 只有一种意思：这枚 cookie 过期了或者被浏览器清了。所有走 getJSON 的接口
+     共用这一个出口，不在每个调用点各判一次 —— 漏一处就是"结果一片空白却没有任何提示"。
+     验证通过后重跑一次：把"该重跑什么"交给调用方（retry），因为这里只知道 URL，
+     重发一个已经被 Promise.allSettled 收走的请求结果没人渲染，等于白跑。 */
+  let slip = null;
+  let slipPending = null;
+
+  function needHuman(retry) {
+    slipPending = retry || null;
+    const wrap = document.getElementById('slipwrap');
+    if (!wrap || !window.zhuijuSlip) { window.location.reload(); return; }
+    wrap.hidden = false;
+    if (!slip) {
+      slip = window.zhuijuSlip.mount(wrap.querySelector('[data-slip]'), {
+        onok: () => {
+          wrap.hidden = true;
+          const again = slipPending;
+          slipPending = null;
+          if (again) again();
+        }
+      });
+    } else {
+      // 已经挂过一次：必须换一块新挑战。沿用上一条（已经被服务端作废的）就永远过不去，
+      // 现象是"我明明拖对了，它一直说要重新拖"
+      slip.retry();
+    }
+  }
+
+  async function getJSON(url, signal, retry) {
     const r = await fetch(url, { signal });
+    if (r.status === 423) {
+      const j = await r.json().catch(() => ({}));
+      needHuman(retry);
+      throw new Error(j.error || '需要真人验证');
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status + ' @ ' + url);
     return r.json();
   }

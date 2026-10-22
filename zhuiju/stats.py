@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS queries (
   ua            TEXT,               -- 原始 UA（截断），排查识别错误时要用
   ref           TEXT,               -- 来源：站内是完整路径，站外只有 origin（浏览器策略）
   ref_kind      TEXT,               -- direct / site / search / out / other
-  ref_label     TEXT                -- 给人看的来源文案
+  ref_label     TEXT,               -- 给人看的来源文案
+  verified      INTEGER             -- 怎么被放行的：1=当场拖过滑块 / 0=搜索引擎爬虫豁免 / NULL=门禁关着
 );
 CREATE INDEX IF NOT EXISTS idx_queries_day ON queries(day);
 CREATE INDEX IF NOT EXISTS idx_queries_ip  ON queries(ip);
@@ -117,6 +118,10 @@ GEO_COLUMNS = (("iso", "TEXT"), ("geo", "TEXT"),
 AGENT_COLUMNS = (("browser", "TEXT"), ("os", "TEXT"), ("device", "TEXT"),
                  ("bot", "INTEGER"), ("ua", "TEXT"),
                  ("ref", "TEXT"), ("ref_kind", "TEXT"), ("ref_label", "TEXT"))
+# 真人滑块那一列。它和 bot 是两件不同的事：bot 是"UA 自己说的是什么"（可以伪造），
+# verified 是"这次放行有没有服务端凭据"（滑块签发的 cookie），所以老行留 NULL
+# 而不是 0 —— 0 的意思是"走爬虫豁免"，把门禁上线以前的记录写成 0 就是把它们说成机器人
+HUMAN_COLUMNS = (("verified", "INTEGER"),)
 # 老库里的 clicks 没有这几列，补上：kind 把老行认成 play（它们确实是观看点击），
 # 归属地与浏览器六列由 normalize_clicks() 按留存的 ua / ip 回填一次
 CLICK_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT 'play'"),
@@ -239,7 +244,7 @@ def ensure_schema() -> None:
         try:
             con.executescript(SCHEMA)
             cols = {r["name"] for r in con.execute("PRAGMA table_info(queries)")}
-            for name, typ in GEO_COLUMNS + AGENT_COLUMNS:
+            for name, typ in GEO_COLUMNS + AGENT_COLUMNS + HUMAN_COLUMNS:
                 if name not in cols:
                     con.execute(f"ALTER TABLE queries ADD COLUMN {name} {typ}")
             con.execute(GEO_INDEX)          # 列确定了存在之后才建它的索引
@@ -322,6 +327,7 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
            sources_total: int | None = None, ms: float | None = None,
            iso: str | None = None, geo: str | None = None,
            ua: str | None = None, referrer: str | None = None,
+           verified: int | None = None,
            own_hosts=()) -> None:
     """记一次查询。统计绝不能把搜索本身搞挂，所以任何异常都吞掉。
 
@@ -352,8 +358,8 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
             con.execute(
                 "INSERT INTO queries (ts, day, ip, kw, via, results, hits,"
                 " sources_ok, sources_total, ms, iso, country, geo,"
-                " browser, os, device, bot, ua, ref, ref_kind, ref_label)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " browser, os, device, bot, ua, ref, ref_kind, ref_label, verified)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (now.strftime("%Y-%m-%d %H:%M:%S"), now.date().isoformat(),
                  clean_ip(ip) or "unknown", kw, via if via in VIA else "api",
                  results, hits, sources_ok, sources_total,
@@ -362,7 +368,10 @@ def record(kw: str, ip: str, *, via: str = "api", results: int | None = None,
                  # 三种写法混进同一张表——那会让面板上同一个"未知"占两行
                  a["browser"] or UNKNOWN, a["os"] or "", a["device"] or UNKNOWN,
                  1 if a["bot"] else 0,
-                 a["ua"][:200], f["origin"] or f["path"] or "", f["kind"], f["label"]))
+                 a["ua"][:200], f["origin"] or f["path"] or "", f["kind"], f["label"],
+                 # 只认 1 与 0 两种凭据，别的（比如调用方误传 True/False 之外的东西）落 NULL：
+                 # NULL 的含义是"门禁没开/无从谈起"，不能拿一个乱七八糟的值去冒充 0
+                 verified if verified in (0, 1) else None))
             con.commit()
         finally:
             con.close()
@@ -745,6 +754,13 @@ def summary(f: dict, top: int = 15) -> dict:
             f" COUNT(DISTINCT ip) AS ips, COUNT(DISTINCT kw) AS kws,"
             f" MAX(day) AS last_day"
             f" FROM queries WHERE {where} GROUP BY 1 ORDER BY n DESC", params)]
+        # 门禁的三种放行方式各数一条。NULL（门禁关着、或者这批记录是上线以前攒的）也要数：
+        # 不数它就没法解释"为什么这几千条一个验证过的都没有"——那是没开门禁，不是全是机器人
+        vagg = con.execute(
+            f"SELECT SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END) AS yes,"
+            f" SUM(CASE WHEN verified = 0 THEN 1 ELSE 0 END) AS crawler,"
+            f" SUM(CASE WHEN verified IS NULL THEN 1 ELSE 0 END) AS off"
+            f" FROM queries WHERE {where}", params).fetchone()
     finally:
         con.close()
     days = [d["day"] for d in by_day if d.get("day")]
@@ -759,6 +775,8 @@ def summary(f: dict, top: int = 15) -> dict:
         "top_kw": top_kw, "top_ip": top_ip, "by_via": by_via, "by_geo": by_geo,
         "by_browser": by_browser, "by_ref": by_ref, "by_ref_src": by_ref_src,
         "by_who": by_who,
+        # 门禁的三种放行方式：verified 是 1 / 0 / NULL，各数一条（见上面 vagg 那段注释）
+        "by_verified": {k: (vagg[k] or 0) for k in ("yes", "crawler", "off")} if vagg else {},
     }
 
 

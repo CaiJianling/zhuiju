@@ -18,7 +18,7 @@ import urllib.parse
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from flask import (Flask, jsonify, make_response, redirect, render_template,
+from flask import (Flask, g, jsonify, make_response, redirect, render_template,
                    request, send_file, session, url_for)
 from markupsafe import escape as xml_escape
 
@@ -28,6 +28,7 @@ from . import catalog as catalog_mod
 from . import cloudsearch
 from . import geoip
 from . import hot as hot_mod
+from . import human as human_mod
 from . import imgproxy
 from . import seo as seo_mod
 from . import settings as settings_mod
@@ -349,12 +350,82 @@ def create_app() -> Flask:
                          ms=(time.perf_counter() - started) * 1000,
                          ua=request.headers.get("User-Agent", ""),
                          referrer=request.headers.get("Referer", ""),
+                         # 这一条是被谁放行的（1=拖过滑块 / 0=爬虫豁免 / None=门禁关着），
+                         # 见 _human_gate；后台靠它把"猜的"和"知道的"分开
+                         verified=getattr(g, "verified", None),
                          own_hosts=_own_hosts(), **num)
 
     def _own_hosts() -> tuple:
         """本站对外的主机名，判"站内跳转"要用；反代下 host 已被 TrustForwarded 修正过。"""
         hosts = {request.host, request.host.split(":")[0], "127.0.0.1", "localhost"}
         return tuple(h for h in hosts if h)
+
+    # 门禁放行的前缀：静态资源、验证自己的两个接口、爬虫指令文件与退出登录。
+    # /admin/logout 必须在里面：否则"退出"这个动作要先通过一道滑块，
+    # 而人在被门禁页挡住时根本看不到自己已经登录的界面，等于把自己锁在里面。
+    HUMAN_EXEMPT = ("/static/", "/api/human/", "/robots.txt", "/favicon.ico",
+                    "/admin/logout")
+
+    @app.before_request
+    def _human_gate():
+        """全站真人门禁：没拖过滑块的人，页面给验证页、接口给 423。
+
+        注册顺序有讲究：这个钩子必须在 _touch（访问触发自动更新）**之前** —— 否则脚本只要
+        不停地 GET / 就能在没被验过的情况下反复戳更新流程与 STRM 采集，那正是门禁要挡的事。
+
+        `g.verified` 记的是"这一条是被谁放行的"，三种意思不能混成一个数：
+          1    带着有效 cookie（当场拖过滑块）
+          0    搜索引擎爬虫豁免（确实是机器，但按 SEO 的规则放它过去）
+          None 门禁本身关着 —— 后台要是把它读成 0，就成了"关掉开关就等于全站都是机器人"
+        """
+        g.verified = None
+        if not human_mod.enabled() or request.path.startswith(HUMAN_EXEMPT):
+            return None
+        ip = admin_mod.client_ip(request.environ)
+        ua = request.headers.get("User-Agent", "")
+        if human_mod.token_ok(request.cookies.get(human_mod.COOKIE), ip, ua):
+            g.verified = 1
+            return None
+        if human_mod.is_search_crawler(ip, ua):
+            g.verified = 0
+            return None
+        if request.path.startswith("/api/"):
+            # 423：这个状态码本来就没什么别的用途，前端据此弹滑块；
+            # 不用 401/403 是因为那不是"你没权限"，是"还不知道你是不是人"
+            return jsonify({"error": "需要先通过真人验证", "human": 1}), 423
+        host = request.host_url.rstrip("/")
+        return make_response(render_template(
+            "human.html", asset_v=_asset_ver(), csrf=_csrf_token(), hours=human_mod.max_age() // 3600,
+            back=request.script_root + request.path,
+            seo={"title": "追剧资源搜索 - 电影电视剧资源一站聚合",
+                 "description": "输入电影、电视剧或动漫名称，一次查询多个影视资源站，"
+                                "并汇总网盘、磁力与资源站入口。",
+                 "canonical": f"{host}/", "site": host}), 200)
+
+    @app.post("/api/human/challenge")
+    def api_human_challenge():
+        """要一块滑块：缺口位置由服务端随机，两分钟有效、只能用一次。"""
+        return jsonify(human_mod.new_challenge(admin_mod.client_ip(request.environ)))
+
+    @app.post("/api/human/verify")
+    def api_human_verify():
+        """提交拖到的位置。过了就发一枚匿名的签名 cookie（时长在后台「设置」里改）。"""
+        body = request.get_json(silent=True) or {}
+        ip = admin_mod.client_ip(request.environ)
+        ua = request.headers.get("User-Agent", "")
+        ok, err = human_mod.solve(ip, str(body.get("id") or ""), body.get("pct"),
+                                  body.get("ms"), body.get("samples"), body.get("keys") or 0)
+        if not ok:
+            return jsonify({"ok": False, "error": err}), 400
+        resp = make_response(jsonify({"ok": True, "hours": human_mod.max_age() // 3600}))
+        # httponly：前端不需要读它（只靠"下一次请求自动带上"），给了 JS 反而多一处能被 XSS 拿走的东西；
+        # secure 只在 https 下开 —— 本机 http 部署时加了这枚属性，cookie 会被浏览器整条丢掉，
+        # 现象就是"验过了还是每次都弹滑块"，最难查。
+        # 指纹里带的是**这一次请求**的来源与设备类型：换台电脑拿这枚 cookie 直接失效
+        resp.set_cookie(human_mod.COOKIE, human_mod.issue(ip, ua),
+                        max_age=human_mod.max_age(),
+                        httponly=True, samesite="Lax", secure=request.is_secure, path="/")
+        return resp
 
     @app.before_request
     def _touch():
@@ -397,6 +468,13 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
+        # 禁用 JS 的人按回车：表单是普通 GET，会带着 ?kw= 回到这里。这里不接住它就等于
+        # "搜了但什么都没发生"（首页照旧空着）。转到 /s/<关键词> 那个可收录的固定地址，
+        # 和 JS 在地址栏里写的是同一个地方 —— 两条路落到同一个 URL，canonical 才不会分叉
+        raw = (request.args.get("kw") or request.args.get("q") or "").strip()
+        kw = seo_mod.clean_kw(raw)
+        if len(kw) >= MIN_KW:
+            return redirect(f"/s/{urllib.parse.quote(kw)}", code=302)
         return _page()
 
     @app.get("/s/<path:kw>")
@@ -830,10 +908,19 @@ def create_app() -> Flask:
         # 这件事在 Python 里拼好整条 URL：Jinja 的函数调用不接受 `f(**d, k=v)` 这种混合写法
         # （直接 TemplateSyntaxError），留给模板就只能再加一个中间变量，不如这里一行搞定
         click_url = url_for("admin", **{**args_scope["click"], "tab": "detail"})
+        # NFO 里的海报是绝对地址，得知道"人是从哪个地址访问本站的"：
+        # 后台没填对外地址时就拿这次访问用的这个（反代下已被 TrustForwarded 修正过）
+        strm_mod.remember_host(request.host_url)
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             tab=tab, tabs=ADMIN_TABS,
             click_url=click_url,
+            # 「设置」那一节的表单从 settings.SPEC 生成：加一项设置只改 settings.py，
+            # 不用再来模板里补一格（补漏一次的后果是"后端认这个键、页面上看不见"）
+            setfields=settings_mod.fields(),
+            # 每一项现在是谁定的（env / file / default）：被环境变量顶着的时候
+            # 页面上必须说出来，否则"我改了怎么没生效"根本查不到头
+            setsrc={k: settings_mod.source_of(k) for k in settings_mod.DEFAULTS},
             asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
             place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
             who_cn={k: stats_mod.who_label(k) for k in stats_mod.WHO_LABELS},
@@ -897,18 +984,23 @@ def create_app() -> Flask:
 
     @app.post("/admin/settings")
     def admin_settings():
-        """保存后台设置（现在只有一项：每日更新时间）。写 data/settings.json，不用重启。"""
+        """保存后台设置（几点算新的一天、门禁开不开、验证管多久）。写 data/settings.json，不用重启。"""
         if not _authed():
             return _login_page(None, 401)
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
-        changed, _err = settings_mod.set_value("refresh_hour", request.form.get("refresh_hour"))
-        # 认不出来就一条都不写，回到页面上提示"要 0–23 的整数"。
-        # 提示走查询参数而不是把人输入的原始值塞回 URL 或回显：这一页本来就靠参数带状态，
-        # 而原始值可能是什么都有（`<script>` 之类），别让设置表单变成另一个注入面
-        if changed:
-            return redirect(url_for("admin", settings_saved=1))
-        return redirect(url_for("admin", settings_err=1))
+        bad = 0
+        # 逐项存：认不出来的一项**一条都不写**（半套设置比没设置更难查），
+        # 其余合法的照存 —— 一个人改了两个数、其中一个打错，不该让他白填一遍
+        for key in settings_mod.SPEC:
+            if key not in request.form:
+                continue
+            ok, _err = settings_mod.set_value(key, request.form.get(key))
+            bad += 0 if ok else 1
+        # 回到「设置」那一格：现在分标签页了，跳回默认标签等于"我点了保存，页面自己跑掉了"
+        if bad:
+            return redirect(url_for("admin", settings_err=1, tab="settings"))
+        return redirect(url_for("admin", settings_saved=1, tab="settings"))
 
     @app.post("/admin/login")
     def admin_login():

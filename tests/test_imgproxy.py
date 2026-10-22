@@ -59,6 +59,8 @@ import tempfile
 import time
 
 TMP = Path(tempfile.mkdtemp(prefix="zhuiju_img_"))
+import gate_off  # noqa: E402  门禁与本文件的测试对象无关，见 tests/gate_off.py
+gate_off.off(TMP)
 _keep = (imgproxy.CACHE_DIR, imgproxy._IDX, imgproxy._disk, imgproxy._disk_loaded,
          imgproxy._urls_file, imgproxy._mem.copy(), imgproxy.requests.get)
 imgproxy.CACHE_DIR = TMP / "img"

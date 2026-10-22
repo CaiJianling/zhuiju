@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  {% include "_theme.html" %}
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  {# 验证页也带着正常的 SEO 信息：站点级 title / description / canonical / og / SearchAction，
+     不写 noindex、也不返回 403。正常情况下真搜索引擎走爬虫豁免到不了这一页，
+     但万一哪天"UA + 反查 DNS"那条判据不准了，这一页就是它看到的站点门面，
+     而不是一个把收录全部掐死的死胡同。 #}
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}">
+  <link rel="canonical" href="{{ seo.canonical }}">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ seo.title }}">
+  <meta property="og:description" content="{{ seo.description }}">
+  <meta property="og:url" content="{{ seo.canonical }}">
+  <meta name="robots" content="index,follow">
+  <link rel="sitemap" type="application/xml" href="{{ seo.site }}/sitemap.xml">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"WebSite","name":"追剧资源搜索",
+   "url":"{{ seo.site }}/",
+   "potentialAction":{"@type":"SearchAction","target":"{{ seo.site }}/s/{search_term_string}",
+     "query-input":"required name=search_term_string"}}
+  </script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔍</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_v }}">
+</head>
+<body class="gate">
+<main class="wrap">
+  {# 整页只有这一张卡片，上下左右都居中；所有文字都关在它里面。
+     之前有一段提示写在卡片外，它跟着 .wrap 铺满 1680px，看起来就是"卡片歪在一边、
+     底下一行字甩到屏那头"，这一版把它收回来了。 #}
+  <section class="asect gatecard">
+    <h1>追剧资源搜索</h1>
+    <p class="lede">{{ seo.description }}</p>
+    <p class="gatenote">拖一下滑块验证一次，之后 <b>{{ hours }}</b> 小时之内不再问。</p>
+    {% include "_slider.html" %}
+    {# 那三段长说明收进这里：该说清楚的说清楚，但别拿它把首屏挤满 #}
+    <details class="gate-more">
+      <summary>这一步在浏览器里留了什么？</summary>
+      <p>一枚本站签发的<b>匿名</b> cookie：里面只有到期时间和一个签名，不含姓名、账号、搜索内容。
+        它<b>绑这台设备</b> —— 来源地址与系统/设备类型都算进了签名，拷到另一台电脑上用不了。</p>
+      <p>后台统计里只多一项：这条查询是「验证过 / 搜索引擎爬虫 / 门禁未开」中的哪一种，同样不含身份信息。</p>
+      <p>它只为一件事：不让脚本把这里当免费的影视搜索接口刷。</p>
+    </details>
+    <p class="gatefoot">已经验证过却还是看到这一页？多半是浏览器没把 cookie 带回来：无痕窗口、
+      站点被设成"退出时清除 Cookie"、或者手动清过 Cookie。
+      也可以直接<a href="{{ back }}">回到刚才那一页</a>再试一次。</p>
+    <noscript><p class="loginerr">这块滑块需要 JavaScript。请在允许 JavaScript 的浏览器里打开。</p></noscript>
+  </section>
+</main>
+<script src="{{ url_for('static', filename='slider.js') }}?v={{ asset_v }}"></script>
+<script>
+  // back 走 tojson 而不是手拼引号：路径里可能带任何字符，拼进 JS 字符串就是注入面
+  zhuijuSlip.mount(document.querySelector('[data-slip]'), { next: {{ back | tojson }} });
+</script>
+</body>
+</html>
