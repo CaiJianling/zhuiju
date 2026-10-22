@@ -72,10 +72,17 @@ SPEC: dict[str, tuple] = {
     # 默认不带：解压到媒体库根就直接是「片名 (年份)/…」，和 Emby 一个文件夹一部片的
     # 常规布局对齐；想按卷整目录删除的人可以打开这一项。
     "zip_part_dir": ("包内带卷号目录（movie01/…）", 0, 1, 0),
-    "write_nfo": ("每个片名目录写一份 NFO", 0, 1, 1),
-    "poster_via_site": ("NFO 里的海报走本站图片代理", 0, 1, 1),
-    # 走代理就得拼出绝对地址；留空时退到"最近一次有人访问后台用的那个地址"
-    "site_base_url": ("本站对外地址（http://IP:端口）", 0, 0, ""),
+    # 每个 strm 旁边一份**同名** .nfo（用户点名要的形态：`x.strm` 配 `x.nfo`），
+    # 剧集另外在剧集根目录补一份 tvshow.nfo —— 系列级的 ID 只能写在那儿。
+    "write_nfo": ("每个 strm 旁边写一份同名 NFO", 0, 1, 1),
+    # 目录名里的 ID 标签：Emby 认 tmdbid（要拿 key 去 TMDB 查），豆瓣插件/MoviePilot
+    # 认 doubanid（上游就有，不用查，但只有约一成条目带得上）。两颗开关分开，
+    # 因为"要不要为刮削多打一个第三方接口"是你那边的网络说了算，不该我替你定。
+    "tag_douban_id": ("目录名带上游豆瓣号 [doubanid=…]", 0, 1, 0),
+    "tag_tmdb_id": ("目录名带 TMDB 号 [tmdbid=…]", 0, 1, 0),
+    "tmdb_api_key": ("TMDB API Key（v3）", 0, 0, ""),
+    "tmdb_host": ("TMDB 接口地址", 0, 0, "https://api.tmdb.org/3"),
+    "tmdb_per_round": ("每轮最多查几部（TMDB）", 0, 2000, 120),
     "budget_seconds": ("每轮采集时间预算（秒）", 60, 7200, 900),
     "delay_ms": ("每次请求间隔（毫秒）", 0, 5000, 400),
     "workers": ("同时翻几个源", 1, 8, 3),
@@ -101,18 +108,24 @@ SPEC_HELP = {
                     "打开后多一层卷号目录 `movie01/片名 (年份)/…`，好处是"
                     "\"这一卷不要了\"能整目录删掉。改这里会重打所有卷；"
                     "已经解压过的先别改——旧路径那套还留在库里，同一部片会出现两次。",
-    "write_nfo": "在每个片名目录里写一份 movie.nfo / tvshow.nfo：年份、上映日、类型、简介、"
-                 "导演演员、豆瓣号、海报地址都在里面。Emby 扫库时 NFO 优先于按文件名猜，"
-                 "同名翻拍片和只有年份的片子命中会明显变好。文本压得动，"
-                 "实测 4312 部只让包大 1.8MB。",
-    "poster_via_site": "NFO 里的海报写成本站 `/img?url=…` 地址，由本站代取（补 Referer、"
-                       "忽略自签证书、缓存）。第三方图床大多有防盗链，直接写原地址 "
-                       "Emby 常常拿不到图。关掉就写上游原图地址。注意：走代理会把海报地址"
-                       "登记进代理白名单，片数一多要抬高上限（默认 3000 会把先登记的挤掉，"
-                       "连首页猜你想搜的图都受影响）。",
-    "site_base_url": "本站对外访问的地址，形如 http://192.168.1.20:5000 —— NFO 里的海报是"
-                     "绝对地址，Emby 在另一台机器上要能按这个地址访问到本站。"
-                     "留空就用最近一次有人打开后台时用的地址。",
+    "tag_douban_id": "在片名目录末尾加一段 ` [doubanid=38185414]`。号是上游给的，"
+                     "不用联网查，但实测**只有约一成条目带得上**（11706 行里 548 行）。"
+                     "注意 Emby 本体不认这个标签，只认 tmdbid/imdbid/tvdbid —— "
+                     "这一项是给豆瓣刮削插件、MoviePilot 那类工具用的。",
+    "tag_tmdb_id": "在片名目录末尾加一段 ` [tmdbid=157336]`，Emby 读到就直接按 ID 命中，"
+                   "不再拿片名去搜（同名翻拍片、只有年份的片子最容易认错）。"
+                   "ID 不在上游数据里，得拿 TMDB 接口查，所以下面两个空着时这颗开关等于没用。"
+                   "查不到的那部分照旧只写`片名 (年份)`，不会硬塞一个猜来的号。",
+    "tmdb_api_key": "TMDB 网站 → 设置 → API → 开发者 Key（v3，32 位十六进制那种）。"
+                    "只存在 strm.db 的 setting 表里、不外发，页面上也不回显（留空就是不改）。"
+                    "服务器上也可以不设这里、改用环境变量 `ZHUIJU_TMDB_KEY`；两边都有时以这里为准。",
+    "tmdb_host": "TMDB 接口根地址，一般不用改。默认 `https://api.tmdb.org/3` —— "
+                 "实测 `api.themoviedb.org` 在这台机器上连不上（TCP 直接超时），"
+                 "而这一个是通的（回 401，说明只差 key）。"
+                 "换你那边能出去的那个域名。",
+    "tmdb_per_round": "一轮采集里最多查几部。一部片一次请求，查过的（命中或确认没有）"
+                      "不再重查，所以这个数字只影响「新片多时这一轮多跑几分钟」。"
+                      "库里 4312 部全查一遍约 4300 次请求，按 400ms 间隔是半小时多。",
     "budget_seconds": "一轮采集最多跑多久。近一年全量一轮跑不完是设计内的，"
                       "预算用完就停，下一次访问接着翻。",
     "delay_ms": "每个请求之间睡多久（各源分别算）。调到 0 就是贴着上游打，不建议。",
@@ -123,8 +136,10 @@ SPEC_HELP = {
 }
 
 
-# 文本型设置：不能用"上下界"去判类型（site_base_url 的界是 0/0，会被误判成开关）
-TEXT_KEYS = ("exclude_srcs", "site_base_url")
+# 文本型设置：不能用"上下界"去判类型（exclude_srcs 的界是 0/0，会被误判成开关）
+TEXT_KEYS = ("exclude_srcs", "tmdb_api_key", "tmdb_host")
+# 页面上要按密码框显示的（TMDB key 是账号级凭据，别在表单里明文回显）
+SECRET_KEYS = ("tmdb_api_key",)
 
 
 def spec_rows(cfg: dict | None = None) -> list[dict]:
@@ -134,24 +149,31 @@ def spec_rows(cfg: dict | None = None) -> list[dict]:
     for k, (label, lo, hi, default) in SPEC.items():
         kind = ("text" if k in TEXT_KEYS
                 else "bool" if hi <= 1 else "int")
-        rows.append({"key": k, "label": label, "value": cfg[k], "lo": lo, "hi": hi,
-                     "default": default, "kind": kind, "help": SPEC_HELP.get(k, "")})
+        secret = k in SECRET_KEYS
+        rows.append({"key": k, "label": label,
+                     # 密钥不回显：页面源码里放一份明文凭据是最容易漏的那种泄露
+                     # （旁边那台机器可能正开着浏览器）。留空 = 不改，见 save_settings
+                     "value": "" if secret else cfg[k],
+                     "filled": bool(str(cfg[k] or "").strip()) if secret else False,
+                     "lo": lo, "hi": hi,
+                     "default": default, "kind": kind, "help": SPEC_HELP.get(k, ""),
+                     "secret": secret})
     return rows
 
 
-URL_RE = re.compile(r"^https?://[A-Za-z0-9._\-]+(:\d{1,5})?(/[^\s\"'<>]*)?$")
+# TMDB key：字母数字和 - 这几种，别的字符（空格、引号、换行）一律不收。
+# 不收紧一点的理由和当年判"本站对外地址"一样 —— 这串要拼进请求 URL 打到第三方。
+KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{8,64}$")
+HOST_RE = re.compile(r"^https?://[A-Za-z0-9._\-]+(:\d{1,5})?(/[A-Za-z0-9._/\-]*)?$")
 
 
-def clean_base(raw: str) -> str:
-    """校验"本站对外地址"：只收 http(s)://主机[:端口][/前缀]，去掉结尾的斜杠。
-
-    这个值会被写进 NFO 给 Emby 访问，所以宁可严：带空格、带引号、带 javascript: 的
-    一律不收（收了你也不知道它会在哪个客户端被拼成什么）。
-    """
+def clean_host(raw: str) -> str:
+    """校验 TMDB 接口根地址：只收 http(s)://主机[:端口][/路径]，去掉结尾斜杠。"""
     s = str(raw or "").strip().rstrip("/")
     if not s:
         return ""
-    return s if URL_RE.match(s) else ""
+    return s if HOST_RE.match(s) else ""
+
 
 _init_lock = threading.Lock()
 _ready = False
@@ -168,14 +190,14 @@ CREATE TABLE IF NOT EXISTS vod (
   year       TEXT,
   kind       TEXT,                -- movie / tv；''（认不出类别的）不进库
   type_name  TEXT,
-  remarks    TEXT,
-  pic        TEXT,
-  blurb      TEXT,                -- 简介（vod_blurb，空时退 vod_content）
+  remarks    TEXT,                -- 上游"更新至第几集"那行，分卷清单接口里直接给出去
+  pic        TEXT,                -- 上游海报原图地址：NFO 的 thumb 与 /api/strm/index 都用它
+  douban_id  TEXT,                -- 上游豆瓣号：目录名里那个 [doubanid=…] 与 NFO 的 uniqueid
+  blurb      TEXT,                -- 简介（vod_blurb，空时退 vod_content）：NFO 的 plot
   actor      TEXT,
   director   TEXT,
   area       TEXT,
-  douban_id  TEXT,                -- 上游带的豆瓣号：写进 NFO，装了豆瓣插件的 Emby 能精确命中
-  douban_score TEXT,
+  douban_score TEXT,              -- 上游评分：实测多数填 0.0，0 不当"有分"
   updated    TEXT,                -- 上游 vod_time（更新时间）
   pubdate    TEXT,                -- 上游 vod_pubdate（上映日期，实测形如 "2026-10-09中国大陆"）
   lines      TEXT NOT NULL,       -- [{from, eps:[{name,url}]}]
@@ -191,6 +213,27 @@ CREATE TABLE IF NOT EXISTS vod (
 );
 CREATE INDEX IF NOT EXISTS idx_vod_key  ON vod(key);
 CREATE INDEX IF NOT EXISTS idx_vod_dirty ON vod(dirty);
+
+-- 片子 -> 外部元数据站点的 ID。目录名里那个 [tmdbid=…] 就取这张表。
+-- 为什么不并进 vod：vod 是"每个源一行"，同一部片在 17 个源里最多 17 行，
+-- 而 ID 是片子级的 —— 跟着源走既重复存，又会出现"三个源给三个不同豆瓣号"没法判。
+-- key 就是 vod.key（跨源合并的那把钥匙）。豆瓣号不在这里存：它上游就有，
+-- 导出时直接从 vod 里取众数（见 merged_versions），存两份反而会对不上。
+-- state 记的是**查询结论**：'' 没查过 / ok 命中 / none 查过确实没有 / bad 没查成
+-- （key 不对、超时、被限流）。none 和 bad 必须分开：前者不该再打第二次，
+-- 后者下次还得接着试（tries 封顶，免得一个永远修不好的 key 每轮白打）。
+CREATE TABLE IF NOT EXISTS idmap (
+  key        TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL,
+  title      TEXT,
+  year       TEXT,
+  tmdb_id    TEXT,
+  state      TEXT NOT NULL DEFAULT '',
+  reason     TEXT,
+  tries      INTEGER NOT NULL DEFAULT 0,
+  checked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_idmap_state ON idmap(state);
 
 -- 翻页游标：慢速采集的断点。一轮预算用完，下次从这一页接着翻。
 CREATE TABLE IF NOT EXISTS cur (
@@ -273,10 +316,10 @@ CREATE TABLE IF NOT EXISTS setting (
 # 语义分工要说清：sig 只管**播放地址**（决定"这一页是不是新内容"，采集的早停靠它），
 # msig 只管**元数据**（简介/演员/豆瓣分变了只该让 NFO 重写，不该让采集以为翻到了新片）。
 EXTRA_COLUMNS = (("vod", "pubdate", "TEXT"),
+                 ("vod", "douban_id", "TEXT"),
                  ("vod", "blurb", "TEXT"), ("vod", "actor", "TEXT"),
                  ("vod", "director", "TEXT"), ("vod", "area", "TEXT"),
-                 ("vod", "douban_id", "TEXT"), ("vod", "douban_score", "TEXT"),
-                 ("vod", "msig", "TEXT"))
+                 ("vod", "douban_score", "TEXT"), ("vod", "msig", "TEXT"))
 MIGRATE_ERROR = ""
 
 
@@ -339,6 +382,9 @@ def settings() -> dict:
         v = raw.get(k)
         if k in TEXT_KEYS:
             out[k] = str(v if v is not None else default)
+            if k == "tmdb_api_key" and not out[k].strip():
+                # 服务器上更常用的放法：写在服务的环境变量里，不落到库、也不出现在页面上
+                out[k] = os.environ.get("ZHUIJU_TMDB_KEY", "").strip()
             continue
         try:
             out[k] = int(default if v in (None, "") else int(str(v)))
@@ -358,18 +404,32 @@ def save_settings(pairs: dict) -> tuple[dict, str | None]:
         if k not in pairs:
             continue
         raw = str(pairs.get(k) or "").strip()
-        if k == "site_base_url":
-            base = clean_base(raw)
-            if raw and not base:
-                errs.append(f"「{label}」要写成 http://IP:端口 这样（不能带空格、引号或脚本）")
-                continue
-            nxt[k] = base
-            continue
         if k == "exclude_srcs":
             # 源 id 就是 [a-z0-9_-] 这个形状；空格和奇怪字符不进库，免得拼 SQL/比 id 时出岔子
             ids = [x for x in re.split(r"[,\s]+", raw.lower())
                    if re.fullmatch(r"[a-z0-9_-]{1,32}", x)]
             nxt[k] = ",".join(dict.fromkeys(ids))
+            continue
+        if k == "tmdb_api_key":
+            key = raw.strip()
+            if not key:
+                # 页面上这一栏不回显已存的值，所以"留空"只能是"不改"——
+                # 存成空串等于按一次保存就把 key 擦了，而人不会想到是这么没的
+                nxt[k] = cur[k]
+                continue
+            if not KEY_RE.match(key):
+                errs.append(f"「{label}」看着不像 TMDB 的 key（只要字母、数字、- 或 _，8~64 位）")
+                continue
+            nxt[k] = key
+            continue
+        if k == "tmdb_host":
+            h = clean_host(raw)
+            if raw and not h:
+                errs.append(f"「{label}」要写成 https://api.tmdb.org/3 这样（不能带空格或引号）")
+                continue
+            # 留空回默认值而不是存空串：空串拼不出请求地址，TMDB 那颗开关会变成
+            # "看着开了、其实一部都没查"这种最难查的状态
+            nxt[k] = h or str(SPEC[k][3])
             continue
         # 开关型（上下界 0/1）的复选框：浏览器在"没勾"的时候**根本不发这个字段**，
         # 而后台表单也可能传 "off" —— 两种都得认成 0。
@@ -597,6 +657,27 @@ def folder_title(title: str, year: str) -> str:
     return f"{safe(title)} ({y.group(0)})" if y else safe(title)
 
 
+def id_tag(item: dict, ids: dict | None, cfg: dict) -> str:
+    """目录名末尾那一个 ID 标签；没开或查不到就是空串。
+
+    Emby 官方只认 `tmdbid` / `imdbid` / `tvdbid` 三种标签（`=` 和 `-` 两种分隔都认，
+    见 emby.media 的 Movie Naming / TV Naming），**豆瓣号它本体不认** ——
+    `[doubanid=…]` 只有装了豆瓣刮削插件或用 MoviePilot 那类工具才吃，
+    所以那一颗开关默认关着，别指望 Emby 靠它命中。
+    两个开关都开且两个号都有时只写 tmdbid：标签是拿来"绕过名称搜索"的，
+    一个够了，写两个只会把文件名往 MAX_PATH 那边推。
+    """
+    if cfg.get("tag_tmdb_id", 0):
+        tmdb = str((ids or {}).get("tmdb_id") or "").strip()
+        if tmdb:
+            return f" [tmdbid={safe(tmdb, 24)}]"
+    if cfg.get("tag_douban_id", 0):
+        db = str(item.get("douban_id") or "").strip()
+        if db:
+            return f" [doubanid={safe(db, 24)}]"
+    return ""
+
+
 def version_label(src_name: str, line_from: str, need_line: bool) -> str:
     """Emby 版本下拉框里显示的字样。
 
@@ -693,6 +774,9 @@ def record_vod(con, src_id: str, src_name: str, vod: dict, cfg: dict,
     sig = sig_of(lines)
     meta = meta_of(vod)
     ms = msig_of(meta)
+    # 豆瓣号有些站填 0（不是空），0 当没有；后面拼 [doubanid=…] 时用它
+    did = str(vod.get("vod_douban_id") or "").strip()
+    douban_id = "" if did in ("0", "") else did[:16]
     url_count = sum(len(l["eps"]) for l in lines)
     m3u8_count = sum(1 for l in lines for e in l["eps"] if _M3U8.search(e["url"]))
     payload = json.dumps(lines, ensure_ascii=False, separators=(",", ":"))
@@ -702,13 +786,13 @@ def record_vod(con, src_id: str, src_name: str, vod: dict, cfg: dict,
                       (src_id, vid)).fetchone()
     args = (src_name, key, title, year, pubdate, kind, clean_text(vod.get("type_name", "")),
             clean_text(vod.get("vod_remarks", "")), clean_text(vod.get("vod_pic", "")),
-            meta["blurb"], meta["actor"], meta["director"], meta["area"],
-            meta["douban_id"], meta["douban_score"],
+            douban_id, meta["blurb"], meta["actor"], meta["director"], meta["area"],
+            meta["douban_score"],
             updated, payload, url_count, m3u8_count, sig, ms)
     if row is None:
         con.execute(
             "INSERT INTO vod(src, vid, src_name, key, title, year, pubdate, kind, type_name,"
-            " remarks, pic, blurb, actor, director, area, douban_id, douban_score,"
+            " remarks, pic, douban_id, blurb, actor, director, area, douban_score,"
             " updated, lines, url_count, m3u8_count, sig, msig, dirty, pass,"
             " first_seen, last_seen) VALUES(" + ",".join("?" * 27) + ")",
             (src_id, vid) + args + (1, pass_id, stamp, stamp))
@@ -722,8 +806,8 @@ def record_vod(con, src_id: str, src_name: str, vod: dict, cfg: dict,
     # 下一轮把这些行判成"没变"就会把待导出状态抹掉，那批 strm 永远写不出来。
     con.execute(
         "UPDATE vod SET src_name=?, key=?, title=?, year=?, pubdate=?, kind=?, type_name=?,"
-        " remarks=?, pic=?, blurb=?, actor=?, director=?, area=?, douban_id=?,"
-        " douban_score=?, updated=?, lines=?, url_count=?, m3u8_count=?, sig=?, msig=?,"
+        " remarks=?, pic=?, douban_id=?, blurb=?, actor=?, director=?, area=?, douban_score=?,"
+        " updated=?, lines=?, url_count=?, m3u8_count=?, sig=?, msig=?,"
         " dirty=MAX(dirty, ?), pass=?, last_seen=? WHERE src=? AND vid=?",
         args + (dirty, pass_id, stamp, src_id, vid))
     return "changed" if play_changed else "same"
@@ -822,6 +906,155 @@ def db_counts(con=None) -> dict:
             con.close()
 
 
+# ------------------------------------------------------------------- 外部 ID（查 TMDB 用）
+# 查询本身在 tools/collect_strm.py（那边才有联网和节奏控制），这里只管库。
+ID_RETRY_MAX = 3          # 一个 key 最多试这么多次；之后只能靠后台"重查没命中的"手动清
+
+
+def pending_ids(limit: int = 0, con=None, all_keys: bool = False) -> list[dict]:
+    """还没查到 TMDB 号的片，按"上游集数多的先来"排。
+
+    每行给 {key, kind, title, year, douban_id, tries, state} —— title/year 取的是
+    "各源里集数最多的那一行"（SQLite 保证 MAX(url_count) 那一行的裸列就是这么取的），
+    因为集数多的那行通常是站点填得最全的那行，拿它的名字去查命中率高一点。
+    all_keys=True 时把已经判过"确实没有"的也放回来（后台那颗"重查没命中的"就用它，
+    不然 TMDB 上新增了条目的片子永远没机会）。
+    """
+    own = con is None
+    con = con or connect()
+    try:
+        where = ("(m.key IS NULL OR (m.state NOT IN ('ok', 'none') AND m.tries < ?))"
+                 if not all_keys else
+                 "(m.key IS NULL OR m.state <> 'ok')")
+        sql = (
+            "SELECT v.key AS key, v.kind AS kind, v.title AS title, v.year AS year,"
+            " v.douban_id AS douban_id, COALESCE(m.tries, 0) AS tries,"
+            " COALESCE(m.state, '') AS state, MAX(v.url_count) AS eps"
+            " FROM vod v LEFT JOIN idmap m ON m.key = v.key"
+            f" WHERE {where}"
+            " GROUP BY v.key ORDER BY eps DESC")
+        rows = list(con.execute(sql, (ID_RETRY_MAX,)))
+        return rows[:limit] if limit else rows
+    finally:
+        if own:
+            con.close()
+
+
+def save_id(con, key: str, kind: str, title: str = "", year: str = "",
+            tmdb_id: str = "", state: str = "", reason: str = "",
+            tries: int = 0) -> bool:
+    """写一条查询结论，返回"这次是不是真的换来了一个新 ID"。
+
+    tries 由调用方给（它才知道这是第几次试）。换成新 ID 时把这个 key 标脏 ——
+    ID 是**写进目录名**的，不标脏的话下一轮增量导出根本不会看这个 key，
+    查到的号就永远躺在 idmap 里、名字还是老的（这个坑很容易漏，所以写在返回值上）。
+    """
+    tmdb_id = str(tmdb_id or "")[:16]
+    old = con.execute("SELECT tmdb_id FROM idmap WHERE key=?", (key,)).fetchone()
+    was = str(old["tmdb_id"] or "") if old else ""
+    con.execute(
+        "INSERT INTO idmap(key, kind, title, year, tmdb_id, state, reason, tries, checked_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(key) DO UPDATE SET kind=excluded.kind, title=excluded.title,"
+        " year=excluded.year, tmdb_id=excluded.tmdb_id, state=excluded.state,"
+        " reason=excluded.reason, tries=excluded.tries, checked_at=excluded.checked_at",
+        (key, kind, str(title or "")[:80], str(year or "")[:8], tmdb_id,
+         state, str(reason or "")[:120], int(tries), now()))
+    if tmdb_id and tmdb_id != was:
+        con.execute("UPDATE vod SET dirty=1 WHERE key=?", (key,))
+        return True
+    return False
+
+
+def reset_ids(con=None, state: str = "none") -> int:
+    """把某个结论清掉重查（默认清"查过确实没有"的那些）。"""
+    own = con is None
+    con = con or connect()
+    try:
+        n = con.execute("DELETE FROM idmap WHERE state=?", (state,)).rowcount
+        con.commit()
+        return n
+    finally:
+        if own:
+            con.close()
+
+
+def id_stats(con=None) -> dict:
+    """这一项目前到什么程度了：命中多少、确认没有多少、还剩多少没查。"""
+    own = con is None
+    con = con or connect()
+    try:
+        c = {r["state"] or "": r["n"] for r in con.execute(
+            "SELECT state, COUNT(*) AS n FROM idmap GROUP BY state")}
+        total = con.execute("SELECT COUNT(DISTINCT key) FROM vod").fetchone()[0]
+        ok = c.get("ok", 0)
+        return {"ok": ok, "none": c.get("none", 0), "bad": c.get("bad", 0),
+                "pending": max(0, total - ok - c.get("none", 0)),
+                "titles": total,
+                "douban_titles": int(con.execute(
+                    "SELECT COUNT(DISTINCT key) FROM vod"
+                    " WHERE douban_id NOT IN ('', '0') AND douban_id IS NOT NULL"
+                ).fetchone()[0])}
+    finally:
+        if own:
+            con.close()
+
+
+# 集名到底在说"第几集"还是"第几个版本"：判类别时这是比站点分类更硬的证据
+EPISH_RE = re.compile(r"(第\s*\d+\s*[集话話期回]\s*[完结完]*|EP\s*\.?\s*\d+|S\d{1,2}\s*E\d{1,3}"
+                      r"|更新至|抢先|加更|全集)", re.I)
+VERSIONISH_RE = re.compile(r"(HD|BD|DVD|TC|TS|CAM|SCR|SD|4K|8K|1080P|720P|480P|中字|国语|粤语"
+                           r"|闽南|沪语|正片|完整版|未删减|超清|高清|标清|清晰)", re.I)
+SERIAL_TITLE_RE = re.compile(r"(第\s*[一二三四五六七八九十百\d]+\s*季|Season\s*\d+)", re.I)
+MOVIE_TITLE_RE = re.compile(r"(剧场版|电影版|特别篇|SP特辑)", re.I)
+
+
+def kind_of_rows(rows: list[sqlite3.Row], title: str) -> str:
+    """一部片在 Emby 里应该按电影还是剧集布局导出 —— 各源说法不一致时的取舍。
+
+    为什么要单独写这个函数：以前取的是 `ORDER BY src_name` 第一行的 kind，
+    等于**用中文源名的字节序决定一部片进电影库还是电视剧库**。实测库里 11 个 key
+    各源类别不一致（《疯狂动物城2》电影天堂标电影、两家非凡标动漫；
+    《鬼的新娘》三家给"正片"、淘片给 10 集；《我的美食向导 第二季》备番给 4 集）。
+
+    判据从硬到软，找到第一个能定案的证据就停：
+      1) 有任何一家给了超过 MOVIE_EP_MAX 集 —— 一定不是电影（这条和 record_vod
+         里把那一行改成 tv 是同一个理由：按电影布局只会留一集，整部剧就丢了）；
+      2) 所有集名都"像版本、不像集"（`HD中字 / HD国语 / HD粤语`、`TC中字` 这种）——
+         那就是一部片的几个版本，哪怕有两家把它塞进了"动漫"分类也算电影。
+         这条实测是**决定性**的：《疯狂动物城2》三个源给的"三集"就是这三个版本；
+      3) 片名里写着「剧场版 / 电影版」→ 电影；写着「第 X 季 / Season」→ 剧集；
+      4) 以上都没证据就按各家 type_name 投票，平票算剧集 ——
+         站点的"电影"分类常拿来塞网络大电影和短片，而"动漫 / 剧 / 番"这类标签
+         基本只在真是剧集时才出现；并且往剧集倒不丢内容（每集都还在，只是布局变了）。
+    """
+    counts: dict[str, int] = {}
+    all_names: list[str] = []
+    for r in rows:
+        if r["kind"] in KINDS:
+            counts[r["kind"]] = counts.get(r["kind"], 0) + 1
+        if int(r["url_count"] or 0) > MOVIE_EP_MAX:
+            return "tv"
+        try:
+            lines = json.loads(r["lines"])
+        except (TypeError, ValueError):
+            lines = []
+        for l in lines:
+            all_names += [clean_text(e.get("name", "")) for e in l.get("eps") or []]
+    names = [n for n in all_names if n]
+    if names and not any(EPISH_RE.search(n) for n in names) \
+            and all(VERSIONISH_RE.search(n) for n in names):
+        return "movie"
+    t = str(title or "")
+    if MOVIE_TITLE_RE.search(t):
+        return "movie"
+    if SERIAL_TITLE_RE.search(t):
+        return "tv"
+    if counts:
+        return max(counts, key=lambda k: (counts[k], k == "tv"))
+    return "movie"
+
+
 # --------------------------------------------------------------------------- 导出 strm
 def merged_versions(rows: list[sqlite3.Row], cfg: dict) -> dict:
     """一个 key 的各行（每源一条）归并成导出要的结构。
@@ -852,8 +1085,18 @@ def merged_versions(rows: list[sqlite3.Row], cfg: dict) -> dict:
     title = max(titles, key=lambda k: (titles[k], len(k))) if titles else rows[0]["title"]
     year = max(years, key=lambda k: (years[k], k)) if years else (rows[0]["year"] or "")
     type_name = max(types, key=lambda k: types[k]) if types else ""
-    kind = rows[0]["kind"] if rows[0]["kind"] in KINDS else "movie"
-    # 元数据取"各源里最完整的那一份"：同一个片在 A 站只有名字、在 B 站有简介和演员表，
+    kind = kind_of_rows(rows, title)
+    # 豆瓣号取"各源里出现最多的那个写法"而不是最长非空：同一部片偶尔两个源给两个号
+    # （改版/填错），众数至少不会被某一站的填错带跑。空就是没有。
+    def mode(field: str) -> str:
+        cnt: dict[str, int] = {}
+        for r in rows:
+            v = clean_text(r[field] or "")
+            if v:
+                cnt[v] = cnt.get(v, 0) + 1
+        return max(cnt, key=lambda k: (cnt[k], len(k))) if cnt else ""
+
+    # 其余文本字段取"各源里最完整的那一份"：同一个片在 A 站只有名字、在 B 站有简介和演员表，
     # 就该用 B 站那份。逐字段取最长非空，而不是整行挑一条 —— 实测各源填的字段
     # 参差不齐（虎牙常缺简介、百度缺导演），整行挑会白丢掉别源有的信息。
     def longest(field: str) -> str:
@@ -874,7 +1117,7 @@ def merged_versions(rows: list[sqlite3.Row], cfg: dict) -> dict:
                 break
     meta = {"blurb": longest("blurb"), "actor": longest("actor"),
             "director": longest("director"), "area": longest("area"),
-            "douban_id": longest("douban_id"), "douban_score": longest("douban_score"),
+            "douban_id": mode("douban_id"), "douban_score": longest("douban_score"),
             "pic": longest("pic"), "pubdate": pub, "remarks": longest("remarks"),
             "sources": sorted({r["src_name"] for r in rows})}
     versions = []
@@ -893,180 +1136,136 @@ def merged_versions(rows: list[sqlite3.Row], cfg: dict) -> dict:
             "lines": lines,
         })
     return {"kind": kind, "title": title, "year": year, "type_name": type_name,
-            "meta": meta, "versions": versions}
-
-
-LOOPBACK = ("localhost", "127.0.0.1", "::1", "[::1]", "")
-
-
-def _usable_base(b: str) -> str:
-    """回环地址一律当"没有对外地址"。
-
-    两处都要判：记的时候（remember_host）和用的时候（effective_base）。
-    只判前者的话，之前存进去的那条 `http://localhost` 会一直留着 ——
-    实测就是这样：库里 `_last_host` 已经是 http://localhost，
-    写出来的 NFO 海报地址 Emby 在 NAS 上根本打不开。
-    """
-    b = clean_base(b)
-    host = re.sub(r"^https?://", "", b).split("/")[0].split(":")[0]
-    return "" if host in LOOPBACK else b
-
-
-def effective_base(cfg: dict | None = None) -> str:
-    """NFO 里那个绝对地址该用哪个站点根。
-
-    优先用后台填的 site_base_url；留空时退到"最近一次有人打开后台页用的地址"——
-    那个地址至少是真人真用过的（反代下已被 TrustForwarded 修正成对外域名），
-    比写死 127.0.0.1 有用：Emby 通常在另一台机器上。回环地址不算数。
-    """
-    cfg = cfg or settings()
-    base = _usable_base(cfg.get("site_base_url") or "")
-    if base:
-        return base
-    return _usable_base(_raw_setting("_last_host") or "")
-
-
-def remember_host(base: str) -> None:
-    """记下"这次访问用的是哪个地址"，给 site_base_url 留空时兜底。
-
-    只在值真的变了时写库：这是每次访问后台都会经过的地方，
-    而写库是长事务里的一次额外提交。
-    """
-    base = _usable_base(base)      # 回环地址当"没有"，理由见 _usable_base
-    if not base or _raw_setting("_last_host") == base:
-        return
-    ensure_schema()
-    con = connect()
-    try:
-        con.execute("INSERT INTO setting(key, value) VALUES('_last_host', ?)"
-                    " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (base,))
-        con.commit()
-    except sqlite3.Error:      # 记不上就算了，NFO 会退到上游原图地址
-        pass
-    finally:
-        con.close()
-
-
-def _raw_setting(key: str) -> str:
-    ensure_schema()
-    con = connect()
-    try:
-        r = con.execute("SELECT value FROM setting WHERE key=?", (key,)).fetchone()
-        return str(r["value"]) if r else ""
-    except sqlite3.Error:
-        return ""
-    finally:
-        con.close()
-
-
-def poster_url(pic: str, cfg: dict) -> tuple[str, bool]:
-    """NFO 里海报那一行写什么。返回 (地址, 是否需要登记进代理白名单)。
-
-    走本站代理的理由和首页海报走代理是同一个：第三方图床认 Referer
-    （豆瓣无 Referer 回 418、带本站 Referer 回 403），有些站还挂在自签证书上。
-    Emby 自己取图时不会带这些头，所以直接写原地址常常是拿不到图的。
-    """
-    pic = str(pic or "").strip()
-    if not pic.startswith("http"):
-        return "", False
-    if not cfg.get("poster_via_site", 1):
-        return pic, False
-    base = effective_base(cfg)
-    if not base:
-        return pic, False          # 拼不出绝对地址就别写相对路径，Emby 不认
-    return f"{base}/img?url={_q(pic)}", True
+            "douban_id": meta["douban_id"], "meta": meta, "versions": versions}
 
 
 def x(s) -> str:
     """NFO 里的文本一律转义：片名带 & 和 < 是常事（实测有《A&B》这种），
-    不转义会写出一份解析失败的 NFO，Emby 对坏 NFO 的处理是整条不认。"""
+    不转义会写出一份解析不了的 NFO，而 Emby 对坏 NFO 的处理是整条不认。"""
     from xml.sax.saxutils import escape
     return escape(str(s or ""))
 
 
-def nfo_document(item: dict, cfg: dict) -> tuple[str, str, str]:
-    """一个片名目录的 NFO -> (文件名, 内容, 要登记进代理白名单的原图地址)。
+def nfo_id_tags(item: dict, ids: dict | None) -> str:
+    """ID 那几行。
 
-    电影写 movie.nfo、剧集写 tvshow.nfo —— 这两个名字是 Emby/Kodi 通用的，
-    放错名字等于没写（它不会去读 show.nfo 这种东西）。
+    写法照用户给的那份 Emby 自己生成的 NFO：`<tmdbid>` 和 `<uniqueid type="tmdb">`
+    同时出现 —— 一个是 Emby 存自己库用的标签，一个是"这条片子的外部号"的规范写法，
+    两种都给，插件与本体各读各的都不会扑空。豆瓣号同理给两种：Emby 本体不认豆瓣号，
+    豆瓣插件认哪一种我没法在本机验证，所以两种都写；认不出来的 type 会被直接忽略。
     """
-    meta = item.get("meta") or {}
-    kind = item["kind"]
+    out = []
+    tmdb = str((ids or {}).get("tmdb_id") or "").strip()
+    if tmdb:
+        out.append(f"  <uniqueid type=\"tmdb\" default=\"true\">{x(tmdb)}</uniqueid>\n"
+                   f"  <tmdbid>{x(tmdb)}</tmdbid>\n")
+    db = str(item["meta"].get("douban_id") or "").strip()
+    if db:
+        out.append(f"  <uniqueid type=\"douban\">{x(db)}</uniqueid>\n"
+                   f"  <uniqueid type=\"douban_id\">{x(db)}</uniqueid>\n"
+                   f"  <doubanid>{x(db)}</doubanid>\n")
+    return "".join(out)
+
+
+def nfo_common(item: dict, ids: dict | None) -> str:
+    """`<movie>` / `<tvshow>` 共用的那一批字段。
+
+    `premiered` 只在 `vod_pubdate` 真给到"年月日"时才写：只有年份时写进去等于
+    让 Emby 以为这片子是 1 月 1 日首映的，宁缺毋假。评分同理 —— 实测多数上游填
+    "0.0"，写进 NFO 就是让 Emby 显示一个假的 0 分，比不写更糟。
+    """
+    meta = item["meta"]
     title = x(item["title"])
-    year = re.search(r"(19|20)\d{2}", str(item["year"] or ""))
+    y = re.search(r"(19|20)\d{2}", str(item["year"] or ""))
     pub = str(meta.get("pubdate") or "")
-    pic, need = poster_url(meta.get("pic", ""), cfg)
-    # 类型在 item 那一层（各源归并出来的多数写法），不在 meta 里 —— 早先取
-    # meta.get("type_name") 时 NFO 里根本没有 <genre>，Emby 的类型栏是空的
-    genres = "".join(f"  <genre>{x(g)}</genre>\n"
-                     for g in re.split(r"[ /、,，]+", str(item.get("type_name") or "")) if g.strip())
-    actors = "".join(f"  <actor><name>{x(a.strip())}</name><role>主演</role></actor>\n"
-                     for a in re.split(r"[/,，、]", str(meta.get("actor") or ""))
-                     if a.strip())[:2000]          # 演员表有的源写了几十个，截一下
-    body = [f"<{'movie' if kind == 'movie' else 'tvshow'}>\n",
-            f"  <title>{title}</title>\n",
-            f"  <originaltitle>{title}</originaltitle>\n",
-            f"  <sorttitle>{title}</sorttitle>\n"]
-    if year:
-        body.append(f"  <year>{year.group(0)}</year>\n")
-    if pub:
-        # premiered 要的是 YYYY-MM-DD；只有年份时写 premiered 会让 Emby 以为 1 月 1 日，
-        # 所以那种情况只给 year，别硬凑一个假日期
-        tag = "premiered" if kind == "movie" else "premiered"
-        if len(pub) >= 10:
-            body.append(f"  <{tag}>{pub[:10]}</{tag}>\n")
-            body.append(f"  <releasedate>{pub[:10]}</releasedate>\n")
-    body.append(genres)
+    parts = [f"  <title>{title}</title>\n",
+             f"  <originaltitle>{title}</originaltitle>\n",
+             f"  <sorttitle>{title}</sorttitle>\n"]
+    if y:
+        parts.append(f"  <year>{y.group(0)}</year>\n")
+    if len(pub) >= 10:
+        parts.append(f"  <premiered>{x(pub[:10])}</premiered>\n"
+                     f"  <releasedate>{x(pub[:10])}</releasedate>\n")
+    parts.append("".join(f"  <genre>{g}</genre>\n"
+                         for g in re.split(r"[ /、,，]+", x(str(item.get("type_name") or "")))
+                         if g.strip()))
     if meta.get("area"):
-        body.append(f"  <country>{x(meta['area'])}</country>\n")
-    if meta.get("director"):
-        for d in re.split(r"[/,，、]", str(meta["director"]))[:4]:
-            if d.strip():
-                body.append(f"  <director>{x(d.strip())}</director>\n")
-    body.append(actors)
+        parts.append(f"  <country>{x(meta['area'])}</country>\n")
+    for d in re.split(r"[/,，、]", str(meta.get("director") or ""))[:4]:
+        if d.strip():
+            parts.append(f"  <director>{x(d.strip())}</director>\n")
+    parts.append("".join(f"  <actor><name>{x(a.strip())}</name><role>主演</role></actor>\n"
+                         for a in re.split(r"[/,，、]", str(meta.get("actor") or ""))
+                         if a.strip())[:2000])          # 演员表有的站写了几十个，截一下
     if meta.get("blurb"):
         # 渲染端再截一次：库里那列是 record_vod 截过的，但 NFO 的长度不该依赖
-        # "每一行都是从 record_vod 进来的"这个假设（迁移、手工修数据、以后加的写入口
-        # 都可能塞进更长的），截在这里才是"由构造保证 NFO 不会长成 5KB"
-        body.append(f"  <plot>{x(_cut_sentence(meta['blurb'], META_LIMITS['blurb']))}</plot>\n")
-    # 评分只在上游真给了分的时候写：实测多数源填的是 "0.0"，写进 NFO 就是让 Emby
-    # 显示一个假的"0 分"，比不写更糟；votes（评分人数）我们没有，就不写假数据
+        # "每一行都是从 record_vod 进来的"这个假设（迁移、手工修数据都可能塞进更长的）
+        parts.append(f"  <plot>{x(_cut_sentence(meta['blurb'], META_LIMITS['blurb']))}</plot>\n")
     sc = str(meta.get("douban_score") or "").strip()
     try:
         if float(sc) > 0:
-            body.append(f"  <rating>{x(sc)}</rating>\n")
+            parts.append(f"  <rating>{x(sc)}</rating>\n")
     except ValueError:
         pass
-    if meta.get("douban_id"):
-        # 豆瓣号有两种常见写法，插件认哪种我们没法在本机验证，就两种都写：
-        # Emby 本体对不认识的 uniqueid type 是直接忽略的，多写一条不影响它按名称+年份刮削
-        did = x(meta["douban_id"])
-        body.append(f"  <uniqueid type=\"douban\">{did}</uniqueid>\n"
-                    f"  <uniqueid type=\"douban_id\">{did}</uniqueid>\n")
-    if pic:
-        body.append(f"  <thumb>{x(pic)}</thumb>\n")
-    # 来源写进 NFO 的 studio：Emby 的"制片人/工作室"栏正好能显示这条片是哪个源给的，
-    # 出问题时（比如某源地址失效）在界面上就能认出来
+    parts.append(nfo_id_tags(item, ids))
+    pic = str(meta.get("pic") or "").strip()
+    if pic.startswith("http"):
+        # 写上游原地址，不走本站代理：实测这些图床不带 Referer 也能直接取到
+        # （pic.youkupic.com / image.huyajs.com / fffgood.com 抽样 12 张全 200），
+        # 走代理就得为每部片登记一次白名单，那份清单是**每个进程各自一份**的，
+        # 片数一多会把首页猜你想搜那些图挤掉 —— 上一版就是这么把自己挡在门外的。
+        parts.append(f"  <thumb>{x(pic)}</thumb>\n")
     srcs = "、".join((meta.get("sources") or [])[:4])
     if srcs:
-        body.append(f"  <studio>{x(srcs)}</studio>\n")
-    body.append("</movie>\n" if kind == "movie" else "</tvshow>\n")
-    # 第三个值是**要登记进代理白名单的地址**，用的是上游原图那条：
-    # /img 校验的是它收到的 url 参数（就是原地址），登记代理后的地址等于什么都没登记
-    # —— 实测就是这么被自己拒掉的。只有真走了代理才需要登记，写原地址时本站不参与取图。
-    return ("movie.nfo" if kind == "movie" else "tvshow.nfo"), "".join(body), \
-        (str(meta.get("pic") or "") if need else "")
+        # 来源写进 studio：Emby 的"工作室"栏正好能显示这条片是哪个源给的，
+        # 某源地址失效时在界面上就能认出来
+        parts.append(f"  <studio>{x(srcs)}</studio>\n")
+    return "".join(parts)
 
 
-def plan(key: str, rows: list[sqlite3.Row], cfg: dict) -> list[dict]:
+def nfo_document(kind: str, item: dict, ids: dict | None, cfg: dict,
+                 sea: int = 0, ep_no: int = 0, ep_name: str = "") -> str:
+    """一份 NFO 的正文。
+
+    三种根标签是 Emby/Kodi 认的写法，不能自己发明：
+      `movie`          —— 一个电影版本一份（文件名同名）
+      `tvshow`         —— 剧集根目录那一份：系列的 ID 只能写在这里，
+                          每一集的 nfo 里放系列号会被当成"某一集的号"
+      `episodedetails` —— 一集一份，只写这一集用得上的东西（集名 / 季号 / 集号）；
+                          系列级的简介、演员留给 tvshow.nfo，否则 13 万个文件
+                          各抄一遍同样的大段文本，包体积和 Emby 的解析都白付两倍
+    """
+    head = '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n'
+    if kind == "episode":
+        return (head + "<episodedetails>\n"
+                + f"  <title>{x(ep_name or item['title'])}</title>\n"
+                + f"  <showtitle>{x(item['title'])}</showtitle>\n"
+                + f"  <season>{int(sea)}</season>\n"
+                + f"  <episode>{int(ep_no)}</episode>\n"
+                + "</episodedetails>\n")
+    body = nfo_common(item, ids, kind)
+    if kind == "tvshow":
+        return head + "<tvshow>\n" + body + "</tvshow>\n"
+    return head + "<movie>\n" + body + "</movie>\n"
+
+
+def plan(key: str, rows: list[sqlite3.Row], cfg: dict, ids: dict | None = None) -> list[dict]:
     """一个 key -> 文件计划 [{path, url, content, sig, kind, ep, label, title, year}]。
 
     path 是**不含 kind/卷号**的那一段（`<片名 (年份>)/...`），
     由 export() 补成 `movie/movie01/...` —— 卷号是全局分配的，plan 不该知道。
+    `ids` 是这个 key 在 idmap 里那一行（查到的 TMDB 号），用来拼目录名尾的标签
+    和 NFO 里那几行 uniqueid。
     """
     item = merged_versions(rows, cfg)
     kind = item["kind"]
+    # 目录名带 ID 标签，文件名不一定带：
+    #   电影 —— 文件名**必须**以文件夹名开头，Emby 才把同一文件夹里的几个源并成
+    #          "多版本"，所以标签跟着进文件名（《星际穿越 (2014) [tmdbid=157336] - 虎牙资源》）；
+    #   剧集 —— Emby 只读剧集根目录那一个标签，季目录和每集文件名都不必再带，
+    #          带上等于把 60 集 ×N 源的文件名全拉长一遍（实测容易顶到 MAX_PATH）。
     folder = folder_title(item["title"], item["year"])
+    dirn = folder + id_tag(item, ids, cfg)
     cap = int(cfg["max_eps_per_title"])
     out: list[dict] = []
     for v in item["versions"]:
@@ -1089,8 +1288,8 @@ def plan(key: str, rows: list[sqlite3.Row], cfg: dict) -> list[dict]:
                     tail = f"·{safe(name, 12)}"
                 label = label0 + tail if li == 0 or not multi_line else \
                     f"{label0}·{safe(from_name, 12)}{tail}"
-                fn = safe(f"{folder} - {label}", 150) + ".strm"
-                rel = f"{folder}/{fn}"
+                fn = safe(f"{dirn} - {label}", 150) + ".strm"
+                rel = f"{dirn}/{fn}"
                 shown = ""
             else:
                 # 集号固定两位起（S01E01）：写成 E001 那种三位补零，Emby 认，
@@ -1098,21 +1297,32 @@ def plan(key: str, rows: list[sqlite3.Row], cfg: dict) -> list[dict]:
                 se = f"S{sea:02d}E{max(1, int(ep)):02d}"
                 label = label0 if li == 0 or not multi_line else f"{label0}·{safe(from_name, 12)}"
                 fn = safe(f"{folder} - {se} - {label}", 150) + ".strm"
-                rel = f"{folder}/Season {sea:02d}/{fn}"
+                rel = f"{dirn}/Season {sea:02d}/{fn}"
                 shown = se
             out.append({"path": rel, "url": url, "content": url + "\n",
                         "sig": hashlib.md5(url.encode("utf-8")).hexdigest()[:16],
                         "kind": kind, "key": key, "ep": shown, "label": label,
                         "title": item["title"], "year": item["year"]})
-    # NFO：一个片名目录一份，Emby 扫到时优先读它而不是猜文件名。
-    # 放在去重之前 —— 它和 strm 共用同一套"路径唯一 + 内容签名"的写入逻辑，
-    # 元数据变了只有 NFO 的签名变，那些 strm 文件的签名没变就不会被重写。
-    if cfg.get("write_nfo", 1):
-        nname, doc, poster = nfo_document(item, cfg)
-        out.append({"path": f"{folder}/{nname}", "url": "", "content": doc,
+            if cfg["write_nfo"]:
+                # 和这个 strm **同名**的一份 .nfo：Emby 就是按"同名 sidecar"配的，
+                # 名字差一个字它就不读了。内容只取这部片自己的元数据，
+                # 同一个 key 的几个源版本各有一份（文本很小，压缩率高）
+                doc = (nfo_document("movie", item, ids, cfg) if kind == "movie" else
+                       nfo_document("episode", item, ids, cfg, sea=sea, ep_no=int(ep),
+                                    ep_name=clean_text(name)))
+                out.append({"path": rel[:-len(".strm")] + ".nfo", "url": "", "content": doc,
+                            "sig": hashlib.md5(doc.encode("utf-8")).hexdigest()[:16],
+                            "kind": kind, "key": key, "ep": shown, "label": "NFO",
+                            "title": item["title"], "year": item["year"]})
+    if kind == "tv" and cfg["write_nfo"]:
+        # 系列级那一份：tmdbid / 简介 / 演员 / 年份只能写在 tvshow.nfo 里。
+        # 每一集的 <episodedetails> 里放系列的号是错的（那表示"这一集的号"），
+        # 而 Emby 认整部剧的号恰恰是从这一份读的。
+        doc = nfo_document("tvshow", item, ids, cfg)
+        out.append({"path": f"{dirn}/tvshow.nfo", "url": "", "content": doc,
                     "sig": hashlib.md5(doc.encode("utf-8")).hexdigest()[:16],
                     "kind": kind, "key": key, "ep": "", "label": "NFO",
-                    "title": item["title"], "year": item["year"], "poster": poster})
+                    "title": item["title"], "year": item["year"]})
     # 同一路径只留一条（两个源版本名撞车时以先出现的为准）：
     # 一个路径两个内容会写出"半部片"，谁后写谁说了算，导出结果就不稳定了
     seen: dict[str, dict] = {}
@@ -1136,10 +1346,14 @@ class PartAlloc:
         self.con = con
         self.cap = max(1, int(part_files))
         # 已用量盘"已经写出去的文件"，而不是 part 表里的部数：
-        # part 表只说这一卷有几部片，一部 60 集 ×8 个源的剧占的是 480 个文件的量
+        # part 表只说这一卷有几部片，一部 60 集 ×8 个源的剧占的是 480 个文件的量。
+        # 而且只数 .strm —— 设置项说的就是"每卷最多几个 strm 文件"，
+        # 打开同名 NFO 之后每部片旁边多一个文本文件，不该因此把卷切成两倍
+        # （那等于"改一个不影响容量的开关，卷号全变了"）。
         self.used: dict[tuple[str, int], int] = {
             (r["kind"], r["part"]): r["n"] for r in con.execute(
-                "SELECT kind, part, COUNT(*) AS n FROM file GROUP BY kind, part")}
+                "SELECT kind, part, COUNT(*) AS n FROM file"
+                " WHERE path LIKE '%.strm' GROUP BY kind, part")}
 
     def part_of(self, key: str, kind: str) -> int | None:
         r = self.con.execute("SELECT part FROM part WHERE key=? AND kind=?",
@@ -1192,23 +1406,31 @@ def export(full: bool = False, note: str = "", keys_limit: int = 0) -> dict:
         if keys_limit:
             keys = keys[:keys_limit]
         alloc = PartAlloc(con, int(cfg["part_files"]))
-        # NFO 里指向 /img 的海报地址必须先登记进代理白名单，否则 Emby 拿着地址来取
-        # 会被当成"本站没发出过的图"拒掉（那是防公共代理的那一条）
-        posters: set[str] = set()
+        # 这一批要用的 ID 一次读全：逐 key 查 idmap 就是每部片多一条 SQL。
+        # 整张表读进内存而不是 WHERE key IN(...) —— 一轮 dirty 的 key 能有好几千，
+        # 拼成 IN 参数会撞上 SQLite 的变量数上限（999/32766，看编译期）
+        ids_by_key = {r["key"]: dict(r) for r in con.execute(
+            "SELECT key, tmdb_id FROM idmap")}
         for key in keys:
             rows = list(con.execute("SELECT * FROM vod WHERE key=? ORDER BY src_name", (key,)))
             old = {r["path"]: r["sig"] for r in con.execute(
                 "SELECT path, sig FROM file WHERE key=?", (key,))}
-            items = plan(key, rows, cfg) if rows else []
+            items = plan(key, rows, cfg, ids_by_key.get(key)) if rows else []
             keep: dict[str, dict] = {}
             kind = items[0]["kind"] if items else (
-                rows[0]["kind"] if rows and rows[0]["kind"] in KINDS else "movie")
-            part = alloc.alloc(key, kind, len(items)) if items else 0
+                kind_of_rows(rows, rows[0]["title"]) if rows else "movie")
+            if items:
+                # 类别是各源投票投出来的（见 merged_versions），上游改标注就可能从电影变成剧集：
+                # 旧类别那一行卷号必须放掉，不然它会一直占着那一卷的名额，
+                # 而且这个 key 万一又变回电影，会被塞回几周前那卷去
+                con.execute("DELETE FROM part WHERE key=? AND kind<>?", (key, kind))
+            # 名额只按 strm 数算（同名 NFO 不算）：开了 NFO 不该让同一部片换到别的卷去，
+            # 更不该因为一个跟容量无关的开关把整棵树的卷号重排
+            n_strm = sum(1 for it in items if it["path"].endswith(".strm"))
+            part = alloc.alloc(key, kind, n_strm) if items else 0
             for it in items:
                 rel = f"{kind}/{part_name(kind, part)}/{it['path']}"
                 keep[rel] = it
-                if it.get("poster"):
-                    posters.add(it["poster"])
             for path, sig in old.items():
                 if path not in keep:
                     _unlink(ROOT / path.replace("/", os.sep))
@@ -1237,13 +1459,6 @@ def export(full: bool = False, note: str = "", keys_limit: int = 0) -> dict:
             # 期间站点里任何写入（后台保存设置）都会被 WAL 的单一写者挡死
             if touched % 200 == 0:
                 con.commit()
-        if posters:
-            # 一批一次写盘：逐条 register() 会把整份清单重写 N 遍（清单到几万条是几 MB 一份）
-            from . import imgproxy
-            try:
-                registered = imgproxy.register_many(sorted(posters))
-            except Exception:  # noqa: BLE001 - 登记不上只是海报取不到图，不该让导出失败
-                registered = 0
         if not full:
             con.execute("UPDATE vod SET dirty=0 WHERE dirty=1")
         else:
@@ -1430,14 +1645,8 @@ HOWTO = """# Emby 接入说明（这一棵树和这些包都是程序生成的�
    `剧名 (2026) - S01E03 - 虎牙资源.strm`。
 4. strm 里写的就是上游的 m3u8 直链，播放不经过本站。上游换地址了要靠下一轮采集
    重写文件，然后让 Emby 做一次「扫描新建和更新的文件」。
-5. 每个片名目录里还有一份 NFO（`movie.nfo` / `tvshow.nfo`）：年份、上映日、类型、
-   地区、简介、导演演员、豆瓣号、海报地址。Emby 扫到时 NFO 优先于按文件名猜，
-   同名翻拍片命中会明显变好。海报**不在包里** —— NFO 里写的是本站 `/img` 代理地址，
-   Emby 刮削时自己来取一张、存进它自己的元数据目录，所以包体积和不写 NFO 时基本一样
-   （NFO 是文本，4312 部打进包里只多约 1.8MB）。
-   前提：Emby 那台机器要能访问到本站，且后台「本站对外地址」填的是它能到的地址
-   （留空则用最近一次有人打开后台时用的地址）。取不到图只影响海报，不影响播放。
-
+@@IDS@@
+@@NFO@@
 ## 二、直接挂目录
 不想拷包就把项目里的 `strm/movie`、`strm/tv` 直接指给 Emby
 （同一台机器或能用 SMB/WebDAV 挂上时最省事），接口和包都只是搬运手段。
@@ -1450,11 +1659,47 @@ HOWTO = """# Emby 接入说明（这一棵树和这些包都是程序生成的�
 - `GET /strm/file?path=tv/tv01/…/x.strm`  只取单个 strm 文件
 """
 
+IDS_ON = """5. 目录名末尾带了一段 ID 标签（` [tmdbid=…]` 或 ` [doubanid=…]`）。
+   电影是**目录名和文件名都带**（`星际穿越 (2014) [tmdbid=157336]/星际穿越 (2014) [tmdbid=157336] - 虎牙资源.strm`），
+   因为 Emby 认多版本的前提就是"文件名以文件夹名开头"；剧集只带在**剧集根目录**那一段
+   （`绝命毒师 (2008) [tmdbid=1396]/Season 01/绝命毒师 (2008) - S01E01 - 虎牙资源.strm`），
+   Emby 只读剧集目录那一个标签，每集文件名再带一遍只是把路径往 260 字符的上限推。
+   Emby 读到标签就直接按 ID 命中，不再拿片名去搜 —— 同名翻拍片、只有年份的片子
+   最容易认错，这就是这一项存在的理由。
+   `tmdbid` 是查 TMDB 来的（要后台填 API Key），`doubanid` 是上游自带的：
+   **Emby 本体不认 doubanid**，那颗开关只对接了豆瓣插件/MoviePilot 的人有用。
+   没查到 ID 的片子照旧只写 `片名 (年份)`，不会塞一个猜来的号。
+
+"""
+
+IDS_OFF = """5. 目录名只到 `片名 (年份)`，不带 ID 标签。同名翻拍片要靠 Emby 自己在搜索结果里挑，
+   认错时手动「修改元数据」即可。后台「目录名带 TMDB 号」打开后目录会变成
+   `片名 (年份) [tmdbid=…]`，**改这一项要跑一次全量重建**，路径全换，
+   Emby 那边等于整库重扫（已看进度、收藏会跟着丢，先想清楚再切）。
+
+"""
+
+
+def howto(cfg: dict) -> str:
+    """接入说明里那两条开关相关的说法跟着设置走：写死了就是在说假话。"""
+    on = bool(cfg.get("tag_tmdb_id") or cfg.get("tag_douban_id"))
+    txt = HOWTO.replace("@@IDS@@", IDS_ON if on else IDS_OFF)
+    nfo = ("6. 每个 strm 旁边还有一份**同名**的 `.nfo`（`x.strm` 配 `x.nfo`）：片名、年份、\n"
+           "   上映日、类型、地区、导演演员、简介、评分、豆瓣号、TMDB 号、海报地址、来源。\n"
+           "   Emby 扫到同名 NFO 时优先用它，不再拿片名去猜。剧集另外在剧集根目录有一份\n"
+           "   `tvshow.nfo` —— 系列级的 ID 只能写在那儿，每一集的 `<episodedetails>` 里放\n"
+           "   系列的号会被当成某一集的号。代价是**文件数和包里条目翻倍**，Emby 也要多读一倍\n"
+           "   的东西；后台关掉这一项，已有的 `.nfo` 会被删干净。\n\n") if cfg.get("write_nfo") \
+        else ("6. 没有 `.nfo`：Emby 全靠 `片名 (年份)` 这套文件名去在线刮削。需要本地元数据\n"
+              "   就在后台打开「每个 strm 旁边写一份同名 NFO」再按一次全量重建。\n\n")
+    return txt.replace("@@NFO@@", nfo)
+
+
 
 def write_docs(con, cfg: dict) -> None:
     """目录里留一份接入说明和 manifest.json：不开接口时也能看懂这棵树。"""
     try:
-        (ROOT / "接入说明.md").write_text(HOWTO, encoding="utf-8")
+        (ROOT / "接入说明.md").write_text(howto(cfg), encoding="utf-8")
         (ROOT / "manifest.json").write_text(
             json.dumps(_manifest(con, cfg), ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
@@ -1468,14 +1713,13 @@ def _manifest(con, cfg: dict | None = None) -> dict:
            "window_days": int(cfg["window_days"]), "since": cutoff(cfg).isoformat(),
            "m3u8_only": bool(cfg["m3u8_only"]),
            "part_files": int(cfg["part_files"]),
-           "nfo": {"write": bool(cfg.get("write_nfo", 1)),
-                   "poster_via_site": bool(cfg.get("poster_via_site", 1)),
-                   # 实际生效的站点根：后台填的优先，没有就是"最近有人访问后台用的地址"
-                   "base": effective_base(cfg),
-                   "base_from": ("后台设置" if _usable_base(cfg.get("site_base_url") or "")
-                                 else ("最近访问地址" if effective_base(cfg)
-                                       else "没有可用的对外地址，暂时写上游原图")),
-                   "files": 0},
+           "ids": {"tag_tmdb_id": bool(cfg.get("tag_tmdb_id")),
+                   "tag_douban_id": bool(cfg.get("tag_douban_id")),
+                   # key 只在"有没有配"这一层露出，不把凭据写进公开的清单文件
+                   "tmdb_key": bool(str(cfg.get("tmdb_api_key") or "").strip()),
+                   "tmdb_host": str(cfg.get("tmdb_host") or ""),
+                   **id_stats(con)},
+           "nfo": {"write": bool(cfg.get("write_nfo")), "files": 0},
            "counts": db_counts(con), "kinds": {}}
     for kind in KINDS:
         # 说法跟着"包内带不带卷号目录"这个设置走：写死一种，改了设置页面就在说假话
@@ -1603,7 +1847,9 @@ def part_titles(kind: str, name: str, page: int = 1, per: int = 200) -> dict:
             paths.setdefault(r["key"], []).append(r["path"])
         items = []
         for key in keys:
-            mine = paths.get(key, [])
+            # 这一卷的文件清单里含同名 NFO，而这个接口说的是"这一部有几个 strm、几条线路"，
+            # 所以只把 .strm 数进去（开了 NFO 之后文件数刚好翻倍，混着报会看着奇怪）
+            mine = [p for p in paths.get(key, []) if p.endswith(".strm")]
             rows = list(con.execute("SELECT * FROM vod WHERE key=? ORDER BY src_name", (key,)))
             first = rows[0] if rows else None
             items.append({

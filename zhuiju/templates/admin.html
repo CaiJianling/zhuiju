@@ -612,13 +612,17 @@
     {% if st.note %}
     <p class="atip">上一轮各源停在哪：{{ st.note }}</p>
     {% endif %}
-    {% if smeta.nfo.write %}
-    <p class="atip">NFO：已写 {{ smeta.nfo.files }} 份（每个片名目录一份）。海报
-      {%- if smeta.nfo.poster_via_site %}走本站代理 <code>{{ smeta.nfo.base or '（还没有对外地址，暂时写原图）' }}</code>
-      —— 来源：{{ smeta.nfo.base_from }}{% if smeta.nfo.base_from == '最近访问地址' %}，
-      要固定就在下面「本站对外地址」里填一个{% endif %}
-      {%- else %}直接写上游原图地址（第三方图床多半有防盗链，Emby 可能取不到）{% endif %}。</p>
-    {% endif %}
+    {# ID 标签那一行：三个数缺一不可看 —— 开关开了但 key 没配，或者 key 配了但
+       一部都还没查，页面上不说清楚人就只会看到"名字里怎么还没有 [tmdbid=]" #}
+    <p class="atip">目录名 ID 标签：<b>tmdbid
+      {%- if smeta.ids.tag_tmdb_id %} 开{%- else %} 关{%- endif %}</b> ·
+      doubanid {%- if smeta.ids.tag_douban_id %} 开{%- else %} 关{%- endif %} ·
+      TMDB key {%- if smeta.ids.tmdb_key %} 已配{%- else %} <b>没配</b>（这一支不会打接口）{%- endif %}
+      —— 查到号 {{ smeta.ids.ok }} 部 / 确认没有 {{ smeta.ids.none }} 部 / 没查成 {{ smeta.ids.bad }} 部 /
+      还没查 {{ smeta.ids.pending }} 部（共 {{ smeta.ids.titles }} 部）。
+      上游自带豆瓣号的是 {{ smeta.ids.douban_titles }} 部。
+      {%- if st.ids %} 上一轮：问了 {{ st.ids.asked }} 部、命中 {{ st.ids.ok }} 部
+      {%- if st.ids.stopped %} · 停在「{{ st.ids.stopped }}」{% endif %}。{% endif %}</p>
 
     <div class="cols" data-grp="strm">
       <section class="asect" id="strm-zips" data-grp="strm">
@@ -723,6 +727,10 @@
           {% elif f.kind == 'int' %}
           <input type="number" name="{{ f.key }}" value="{{ f.value }}"
                  min="{{ f.lo }}" max="{{ f.hi }}" step="1">
+          {% elif f.secret %}
+          {# 密钥不回显，所以"留空"必须是"不改"而不是"清空"（判据在 save_settings） #}
+          <input type="password" name="{{ f.key }}" value="" autocomplete="off"
+                 placeholder="{% if f.filled %}已经存着了，留空=不改{% else %}还没配，留空就不查{% endif %}">
           {% else %}
           <input type="text" name="{{ f.key }}" value="{{ f.value }}"
                  placeholder="huya,suoni" autocomplete="off">
@@ -747,6 +755,12 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="mode" value="full">
         <button type="submit" class="fbtn">全量重建（改了窗口就按这个）</button>
+      </form>
+      {# TMDB 判过"确实没有"的那些不再自动重问（那是白打接口），但 TMDB 会往后补条目，
+         所以留一颗手动重查的按钮 —— 清完顺手起一轮，不然页面上数字不动 #}
+      <form method="post" action="{{ url_for('admin_strm_recheck') }}" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button type="submit" class="fbtn">重查 TMDB 说「没有」的那些（现在 {{ smeta.ids.none }} 条）</button>
       </form>
     </p>
 

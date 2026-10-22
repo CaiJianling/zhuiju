@@ -179,6 +179,18 @@ check("静态资源不挡（验证页自己要加载样式和 slider.js）",
 check("robots.txt 不挡（爬虫指令文件挡了就等于自断收录）", g1.get("/robots.txt").status_code == 200, None)
 check("退出登录不挡：被门禁锁在外面的人也要能把自己登出去",
       g1.post("/admin/logout", data={"csrf": "x"}).status_code in (302, 200), None)
+# Emby STRM 那一套的搬运口必须在豁免里：拿它的是 NAS 上的同步脚本，curl 过不去滑块，
+# 挡住的结果是 /strm/zip 回一段状态码 200 的 HTML —— 脚本存下一个几 KB 的"假 zip"
+st, _body = g1.get("/api/strm/manifest"), None
+check("STRM 清单接口不挡（脚本要拿它遍历分卷）", st.status_code == 200, st.status_code)
+r4 = g1.get("/strm/zip?name=nope.zip")
+check("分卷包下载口不挡：查无此包时给的应该是找不到，不是滑块页",
+      r4.status_code in (400, 404) and "text/html" not in (r4.headers.get("Content-Type") or ""),
+      (r4.status_code, r4.headers.get("Content-Type")))
+r5 = g1.get("/strm/file?path=movie/movie01/x.strm")
+check("单个 strm 文件口同样不挡（Emby 之外还有人拿它核对地址）",
+      r5.status_code not in (423,) and "text/html" not in (r5.headers.get("Content-Type") or ""),
+      (r5.status_code, r5.headers.get("Content-Type")))
 check("验证接口自己不挡自己（不然永远出不去）", g1.post("/api/human/challenge").status_code == 200, None)
 
 ch = g1.post("/api/human/challenge").get_json()

@@ -179,6 +179,17 @@ def _strm_notice(args, st: dict) -> str:
     cfg = st["settings"]
     if args.get("strm_err"):
         return "没保存：" + str(args.get("strm_err"))[:160]
+    if args.get("strm_recheck") is not None:
+        # 这一条必须排在 strm_run 前面判：那颗按钮起的就是"清完结论再跑一轮"，
+        # 两个结果要说在一句话里，否则人只看到"已拉起一轮后台任务"，
+        # 不知道清掉了多少条、也不知道清掉的那些会不会被重查
+        n = str(args.get("strm_recheck") or "0")
+        reason = str(args.get("why") or "")[:60]
+        if args.get("strm_run") == "1":
+            tail = "，并已拉起一轮去重查"
+        else:
+            tail = "，但那一轮没起来：" + reason if reason else "，但那一轮没起来"
+        return f"清掉 {n} 条「查过确实没有」的 TMDB 结论" + tail
     if args.get("strm_set"):
         return (f"已保存：窗口 {cfg['window_days']} 天 · 每卷 {cfg['part_files']} 个文件 · "
                 f"每请求间隔 {cfg['delay_ms']}ms · 每轮预算 {cfg['budget_seconds']}s。"
@@ -363,8 +374,14 @@ def create_app() -> Flask:
     # 门禁放行的前缀：静态资源、验证自己的两个接口、爬虫指令文件与退出登录。
     # /admin/logout 必须在里面：否则"退出"这个动作要先通过一道滑块，
     # 而人在被门禁页挡住时根本看不到自己已经登录的界面，等于把自己锁在里面。
+    # /strm/ 与 /api/strm/ 也必须在里面（这是 Emby STRM 那套的搬运口）：
+    # 挡滑块的意义是挡"来刷页面的人/机器人"，而这两个前缀没有页面 ——
+    # 拿它们的是 NAS 上的同步脚本，curl 过不去滑块，结果是 `/strm/zip` 回一段
+    # 状态码 200 的 HTML，脚本存下一个 4.5KB 的"movie01.zip"，比直接 403 难查得多。
+    # 这些包里只有上游公开的 m3u8 地址（本来就是各家采集站对外放出来的），
+    # 而且包名是 movie01/tv01 这种连续编号，藏是藏不住的，放行不改变暴露面。
     HUMAN_EXEMPT = ("/static/", "/api/human/", "/robots.txt", "/favicon.ico",
-                    "/admin/logout")
+                    "/admin/logout", "/strm/", "/api/strm/")
 
     @app.before_request
     def _human_gate():
@@ -812,6 +829,28 @@ def create_app() -> Flask:
         return redirect(url_for("admin", strm_run="1" if out.get("ok") else "0",
                                 why=str(out.get("error") or out.get("pid") or "")[:60], _anchor="strm"))
 
+    @app.post("/admin/strm/recheck")
+    def admin_strm_recheck():
+        """清掉「查过确实没有」的 ID 结论，并立刻催一轮去重查。
+
+        为什么要留这颗按钮：TMDB 是会往后补条目的（老片今天才被收录），所以 `none`
+        不能永远不再问；但也不该每轮自动重问 —— 那是把同一批查过的名字再打一遍接口。
+        清完顺手起一轮：不接着查的话页面上那个数字一动不动，人只会以为按钮坏了。
+        """
+        if not _authed():
+            return _login_page(None, 401)
+        if not _csrf_ok():
+            return _login_page("表单已过期，请重新提交", 400)
+        try:
+            n = strm_mod.reset_ids(state="none")
+        except Exception as exc:  # noqa: BLE001
+            return redirect(url_for("admin", strm_err=f"{type(exc).__name__}: {exc}"[:160],
+                                    _anchor="strm"))
+        out = strmjob.start_now()
+        return redirect(url_for("admin", strm_recheck=n,
+                                strm_run="1" if out.get("ok") else "0",
+                                why=str(out.get("error") or "")[:60], _anchor="strm"))
+
     @app.post("/admin/strm/export")
     def admin_strm_export():
         """立刻把库里的东西导出+打包。全量重建是"改了时间范围"之后该按的那一颗。
@@ -908,9 +947,6 @@ def create_app() -> Flask:
         # 这件事在 Python 里拼好整条 URL：Jinja 的函数调用不接受 `f(**d, k=v)` 这种混合写法
         # （直接 TemplateSyntaxError），留给模板就只能再加一个中间变量，不如这里一行搞定
         click_url = url_for("admin", **{**args_scope["click"], "tab": "detail"})
-        # NFO 里的海报是绝对地址，得知道"人是从哪个地址访问本站的"：
-        # 后台没填对外地址时就拿这次访问用的这个（反代下已被 TrustForwarded 修正过）
-        strm_mod.remember_host(request.host_url)
         return render_template(
             "admin.html", authed=True, error=None, csrf=_csrf_token(),
             tab=tab, tabs=ADMIN_TABS,

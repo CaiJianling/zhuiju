@@ -139,7 +139,10 @@ def status() -> dict:
         "last_trigger": _last[1],
         "state": {k: s.get(k) for k in ("at", "date", "ok", "pass", "seconds", "requests",
                                         "pages", "rows_new", "rows_changed", "sources_ok",
-                                        "sources_total", "window_days", "note", "mode")} if s else {},
+                                        "sources_total", "window_days", "note", "mode",
+                                        # 上一轮查 ID 查到什么程度、为什么没收：页面那一行
+                                        # 要说清"开关开了却一个号都没查到"是哪一种情况
+                                        "ids")} if s else {},
         "progress": {k: p.get(k) for k in ("started_at", "updated_at", "requests", "pages",
                                            "rows_new", "rows_changed", "note", "per_src",
                                            "pass_id", "budget", "window_days", "since")} if p else {},
