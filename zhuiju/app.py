@@ -632,6 +632,12 @@ def create_app() -> Flask:
                 hits=out.get("hits"), sources_ok=out.get("sources_ok"),
                 sources_total=out.get("sources_total"))
         imgproxy.register_all(out.get("results"))
+        if page == 1:
+            # 第一页顺手落一份服务端快照：SPA 换词不走整页刷新，右栏那块
+            # 「《X》的检索结果」以前只有直开 /s/<kw> 才拿得到数据。这里用的是
+            # 刚跑完的同一份结果，不再为同一批片并发查一遍所有源；写盘之后
+            # 紧接着直开 /s/<kw> 还能直接命中，不必等第二轮。
+            out["snapshot"] = seo_mod.snapshot_from(kw, out)
         return jsonify(out)
 
     @app.get("/api/catalog")

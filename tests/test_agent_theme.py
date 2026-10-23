@@ -614,9 +614,14 @@ check("网盘 / 目录 / 直达三个标签没有右栏（它们要的是整幅�
       and 'Tabs.Panel id="cloud"' in app_tsx and 'Tabs.Panel id="deep"' in app_tsx, None)
 check("接口状态与检索快照都没内容时整块不渲染（不留一张空卡片在页面上）",
       "if (!rows.length) return null;" in vod_ts and "if (!items.length) return null;" in vod_ts, None)
-check("检索快照只在「当前这个词就是落地词」那一屏出现（换过词就别把上一份摘要画出来）",
-      "const showSsr = !!kw && kw === boot.kw" in app_tsx
-      and "!!boot.snapshot.items?.length" in app_tsx, None)
+check("检索快照跟着当前这个词走：SPA 换词也从 /api/search 第一页拿到新的一份",
+      "const hasSnap = !!snap && snap.kw === kw" in app_tsx
+      and "if (d.snapshot) setSnap(d.snapshot);" in app_tsx
+      and "setSnap((cur) => (cur && cur.kw === kw ? cur : null));" in app_tsx, None)
+check("快照卡窄屏默认折叠、宽屏展开，且排在接口状态之后（桌面落在右栏最底下）",
+      'useMediaQuery("(min-width: 1280px)")' in vod_ts
+      and "const shown = open ?? wide;" in vod_ts
+      and app_tsx.index("<SourcesPanel") < app_tsx.index("<SnapshotCard"), None)
 check("前后台同一档 1680（顶栏、正文、页脚三处与后台共用同一条上限）",
       "max-w-[1680px]" in adminapp_tsx and app_tsx.count("max-w-[1680px]") == 3, None)
 

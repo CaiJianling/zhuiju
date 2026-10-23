@@ -114,23 +114,56 @@ def snapshot(kw: str, force: bool = False) -> dict:
         except Exception as exc:  # noqa: BLE001
             err = f"{type(exc).__name__}: {exc}"[:160]
             res = {"results": [], "sources_ok": 0, "sources_total": 0}
-        items = [{"title": r["title"], "year": r.get("year", ""), "type": r.get("type", ""),
-                  "remarks": r.get("remarks", ""), "n_sources": len(r.get("sources") or []),
-                  "url": "/s/" + _q(r["title"])}
-                 for r in res["results"][:24]]
-        data = {"kw": kw, "made_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "sources_ok": res.get("sources_ok", 0),
-                "sources_total": res.get("sources_total", 0),
-                "count": len(res.get("results") or []), "items": items,
-                "error": err, "from_cache": False}
-        try:
-            CACHE.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
-        except OSError:
-            pass
+        data = _pack(kw, res, err)
+        _save(path, data)
         return data
+
+
+def _pack(kw: str, res: dict, err: str | None = None) -> dict:
+    """一次检索结果 -> 快照要的那几个字段（直开 /s/ 与 SPA 搜索共用这一份形状）。"""
+    results = res.get("results") or []
+    items = [{"title": r["title"], "year": r.get("year", ""), "type": r.get("type", ""),
+              "remarks": r.get("remarks", ""), "n_sources": len(r.get("sources") or []),
+              "url": "/s/" + _q(r["title"])}
+             for r in results[:24]]
+    data = {"kw": kw, "made_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "sources_ok": res.get("sources_ok", 0),
+            "sources_total": res.get("sources_total", 0),
+            "count": len(results), "items": items,
+            "error": err, "from_cache": False}
+    # 摘要跟着快照一起走：SPA 换词时 boot.description 还是上一个词的，不能用
+    data["description"] = describe(kw, data)
+    return data
+
+
+def _save(path: Path, data: dict) -> None:
+    try:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def snapshot_from(kw: str, res: dict) -> dict:
+    """用一次已经跑完的搜索结果落一份快照（/api/search 第一页顺手调用）。
+
+    SPA 换词不刷新整页，右栏那块「《X》的检索结果」原本只在直开 /s/<kw> 时才有数据。
+    再为同一个词并发敲一遍所有源是白花一轮：手里这份就是同一页的合并结果，
+    按快照的字段裁一份写盘，面板立刻有内容，下一次直开 /s/<kw> 也能命中。
+    """
+    kw = clean_kw(kw)
+    data = _pack(kw, res)
+    lock = _kw_lock(kw)
+    # 不排队等：可能是 /s/ 那条路正在为同一个词建快照。面板要的是手里这份数据，
+    # 写盘只是顺手（让下一次直开直接命中），谁先写完算谁的，别为它把这轮响应拖住
+    if lock.acquire(blocking=False):
+        try:
+            _save(CACHE / f"seo-{_key(kw)}.json", data)
+        finally:
+            lock.release()
+    return data
 
 
 def _q(s: str) -> str:

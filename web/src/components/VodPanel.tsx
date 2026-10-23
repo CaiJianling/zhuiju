@@ -227,10 +227,19 @@ export function VodPanel({
 /** 接口状态：宽屏是右栏里一列表，窄屏默认折起来只留一行汇总。
  *  手机上这 15 行本来就没人逐条看，展开前它占了半屏，把结果顶到看不见；
  *  但它又必须一眼能查到（"是不是某个源挂了"），所以标题那行始终带着 N/M 可用。 */
-/** 检索快照那一栏。它本来就是给爬虫与禁用 JS 的那一份服务端渲染（JSON-LD 也读同一份数据），
+/** 检索快照那一栏。它本来是给爬虫与禁用 JS 的那一份服务端渲染（JSON-LD 也读同一份数据），
  *  对开着 JS 的人而言和左边的结果列表高度重复 —— 所以窄屏排到最底部并默认折起，
- *  展开后也只给 6 行的高度，在框里自己滚，不把整页撑长。宽屏留在右栏里默认展开。 */
-export function SnapshotCard({ kw, snapshot, description }: { kw: string; snapshot: Snapshot; description: string }) {
+ *  展开后也只给 6 行的高度，在框里自己滚，不把整页撑长。宽屏留在右栏最底下默认展开。
+ *  数据不再只认直开 /s/<kw> 那一份：SPA 换词时 /api/search 第一页会带回同一个词的新快照。 */
+export function SnapshotCard({
+  kw,
+  snapshot,
+  description,
+}: {
+  kw: string;
+  snapshot: Snapshot;
+  description?: string;
+}) {
   const wide = useMediaQuery("(min-width: 1280px)");
   const [open, setOpen] = useState<boolean | null>(null);
   const shown = open ?? wide;
@@ -279,7 +288,9 @@ export function SnapshotCard({ kw, snapshot, description }: { kw: string; snapsh
       </h2>
       {shown ? (
         <>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{description}</p>
+          {description ? (
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{description}</p>
+          ) : null}
           <div ref={setBox} className="scroll-thin relative mt-3 overflow-y-auto">
             <ul className="space-y-1.5">
               {items.map((it, i) => (

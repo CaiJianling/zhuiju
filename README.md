@@ -158,7 +158,7 @@ zhuiju/
   cloudsearch.py    网盘 / 磁力站结果页抓取与解析（只收同域、带逐站状态）；site_rows() 给无关键词时那份不联网的站点清单
   hot.py            猜你想搜（CMS 最新流 + 豆瓣候选回查 + ac=detail 补海报，后台重建、6 小时缓存、按页取；
                     每行带 src/vid，供海报右键直接取详情）
-  seo.py            /s/ 落地页快照、查询记录、robots 与 sitemap
+  seo.py            /s/ 落地页快照（/api/search 第一页也顺手落一份）、查询记录、robots 与 sitemap
   imgproxy.py       海报代理（补防盗链 Referer、忽略自签证书、拦内网；内存 + 磁盘两层缓存）
   __init__.py       包导入时读 zhuiju.env（venv 在站点外面时在那儿指一次，处处都认）
   autoupdate.py     访问时触发的后台更新（STEPS 唯一清单、逻辑日、锁文件 + 子进程 PID 判活、

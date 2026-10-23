@@ -286,6 +286,7 @@ check("注入串当普通条件处理、不报错（view 仍 200）",
 print("\n9) 埋点：三个入口各记一条")
 _real_search = app_mod.search
 _real_snapshot = app_mod.seo_mod.snapshot
+_real_snapshot_from = app_mod.seo_mod.snapshot_from
 _real_cloud = app_mod.cloudsearch.search
 app_mod.search = lambda kw, page=1: {"keyword": kw, "results": [{"title": "x"}],
                                      "hits": 7, "sources_ok": 9, "sources_total": 10,
@@ -293,9 +294,21 @@ app_mod.search = lambda kw, page=1: {"keyword": kw, "results": [{"title": "x"}],
 app_mod.seo_mod.snapshot = lambda kw, force=False: {
     "kw": kw, "count": 4, "sources_ok": 8, "sources_total": 10, "items": [],
     "from_cache": False}
+# /api/search 第一页会顺手落快照；这里换成假的，别让测试往真实 data/cache 里写文件
+app_mod.seo_mod.snapshot_from = lambda kw, res: {
+    "kw": kw, "count": len(res.get("results") or []), "items": [],
+    "sources_ok": res.get("sources_ok"), "sources_total": res.get("sources_total")}
 app_mod.cloudsearch.search = lambda kw: {"keyword": kw, "sites": [], "entries": 2,
                                          "with_results": 1, "total_sites": 5}
 try:
+    # 快照随第一页下发、第二页不再带 —— 这两发先跑，别算进下面"三个入口各记一条"的计数
+    r_api = client.get("/api/search?kw=" + "测试埋点A")
+    check("第一页的搜索结果顺带带回一份服务端快照（面板不用另打一次）",
+          (r_api.get_json().get("snapshot") or {}).get("kw") == "测试埋点A",
+          r_api.get_json().get("snapshot"))
+    r_p2 = client.get("/api/search?kw=" + "测试埋点A&page=2")
+    check("第二页不再重复落快照", "snapshot" not in (r_p2.get_json() or {}),
+          list((r_p2.get_json() or {}).keys()))
     before = stats_mod.list_queries({})["total"]
     client.get("/api/search?kw=" + "测试埋点A")
     client.get("/s/" + "测试埋点B")
@@ -323,12 +336,14 @@ try:
 finally:
     app_mod.search = _real_search
     app_mod.seo_mod.snapshot = _real_snapshot
+    app_mod.seo_mod.snapshot_from = _real_snapshot_from
     app_mod.cloudsearch.search = _real_cloud
 
 print("\n10) 统计写入失败也不能影响搜索")
 app_mod.search = lambda kw, page=1: {"keyword": kw, "results": [], "hits": 0,
                                      "sources_ok": 0, "sources_total": 0, "status": [],
                                      "dropped_noise": 0}
+app_mod.seo_mod.snapshot_from = lambda kw, res: {"kw": kw, "count": 0, "items": []}
 _real_db = stats_mod.DB
 stats_mod.DB = TMP / "no" / "such" / "stats.db"
 try:
@@ -338,6 +353,7 @@ finally:
     stats_mod.DB = _real_db
     app_mod.search = _real_search
     app_mod.seo_mod.snapshot = _real_snapshot
+    app_mod.seo_mod.snapshot_from = _real_snapshot_from
 
 print("\n11) 退出登录")
 # (c) 判据不变，锚点换：csrf 从 view 拿；"再进 /admin 又要口令" 的门槛在 /api/admin/view 401

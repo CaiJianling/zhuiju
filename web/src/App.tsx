@@ -5,7 +5,7 @@ import { useAuthTick, useGateLocked } from "./auth";
 import { boot } from "./boot";
 import { useRefresh } from "./hooks/useRefresh";
 import { appendPage, stackFrom, type Stack } from "./stack";
-import type { CatalogResult, CloudResult, DeeplinksResult, HotRow } from "./types";
+import type { CatalogResult, CloudResult, DeeplinksResult, HotRow, Snapshot } from "./types";
 import { DetailDrawer } from "./components/DetailDrawer";
 import { GateModal, LockedView } from "./components/Gate";
 import { HotSection, hotNote } from "./components/HotSection";
@@ -93,6 +93,11 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("vod");
   // 结果不再一页换一页，而是**往后叠**：stack 就是已经叠好的那一叠 + 各页合起来的数
   const [stack, setStack] = useState<Stack | null>(null);
+  // 服务端快照：直开 /s/<kw> 时首帧就有（boot 里那份），SPA 换词时由 /api/search
+  // 第一页一并带回来。只认当前这个词 —— 上一份不能留在这儿冒充新的。
+  const [snap, setSnap] = useState<Snapshot | null>(
+    boot.kw && boot.snapshot?.items?.length ? boot.snapshot : null,
+  );
   const [load, setLoad] = useState<{ loading: boolean; appending: boolean; error: string }>({
     loading: !!boot.kw,
     appending: false,
@@ -177,6 +182,7 @@ export default function App() {
   useEffect(() => {
     if (!kw) {
       setStack(null);
+      setSnap(null);
       setLoad({ loading: false, appending: false, error: "" });
       return;
     }
@@ -187,11 +193,14 @@ export default function App() {
     // 换词/换起始页时先把上一叠收掉：否则加载的这几秒里，屏幕上还是上一个词的结果。
     // 同一个词重查（比如刚过完验证）则留着旧内容，边上那条说"正在重取这一叠"。
     setStack((cur) => (cur && cur.kw === kw && cur.from === page ? cur : null));
+    // 快照同理：同一个词重查（过完验证）时留着，换词就先收掉，别把上一个词的摘要画在这儿
+    setSnap((cur) => (cur && cur.kw === kw ? cur : null));
     setLoad((s) => ({ ...s, loading: true, error: "" }));
     api
       .search(kw, page, ac.signal)
       .then((d) => {
         setStack(stackFrom(d, Math.round(performance.now() - t0)));
+        if (d.snapshot) setSnap(d.snapshot);
         setLoad((s) => ({ ...s, loading: false, error: "" }));
       })
       .catch((e) => {
@@ -350,7 +359,8 @@ export default function App() {
   }
 
   const hot = boot.hot;
-  const showSsr = !!kw && kw === boot.kw && !!boot.snapshot.items?.length;
+  // 有当前这个词的快照才画那一块：直开时来自 boot，SPA 换词时来自 /api/search 第一页
+  const hasSnap = !!snap && snap.kw === kw && !!snap.items?.length;
   const groupOf = (kind: "movie" | "tv"): { rows: HotRow[]; total: number } & typeof hot => {
     const list = (hot[kind] || []) as HotRow[];
     return { ...hot, rows: list, total: (hot[`${kind}_total`] as number) ?? list.length };
@@ -431,9 +441,13 @@ export default function App() {
                       />
                     </div>
                   ) : null}
-                  {showSsr ? (
+                  {hasSnap && snap ? (
                     <div>
-                      <SnapshotCard kw={kw} snapshot={boot.snapshot} description={boot.description} />
+                      <SnapshotCard
+                        kw={kw}
+                        snapshot={snap}
+                        description={snap.description || (kw === boot.kw ? boot.description : "")}
+                      />
                     </div>
                   ) : null}
                 </aside>

@@ -82,6 +82,30 @@ d1 = seo.describe("庆余年", {"count": 13, "sources_ok": 10, "sources_total": 
                             "items": [{"title": "庆余年第二季"}, {"title": "庆余年 第一季"}]})
 check("有结果时含源数与条数", "10/10" in d1 and "13" in d1, d1)
 
+print("\n5.5) 快照可以由一次搜索结果直接落盘（SPA 换词不再为同一批片再查一遍）")
+_tmp_cache = Path(tempfile.mkdtemp(prefix="zhuiju_seo_cache_"))
+_old_cache = seo.CACHE
+seo.CACHE = _tmp_cache
+try:
+    res = {"results": [
+        {"title": "庆余年", "year": "2019", "type": "国产剧", "remarks": "全46集",
+         "sources": [{"id": "a"}, {"id": "b"}]},
+        {"title": "庆余年 第二季", "year": "2024", "type": "国产剧", "remarks": "全36集",
+         "sources": [{"id": "c"}]},
+    ], "sources_ok": 7, "sources_total": 9}
+    s1 = seo.snapshot_from("庆余年", res)
+    check("快照字段与直开 /s/ 那份同形（kw/count/items/description）",
+          s1["kw"] == "庆余年" and s1["count"] == 2 and len(s1["items"]) == 2
+          and "7/9" in s1["description"] and s1["items"][0]["n_sources"] == 2, s1)
+    check("落盘后下一次 /s/ 直接命中缓存，不再跑一轮并发检索",
+          seo.snapshot("庆余年")["from_cache"] is True, None)
+    check("只留前 24 条（快照面板本来也只列这点）",
+          len(seo.snapshot_from("长列表", {
+              "results": [{"title": f"片{i}", "sources": []} for i in range(30)],
+              "sources_ok": 1, "sources_total": 1})["items"]) == 24, None)
+finally:
+    seo.CACHE = _old_cache
+
 print("\n6) 模板里 dict.items 的坑（Jinja 会把 .items 解析成字典方法）")
 # (b) 这条原来读 templates/index.html。那份模板已经不上屏了，前台唯一的壳是 shell.html，
 # 同一个坑在壳里照样会踩（快照既给 #nojs 也给 boot.snapshot），所以判据搬过去继续钉。
@@ -459,8 +483,10 @@ check("起始页与取数用的是同一个 state（page 进 commit、也进取�
       "const [page, setPage] = useState(boot.page || 1);" in app_ts
       and "api\n      .search(kw, page, ac.signal)" in app_ts
       and "}, [kw, page, tick]);" in app_ts, None)
-check("从落地页换词时服务端那份旧摘要整块不再画出来（不是藏起来：判据就是当前词等不等于 boot.kw）",
-      "const showSsr = !!kw && kw === boot.kw" in app_ts and "{showSsr ? (" in app_ts, None)
+check("换词时旧摘要整块不再画出来：只认 snapshot.kw 等于当前词，不拿 boot.kw 当判据",
+      "const hasSnap = !!snap && snap.kw === kw" in app_ts
+      and "{hasSnap && snap ? (" in app_ts
+      and "setSnap((cur) => (cur && cur.kw === kw ? cur : null));" in app_ts, None)
 
 c14 = app_mod.create_app().test_client()
 r14 = c14.get("/?kw=" + urllib.parse.quote("庆余年"), follow_redirects=False)

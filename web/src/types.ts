@@ -58,6 +58,9 @@ export interface SearchResult {
   sources_ok: number;
   sources_total: number;
   hits: number;
+  /** 第一页随结果一起下发的服务端快照：SPA 换词不刷新整页，右栏那块「《X》的检索结果」
+   *  就是靠它拿到当前这个词的数据；后面追加页不再带。 */
+  snapshot?: Snapshot;
 }
 
 /** /api/deeplinks：把片名带到各家站内搜索页 */
@@ -275,6 +278,8 @@ export interface Snapshot {
   sources_total?: number;
   count?: number;
   items?: { title: string; year: string; type: string; remarks: string; n_sources: number; url: string }[];
+  /** 服务端按这份快照写的摘要（与 boot.description 同源，SPA 换词后也能用） */
+  description?: string;
   error?: string;
   from_cache?: boolean;
 }
