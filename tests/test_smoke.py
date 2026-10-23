@@ -348,13 +348,15 @@ try:
     check("空的一页：has_more 与结果数都为 0，翻页条该整条收掉",
           r["has_more"] is False and r["results"] == [] and r["limit"] == L, r["hits"])
     # 前端只认服务端这一句，且"这一页一条都没合出来"时不再邀请人往下翻
-    appjs = (Path("zhuiju") / "static" / "app.js").read_text(encoding="utf-8")
-    body = appjs[appjs.index("function renderPager"):appjs.index("function pagerOnFail")]
-    check("renderPager 用的是 d.has_more，旧的 hits 算术已不在这一屏（注释里提一句不算）",
-          "const hasMore = !!d.has_more && d.results.length > 0;" in body
-          and "d.hits >= 8" not in body and "hits >=" not in body, None)
+    # (a) 这条原来读的是 static/app.js 里的 renderPager。那份脚本已经不上屏了：翻页现在在
+    # web/src/components/VodPanel.tsx 里，判据同一条，写法换成 React 那一套。
+    vod_ts = (Path("web") / "src" / "components" / "VodPanel.tsx").read_text(encoding="utf-8")
+    pager = vod_ts[vod_ts.index("const hasMore"):vod_ts.index("d.results.map")]
+    check("翻页判据用的是 d.has_more，旧的 hits 算术已不在这一屏（注释里提一句不算）",
+          "const hasMore = !!d.has_more && d.results.length > 0;" in vod_ts
+          and "d.hits >=" not in pager and "hits >=" not in pager, None)
     check("这一页合完是 0 条时「下一页」按住（不然点进去还是空的）",
-          "d.results.length > 0" in body, None)
+          "d.results.length > 0" in vod_ts and "isDisabled={!hasMore" in vod_ts, None)
 finally:
     search_mod.fetch_one, search_mod.load_sources = real_fetch, real_load
 

@@ -1,0 +1,128 @@
+{# 前台只剩这一个 HTML 壳：界面全部由 React（/static/spa/）画，这里只管三件事 ——
+   1) SEO（title/description/canonical/og/JSON-LD，形状与旧版 index.html 一致）
+   2) 主题首帧（读 React 那套 heroui-theme 键，避免"先白一下再翻黑"）
+   3) 服务端渲染的那一份内容：只在爬虫豁免与禁用 JS 时才看得见，
+      真人拿到的永远是一个空壳 + 接口回 423 后弹出来的滑块。 #}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <script>
+    /* 这一段必须在样式之前跑完：useTheme 认的就是 <html> 上的 class 与 data-theme，
+       等 React  hydrate 时才补，首帧就会是亮色闪一下再变暗。 */
+    (function () {
+      var d = document.documentElement;
+      d.classList.add('js');
+      var t = 'system';
+      try { t = localStorage.getItem('heroui-theme') || 'system'; } catch (e) { }
+      if (t !== 'light' && t !== 'dark') t = 'system';
+      var r = t === 'system'
+        ? (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        : t;
+      d.classList.add(r);
+      d.setAttribute('data-theme', r);
+    })();
+  </script>
+  {# viewport-fit=cover：不写这个，env(safe-area-inset-*) 永远是 0，
+     底部抽屉会压在全屏 iPhone 的 home indicator 上 #}
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}">
+  <link rel="canonical" href="{{ seo.canonical }}">
+  <meta property="og:type" content="{% if seo.kw %}video.movie{% else %}website{% endif %}">
+  <meta property="og:title" content="{{ seo.title }}">
+  <meta property="og:description" content="{{ seo.description }}">
+  <meta property="og:url" content="{{ seo.canonical }}">
+  <meta name="robots" content="index,follow">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfbfc">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121214">
+  <script type="application/ld+json">
+  {%- if seo.kw and seo.snapshot['items'] %}
+  {"@context":"https://schema.org","@type":"ItemList","name":"《{{ seo.kw }}》相关影视资源",
+   "numberOfItems": {{ seo.snapshot['count'] or 0 }},"itemListElement": [
+   {%- for it in seo.snapshot['items'][:12] %}
+   {"@type":"ListItem","position":{{ loop.index }},"name":{{ it.title | tojson }},
+    "url": "{{ seo.site }}/s/{{ it.title | urlencode }}"}{{ "," if not loop.last }}
+   {%- endfor %} ]}
+  {%- else %}
+  {"@context":"https://schema.org","@type":"WebSite","name":"追剧资源搜索",
+   "url":"{{ seo.site }}/",
+   "potentialAction":{"@type":"SearchAction","target":"{{ seo.site }}/s/{search_term_string}",
+     "query-input":"required name=search_term_string"}}
+  {%- endif %}
+  </script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔍</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='spa/app.css') }}?v={{ asset_v }}">
+  {# 无 JS 时这一份服务端渲染的内容才露面，所以给它配一小套最简样式：
+     不引第二份 CSS，就这几条，够用且不拖慢正常那条路（那时整块是 display:none） #}
+  <style>
+    #nojs { max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; color: #17171a; font: 14px/1.65 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    #nojs h1 { font-size: 20px; margin: 0 0 4px; }
+    #nojs p.lede { margin: 0 0 18px; color: #5b5b63; font-size: 13px; }
+    #nojs form { display: flex; gap: 8px; margin-bottom: 20px; }
+    #nojs input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid #d4d4d8; border-radius: 999px; font-size: 15px; }
+    #nojs button { padding: 10px 18px; border: 0; border-radius: 999px; background: #2d4fce; color: #fff; font-size: 15px; cursor: pointer; }
+    #nojs h2 { font-size: 15px; margin: 22px 0 8px; border-bottom: 1px solid #e6e6ea; padding-bottom: 6px; }
+    #nojs ul { list-style: none; margin: 0; padding: 0; }
+    #nojs li { padding: 6px 0; border-bottom: 1px solid #f0f0f2; }
+    #nojs li span { display: block; color: #7a7a82; font-size: 12px; }
+    #nojs a { color: #2d4fce; text-decoration: none; }
+    #nojs .note { margin-top: 24px; color: #7a7a82; font-size: 12px; }
+    @media (prefers-color-scheme: dark) {
+      #nojs { color: #eceaee; }
+      #nojs p.lede, #nojs li span, #nojs .note { color: #9a9aa2; }
+      #nojs input { background: #232327; border-color: #35353b; color: inherit; }
+      #nojs h2, #nojs li { border-color: #2c2c31; }
+      #nojs a { color: #8ea6ff; }
+    }
+  </style>
+</head>
+<body>
+  {# React 的挂载点。真人即使禁了 JS 也不会看到"空白页"——下面那块 #nojs 就是给他的 #}
+  <div id="app"></div>
+
+  {% if not boot.locked %}
+  <div id="nojs">
+    <h1>追剧资源搜索</h1>
+    <p class="lede">{{ seo.description }}</p>
+    <form method="get" action="{{ seo.site }}/">
+      <input name="kw" placeholder="例如：庆余年 / 流浪地球 / 繁花" maxlength="60">
+      <button type="submit">搜索</button>
+    </form>
+
+    {% if seo.kw and seo.snapshot['items'] %}
+    <h2>《{{ seo.kw }}》的检索结果</h2>
+    <ul>
+      {% for it in seo.snapshot['items'] %}
+      <li><a href="{{ it.url }}">{{ it.title }}</a>
+        <span>{{ [it.year, it.type, it.remarks] | select | join(' · ') }}
+          {%- if it.n_sources %} · {{ it.n_sources }} 个源{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if not seo.kw %}
+      {% for sec, label in (('movie', '电影'), ('tv', '电视剧')) %}
+        {% set rows = seo.hot[sec] %}
+        {% if rows %}
+        <h2>猜你想搜 · {{ label }}</h2>
+        <ul>
+          {% for x in rows %}
+          <li><a href="{{ x.url }}">{{ x.title }}</a>
+            <span>{{ [x.year, x.type] | select | join(' · ') }}
+              {%- if x.n_sources %} · {{ x.n_sources }} 个源{% endif %}</span></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+
+    <p class="note">启用 JavaScript 可以使用完整的界面（并发检索、换源看、详情与播放线路）。
+      结果来自第三方公开接口，链接指向外部站点，请注意甄别。</p>
+  </div>
+  {% endif %}
+
+  <script id="boot-data" type="application/json">{{ boot | tojson }}</script>
+  <script type="module" src="{{ url_for('static', filename='spa/app.js') }}?v={{ asset_v }}"></script>
+</body>
+</html>

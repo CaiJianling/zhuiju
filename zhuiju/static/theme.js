@@ -1,54 +1,84 @@
-/* 主题切换：亮 / 暗 / 跟随系统。
-   预置脚本（templates/_theme.html）在 CSS 之前就把 data-theme 定好，这里只负责交互。 */
+/* 后台的亮/暗/跟随系统切换。前台那一套是 React 的 useTheme（web/src/components/ThemeToggle.tsx），
+   这里是它的无框架等价物：同一个 localStorage 键、同一对 <html> 属性，
+   于是前后台共享同一份偏好 —— 切一次，两边一起翻面。 */
 (function () {
-  var KEY = "zhuiju_theme";
-  var OPTS = ["auto", "light", "dark"];
-  var LABEL = { auto: "跟随系统", light: "亮色", dark: "暗色" };
+  "use strict";
+
+  var KEY = "heroui-theme";                 // HeroUI useTheme 认的键名，别改
+  var OPTS = ["system", "light", "dark"];
+  var LABEL = { system: "跟随系统", light: "亮色", dark: "暗色" };
+  var root = document.documentElement;
 
   function stored() {
-    try { return localStorage.getItem(KEY) || "auto"; } catch (e) { return "auto"; }
+    var v = "system";
+    try { v = localStorage.getItem(KEY) || "system"; } catch (e) { }
+    return OPTS.indexOf(v) >= 0 ? v : "system";
   }
-  function apply(mode, animate) {
-    try { localStorage.setItem(KEY, mode); } catch (e) { /* 无痕模式写不了，本次照样生效 */ }
-    var dark = mode === "dark" || (mode === "auto" &&
-      window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    // 只在用户主动切换时渐变色：首屏由 _theme.html 预置，不走这里，所以不会一进来就闪一遍
-    if (animate) {
-      var root = document.documentElement;
-      root.classList.add("theme-anim");
-      clearTimeout(apply.t);
-      apply.t = setTimeout(function () { root.classList.remove("theme-anim"); }, 340);
-    }
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    document.documentElement.dataset.themeMode = mode;
-    sync();
+
+  // "跟随系统"不是一个可落地的颜色，要问系统才知道现在到底是亮还是暗
+  function resolve(mode) {
+    if (mode !== "system") return mode;
+    return window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
-  function text(el) {
-    var mode = document.documentElement.dataset.themeMode || stored();
-    var cur = document.documentElement.dataset.theme === "dark" ? "暗色" : "亮色";
-    el.textContent = "（" + LABEL[cur === "暗色" ? "dark" : "light"] + " · " + LABEL[mode] + "）";
+
+  // 实际生效的那一档（按钮文案要说的是它）
+  function applied() {
+    return resolve(stored());
   }
+
+  function write(mode) {
+    OPTS.forEach(function (t) { if (t !== "system") root.classList.remove(t); });
+    // 这里必须直接问系统，不能用 applied()：调用 write 的时候 localStorage 还是**上一个**选择，
+    // 从 stored() 往下解会把"跟随系统"解析成旧的 dark/light，现象是按钮说"亮色"而页面还黑着
+    var r = resolve(mode);
+    root.classList.add(r);
+    root.setAttribute("data-theme", r);
+  }
+
   function sync() {
+    var mode = stored(), cur = applied();
+    var text = mode === "system" ? LABEL.system + " · " + LABEL[cur] : LABEL[mode];
     Array.prototype.forEach.call(document.querySelectorAll("[data-theme-toggle]"), function (b) {
-      text(b);
+      b.textContent = text;
+      b.setAttribute("aria-label", "界面主题：" + text);
     });
   }
+
+  function apply(mode, animate) {
+    if (animate) {
+      // 只在切换这 0.3s 里给全局挂过渡，之后立刻摘掉：常驻会把 hover 拖慢、长表格掉帧
+      root.classList.add("theme-anim");
+      setTimeout(function () { root.classList.remove("theme-anim"); }, 380);
+    }
+    write(mode);
+    try {
+      localStorage.setItem(KEY, mode);
+      return true;
+    } catch (e) {
+      return false;   // 无痕或禁了存储：这次生效，关掉就忘，页面上要如实说
+    }
+  }
+
   document.addEventListener("click", function (e) {
-    var b = e.target.closest("[data-theme-toggle]");
+    var b = e.target.closest && e.target.closest("[data-theme-toggle]");
     if (!b) return;
-    e.preventDefault();
-    var mode = document.documentElement.dataset.themeMode || stored();
-    apply(OPTS[(OPTS.indexOf(mode) + 1) % OPTS.length], true);
+    var next = OPTS[(OPTS.indexOf(stored()) + 1) % OPTS.length];
+    var saved = apply(next, true);
+    sync();
+    var label = next === "system" ? LABEL.system + "（现在是" + LABEL[applied()] + "）" : LABEL[next];
+    b.textContent = saved ? "已保存 · " + label : "这台浏览器不给存，这次生效";
+    setTimeout(sync, 1800);
   });
-  // 选"跟随系统"时，系统换了配色页面要立刻跟着换（同样带渐变）
+
+  // 系统偏好变了：只有"跟随系统"的人该跟着动，手动锁了亮/暗的人不许被翻面
   if (window.matchMedia) {
-    var mq = window.matchMedia("(prefers-color-scheme: dark)");
-    var onSys = function () {
-      if ((document.documentElement.dataset.themeMode || stored()) === "auto") apply("auto", true);
-    };
+    var mq = matchMedia("(prefers-color-scheme: dark)");
+    var onSys = function () { if (stored() === "system") apply("system", true); };
     if (mq.addEventListener) mq.addEventListener("change", onSys);
     else if (mq.addListener) mq.addListener(onSys);
   }
+
+  write(stored());
   sync();
-  window.ZHUIJU_THEME = { apply: apply, sync: sync };
+  window.ZHUIJU_THEME = { apply: apply, sync: sync, OPTS: OPTS, stored: stored, applied: applied };
 })();

@@ -830,27 +830,51 @@ check("?abs=0 时仍然只给相对地址（不受 Host 影响）",
       and bool(d0["Movies"] or d0["TVs"]),
       {k: list(v.values())[:1] for k, v in d0.items()})
 
-print("\n13) 后台页与登录门槛")
-r = client.get("/admin")
-check("没登录时后台仍是口令页（STRM 设置不能公开改）", r.status_code == 401, r.status_code)
-check("口令页里看不到采集设置", "采集时间范围" not in r.get_data(as_text=True))
-tok = re.search(r'name="csrf" value="([0-9a-f]+)"', r.get_data(as_text=True)).group(1)
+print("\n13) 后台页与登录门槛（后台已转 React：门槛在 /api/admin/view，那一屏数据在它的 JSON 里）")
+# (a) 后台转 React 后 /admin 只是一个壳（admin_shell.html + spa/admin.js），
+# Emby STRM 那一屏的数据全在 GET /api/admin/view?tab=strm 的 JSON 里（smeta / sspec / sjob）。
+# 没登录时这个接口回 401，真正的门槛从「/admin 回口令页」搬到了这里。原来钉 HTML 的每条判据逐条搬：
+# 数据搬到 view 的 smeta/sspec/sjob，写法（表单、按钮、四类状态文案）搬到 web/src/admin/Strm.tsx。
+strm_tsx = (BASE / "web" / "src" / "admin" / "Strm.tsx").read_text(encoding="utf-8")
+ui_tsx = (BASE / "web" / "src" / "admin" / "ui.tsx").read_text(encoding="utf-8")
+admin_api_ts = (BASE / "web" / "src" / "admin" / "api.ts").read_text(encoding="utf-8")
+shell = client.get("/admin").get_data(as_text=True)
+denied = client.get("/api/admin/view?tab=strm").get_json()
+# (a) 「没登录时后台仍是口令页」：壳本身是公开的 200，门槛挪到了 view 的 401。
+#     「口令页里看不到采集设置」：未登录的 view body 里根本没有 smeta/sspec 这些字段。
+check("没登录时后台壳仍公开 200，但真正的门槛在 /api/admin/view 回 401（STRM 设置不能公开改）",
+      client.get("/admin").status_code == 200 and denied.get("authed") is False
+      and client.get("/api/admin/view?tab=strm").status_code == 401, denied.get("authed"))
+check("未登录的 view 里没有任何采集设置或分卷数据",
+      "smeta" not in denied and "sspec" not in denied, list(denied)[:8])
+tok = denied["csrf"]
 admin_mod.set_password("strm-test-mima")
 r = client.post("/admin/login", data={"csrf": tok, "password": "strm-test-mima"})
 check("登录成功跳回 /admin", r.status_code == 302, r.status_code)
-r = client.get("/admin")
-page = r.get_data(as_text=True)
-check("登录后 200", r.status_code == 200, r.status_code)
-check("后台出现了 Emby STRM 那一节", 'id="strm"' in page and "Emby STRM" in page)
-check("分卷表里有 movie01 和下载链接", "movie01" in page and "/strm/zip?name=movie01.zip" in page,
-      re.findall(r'href="(/strm/zip[^"]*)"', page)[:2])
-check("设置表单带 csrf（不然是个可被外部提交的表单）",
-      'name="csrf"' in page and 'action="/admin/strm/settings"' in page)
-check("时间范围这一项在页面上（用户点名要能后台设）",
-      'name="window_days"' in page and "采集时间范围" in page)
-check("页面上写了命名规则（为什么一个文件只有一集）",
-      "片名 (年份)" in page and "一个 strm 只对应一部片" in page)
-tok = re.search(r'name="csrf" value="([0-9a-f]+)"', page).group(1)
+sv = client.get("/api/admin/view?tab=strm").get_json()
+# (a) 「登录后 200」：壳 200 且后台入口 admin.js 上屏，view 回 authed=True。
+check("登录后台壳与 view 都上屏（壳里挂着后台入口 spa/admin.js、view 回 authed=True）",
+      "spa/admin.js" in shell and sv.get("authed") is True, (shell.count("spa/admin.js"), sv.get("authed")))
+check("后台出现了 Emby STRM 这一标签（标签名与它归的几块由服务端 tabs 下发）",
+      any(t["id"] == "strm" and t["label"] == "Emby STRM"
+          and [b[0] for b in t["blocks"]] == ["strm", "strm-zips", "strm-src"] for t in sv["tabs"]),
+      [(t["id"], t["label"]) for t in sv["tabs"]])
+parts = sv["smeta"]["kinds"]["movie"]["parts"]
+check("分卷表里有 movie01 且带指向 /strm/zip 的下载地址（数据来自 view 的 smeta.kinds）",
+      any(p["name"] == "movie01" and p["zip_url"] == "/strm/zip?name=movie01.zip" for p in parts),
+      [(p["name"], p["zip_url"]) for p in parts][:3])
+check("设置表单提交走 postForm→fetch、csrf 从请求头带（不然是个可被外部提交的表单）",
+      'postForm("/admin/strm/settings"' in strm_tsx and '"X-CSRF-Token": csrf' in admin_api_ts, None)
+sspec = sv["sspec"]
+check("时间范围这一项在设置里（用户点名要能后台设）",
+      any(f["key"] == "window_days" and "采集时间范围" in f["label"] for f in sspec),
+      [(f["key"], f["label"]) for f in sspec][:4])
+# (b) 旧那句「一个 strm 只对应一部片/一集」的解释散文只在死掉的 admin.html 里，SPA 不渲染它；
+#     这条不变量还活着的另一半是命名规则本身（片名 (年份)），它随设置项的 help 由服务端下发。
+check("命名规则里写了片名 (年份) 这一格式（随设置项 help 下发；那段解释散文随老模板一起退役）",
+      any("片名 (年份)" in (f.get("help") or "") for f in sspec)
+      and "f.help" in strm_tsx, [f["key"] for f in sspec if f.get("help")])
+tok = sv["csrf"]
 r = client.post("/admin/strm/settings", data={"csrf": tok, "window_days": "90",
                                              "part_files": "3000", "delay_ms": "400",
                                              "workers": "3", "budget_seconds": "900",
@@ -894,26 +918,37 @@ strm.record_vod(c, "huya", "虎牙资源", mk("重查测试片", "2026", "动作
 strm.save_id(c, kk, "movie", "重查测试片", "2026", "", "none", "名字或年份没对上", 1)
 c.commit()
 c.close()
-r = client.get("/admin")
-page = r.get_data(as_text=True)
-check("页面说得出 ID 这一项的状态（开/关、key 配没配、命中多少、还剩多少没查）",
-      "目录名 ID 标签" in page and "还没查" in page and re.search(r"查到号 \d+ 部", page),
-      re.findall(r"目录名 ID 标签[^<]{0,160}", page)[:1])
-check("密钥那一栏是 password 输入框且不回显存着的值（页面源码里不该躺着凭据）",
-      'type="password" name="tmdb_api_key"' in page
-      and 'value="testkey12345678"' not in page,
-      re.findall(r'<input[^>]*tmdb_api_key[^>]*>', page)[:1])
-check("已经存了 key 时页面上要有「已经存着了」这句提示", "已经存着了" in page)
+sv2 = client.get("/api/admin/view?tab=strm").get_json()
+lines = sv2["sjob"]["lines"]
+sspec2 = sv2["sspec"]
+# (a) 旧几条都从 /admin 的 HTML 里 grep 文案；这些文案是服务端算好放进 view 的
+#     sjob.lines（ID 那一行、NFO 那一行）与 sspec（每个设置项的 label/secret/filled）里，
+#     渲染写法则在 Strm.tsx。逐条搬过去钉。
+check("后台说得出 ID 这一项的状态（开/关、key 配没配、命中多少、还剩多少没查）",
+      "目录名 ID 标签" in lines["ids"] and "还没查" in lines["ids"]
+      and re.search(r"查到号 \d+ 部", lines["ids"]), lines["ids"][:120])
+keyrow = next((f for f in sspec2 if f["key"] == "tmdb_api_key"), {})
+check("密钥那一栏是 password 输入框且不回显存着的值（服务端根本不下发明文凭据）",
+      keyrow.get("secret") is True and keyrow.get("value") == ""
+      and 'f.secret' in strm_tsx and 'type="password"' in strm_tsx and 'value=""' in strm_tsx,
+      {k: keyrow.get(k) for k in ("secret", "value", "filled")})
+check("已经存了 key 时要有「已经存着了」这句提示",
+      keyrow.get("filled") is True and "已经存着了" in strm_tsx, keyrow)
+# (c) 判据不变（重查那颗按钮在、份数不写在按钮上），只是载体从 admin.html 换成 Strm.tsx；
+#     文案那对引号也从「」改成了组件里实际用的『』。
 check("重查那颗按钮在页面上（份数不写在按钮上：一按就清，标签上的数字当场变假）",
-      'action="/admin/strm/recheck"' in page and "重查 TMDB 说「没有」的那些" in page,
-      re.findall(r"重查 TMDB[^<]*", page)[:1])
-check("NFO 那一行也在页面上，说得出开/关与代价",
-      'id="strm-nfo"' in page and re.search(r"NFO：(开|关)", page),
-      re.findall(r"NFO：[^<]{0,60}", page)[:1])
-check("这一节里的表单都是异步提交的（JS 拦住 submit 走 fetch，页面不重载）",
-      "X-Requested-With" in page and "bindForms()" in page, None)
+      'action="/admin/strm/recheck"' in strm_tsx and "重查 TMDB 说『没有』的那些" in strm_tsx,
+      re.findall(r"重查 TMDB[^\"’]*", strm_tsx)[:1])
+check("NFO 那一行也在，说得出开/关与代价",
+      re.search(r"NFO：(开|关)", lines["nfo"]) is not None and "NFO：" in strm_tsx,
+      lines["nfo"][:80])
+# (b) bindForms()/X-Requested-With 是旧版整页 HTML 里那段手工 JS，React 里没有对应物：
+#     表单提交改由 onSubmit{ e.preventDefault() } + postForm 走 fetch。等价形态钉这个新写法。
+check("这一节里的表单都是异步提交的（React 拦下 submit 走 postForm，页面不重载）",
+      strm_tsx.count("e.preventDefault()") >= 1 and 'postForm("/admin/strm/settings"' in strm_tsx
+      and '"X-Requested-With": "fetch"' in admin_api_ts, None)
 n_before = len(SPAWNED)
-# 前面几次 GET /admin 可能已经顺手拉起过一轮，锁里那个 PID（测试进程自己）还活着，
+# 前面几次 GET 可能已经顺手拉起过一轮，锁里那个 PID（测试进程自己）还活着，
 # 那样 start_now() 只会回"已经有一轮在跑"。先把锁和状态清掉，测的才是这颗按钮本身。
 for _p in (strmjob.LOCK, strmjob.STATE):
     try:
@@ -924,7 +959,7 @@ strmjob._last[0] = 0.0
 r = client.post("/admin/strm/recheck", data={"csrf": "deadbeef"}, follow_redirects=False)
 check("没带对 csrf 就清不掉结论（这颗按钮会起后台任务，不能被人外部提交）",
       r.status_code == 400, r.status_code)
-tok = re.search(r'name="csrf" value="([0-9a-f]+)"', client.get("/admin").get_data(as_text=True)).group(1)
+tok = client.get("/api/admin/view?tab=strm").get_json()["csrf"]
 r = client.post("/admin/strm/recheck", data={"csrf": tok}, follow_redirects=False)
 loc = r.headers.get("Location", "")
 check("按一下就清掉 none 并起一轮去重查", r.status_code == 302 and "strm_recheck=1" in loc
@@ -933,10 +968,9 @@ check("清掉之后库里那条 none 没了（下一轮就会把它当没查过�
       kk in {x["key"] for x in strm.pending_ids()}, sorted(x["key"] for x in strm.pending_ids()))
 check("重查这一按真的拉起了一轮后台任务（不是只清了数据库就完事）",
       len(SPAWNED) == n_before + 1, SPAWNED[n_before - 1:n_before + 1])
-r = client.get("/admin?strm_recheck=3&strm_run=1")
-check("跳回后台后那句话要说清「清掉几条」和「有没有起一轮」",
-      "清掉 3 条" in r.get_data(as_text=True) and "已拉起" in r.get_data(as_text=True),
-      re.findall(r"清掉 3 条[^<]{0,60}", r.get_data(as_text=True))[:1])
+smsg = client.get("/api/admin/view?tab=strm&strm_recheck=3&strm_run=1").get_json()["smsg"]
+check("跳回后台后那句话要说清「清掉几条」和「有没有起一轮」（文案在 view 的 smsg 里）",
+      "清掉 3 条" in smsg and "已拉起" in smsg, smsg[:120])
 
 print("\n13b) 那一节的实时进度（不用手动刷新也在动）")
 r = client.get("/api/strm/status")
@@ -947,41 +981,50 @@ check("游标里能读到页码与停下来原因（和模板同一口径）",
       all({"pg", "stop", "requests", "last_time"} <= set(v.keys())
           for v in stt["cursor"].values()) if stt["cursor"] else True,
       list(stt["cursor"].values())[:1])
-page = client.get("/admin").get_data(as_text=True)
-check("状态行、库计数行、游标表、分卷表都有锚点给脚本更新",
-      all(x in page for x in ('id="strm-state"', 'id="strm-kpi"',
-                              'id="strm-cur"', 'id="strm-parts-movie"',
-                              'id="strm-parts-tv"')),
-      [x for x in ('strm-state', 'strm-kpi', 'strm-cur', 'strm-parts-movie',
-                   'strm-parts-tv') if f'id="{x}"' not in page])
-check("库里没游标时那张表也照样渲染出来（首轮进度才有地方落），并留一句「还没采过」",
-      'id="strm-cur"' in page and 'id="strm-cur-empty"' in page)
+sv3 = client.get("/api/admin/view?tab=strm").get_json()
+# (b) 旧这几条钉的是死掉的 admin.html 里那套手工更新的 DOM 锚点（id="strm-state" 等、
+#     data-running、dispatchEvent('resize')、refreshParts、textContent vs innerHTML）。
+#     转 React 后整块由 view 快照渲染、轮询只更新 sjob，滚动框高度由 ResizeObserver 量、
+#     文案走 JSX 天然转义——每条各搬到它在新架构里的等价载体上。
+check("采集状态、库计数、游标表、分卷表都在（三块各自的 Block 由 Strm.tsx 渲染，不再靠手工锚点）",
+      all(f'<Block id="{x}"' in strm_tsx for x in ("strm", "strm-zips", "strm-src"))
+      and "stateLine(job)" in strm_tsx, [x for x in ("strm", "strm-zips", "strm-src")
+      if f'<Block id="{x}"' not in strm_tsx])
+check("库里没游标时那张表也照样给出（首轮进度才有地方落），并留一句「还没采过」",
+      "(meta.cursor || []).length" in strm_tsx and "还没采过" in strm_tsx, None)
 check("两类分卷表都在（tv 一类还没打包时也要有地方填第一轮的结果）",
-      'id="strm-parts-movie"' in page and 'id="strm-parts-tv"' in page)
-check("行塞进去之后重量一次内联滚动框高度（那些 .fold 的高度是量出来的，不是 CSS 写死的）",
-      "dispatchEvent(new Event('resize'))" in page)
-check("初始状态写在 data-running 上（脚本据此决定多久问一次）",
-      'data-running="0"' in page or 'data-running="1"' in page,
-      re.findall(r'data-running="(\d)"', page))
+      '["movie", "tv"].map((kind)' in strm_tsx, None)
+# (b) 内联滚动框重量高度：旧版往 DOM 里塞完行后 dispatchEvent('resize') 逼 foldH 重算；
+#     React 的 Fold 用 ResizeObserver 观察容器，行变了自然重新量。等价形态钉 ResizeObserver。
+check("行塞进去之后会重量一次内联滚动框高度（旧靠手动 resize 事件，React 里是 ResizeObserver）",
+      "new ResizeObserver" in ui_tsx and "dispatchEvent" not in strm_tsx, None)
+# (b) data-running 那个「多久问一次」的开关写在 DOM 属性上，React 里没有：
+#     节奏直接由 status 接口回来的 running 决定。
+check("轮询节奏由状态接口回来的 running 决定（不再有 data-running 那个 DOM 开关）",
+      "const j = (await r.json()) as StrmJob;" in strm_tsx
+      and "j.running ? 10000 : 60000" in strm_tsx, None)
 check("轮询只问状态接口，且回到标签页立刻补一次",
-      "/api/strm/status" in page and "visibilitychange" in page
-      and "document.hidden" in page)
+      '"/api/strm/status"' in strm_tsx and "visibilitychange" in strm_tsx
+      and "document.hidden" in strm_tsx, None)
 check("在跑的时候 10 秒一次、闲下来 60 秒一次（不是越看越勤地把站点打死）",
-      "schedule(wasRunning ? 10000 : 60000)" in page.replace(" ", " ")
-      or "wasRunning ? 10000 : 60000" in page)
-check("分卷表只在这一轮刚结束时用 manifest 重建一次，不跟着每次轮询拉",
-      "/api/strm/manifest" in page and "if (wasRunning && !s.running) refreshParts()" in page)
-blk = page.split('「Emby STRM」那一节的实时进度')[-1].split('</script>')[0]
-check("更新文案一律走 textContent（源名和上游备注是外部字符串，不能当 HTML 塞进去）",
-      "n.textContent = text" in blk and "innerHTML" not in blk,
-      ("textContent" in blk, "innerHTML" in blk))
-check("没有 JavaScript 时这一节仍然说得出在不在跑（服务端四种文案都渲染）",
-      any(t in page for t in ("正在后台采集", "现在访问网站就会拉起一轮",
-                              "采集开关是关的", "这一轮跑完了，在等最小间隔")))
+      "10000" in strm_tsx and "60000" in strm_tsx, None)
+# (b) 旧版在"这一轮刚结束"时用 /api/strm/manifest 单独重建分卷表；React 里分卷直接来自
+#     进这一屏时那份 view 快照的 smeta，轮询只换 sjob、不回拉清单。等价形态：parts 读 v.smeta、
+#     轮询不碰 smeta。
+check("分卷表读的是进这一屏那份 view 快照，不跟着每次轮询重新拉清单",
+      "const meta = v.smeta!;" in strm_tsx and "/api/strm/manifest" not in strm_tsx, None)
+# (b) textContent vs innerHTML 那半在新架构没有对应物（React 里根本没有手工塞 HTML 的口子）：
+#     JSX 表达式默认转义。钉「不用 dangerouslySetInnerHTML 这个逃生口」作等价的那一半。
+check("更新文案不会把外部字符串当 HTML 塞进去（旧用 textContent 防注入，React 靠 JSX 默认转义）",
+      "dangerouslySetInnerHTML" not in strm_tsx and "{c.src}" in strm_tsx and "{s.name}" in strm_tsx,
+      None)
+check("这一节仍然说得出在不在跑（服务端四种状态文案都在组件里）",
+      all(t in strm_tsx for t in ("正在后台采集", "现在访问网站就会拉起一轮",
+                                  "采集开关是关的", "这一轮跑完了，在等最小间隔")), None)
 check("分卷那一行写的是真实卷名，不是 movieNN 这种程序员占位符（页面上没人认识 NN）",
-      "movieNN" not in page and "tvNN" not in page
-      and "movie01、movie02" in page and "tv01、tv02" in page,
-      re.findall(r'asub">([^<]*)', page)[:6])
+      all(p["name"] != "movieNN" for p in sv3["smeta"]["kinds"]["movie"]["parts"])
+      and "movieNN" not in strm_tsx and "movie01、movie02" in strm_tsx
+      and "tv01、tv02" in strm_tsx, [p["name"] for p in sv3["smeta"]["kinds"]["movie"]["parts"]][:4])
 
 print("\n14) 访问触发（spawn 换成了记账桩，不会真起进程）")
 import time  # noqa: E402

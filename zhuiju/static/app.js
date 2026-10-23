@@ -68,6 +68,9 @@
   });
   function switchTab(tab, t0) {
     state.tab = tab;
+    // 接口状态那块搬到右栏之后不在 #panel-vod 里了，父级不再替它显隐，
+    // 所以这里把当前标签写到 body 上（和后台 data-tab 同一招），样式按它收放
+    document.body.dataset.tab = tab;
     document.querySelectorAll('.tab').forEach((t) =>
       t.classList.toggle('active', t.dataset.tab === tab));
     document.querySelectorAll('.panel').forEach((p) =>
@@ -190,6 +193,14 @@
 
   /* ---------------- search ---------------- */
   form.addEventListener('submit', (e) => { e.preventDefault(); run(input.value, 1); });
+  /* 换掉原生 <input> 之后必须补这一条：自定义元素不会像原生输入框那样在回车时
+     隐式提交表单，而"输入剧名，回车即可"是写在占位提示里的承诺。 */
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (form.requestSubmit) form.requestSubmit();
+    else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  });
   $('home').addEventListener('click', goHome);
 
   /* 浏览器后退/前进：地址就是状态的一部分，落在 /s/<词> 就搜那个词。
@@ -208,6 +219,7 @@
     if (state.abort) state.abort.abort();
     input.value = '';
     state.kw = ''; state.page = 1;
+    document.body.classList.remove('searched');   // 回到落地页：猜你想搜重新铺满整行
     state.cloudKw = null; state.cloudData = null; state.deepLoaded = false;
     resultsEl.innerHTML = ''; deepEl.innerHTML = ''; dirEl.innerHTML = '';
     $('sources').innerHTML = ''; cloudbar.innerHTML = '';
@@ -300,6 +312,9 @@
     }
     page = Math.max(1, page || 1);
     state.kw = kw; state.page = page;
+    // 版式开关：有结果了才分两栏（左结果、右摘要与猜你想搜），服务端第一帧已经写好了这个类，
+    // 之后每次搜索由这里跟着改（见 index.html 的 body.home.searched）
+    document.body.classList.toggle('searched', !!kw);
     state.cloudKw = null; state.cloudData = null;   // 换了关键词，网盘查询结果作废
     if (state.tab === 'cloud') ensureCloud();
     placeholder.hidden = true;      // 标签栏不再跟着搜索一起开关（它一直是入口，见 goHome）
@@ -411,12 +426,26 @@
 
   /* ---------------- renderers ---------------- */
   function renderSources(d) {
-    srcbar.innerHTML = (d.status || []).map((s) => {
+    const st = d.status || [];
+    srcbar.innerHTML = st.map((s) => {
       const cls = s.ok ? 'ok' : 'bad';
-      const txt = s.ok ? esc(s.source_name) + ' ' + s.count : esc(s.source_name) + ' 不可用';
-      const tip = s.ok ? ('命中 ' + s.count + ' 条 · ' + s.ms + 'ms') : esc(s.error || '');
-      return '<span class="srcbadge ' + cls + '" title="' + tip + '">' + txt + '</span>';
+      // 名字 / 命中数 / 耗时 拆成三段：横排那版挤在一行看不出谁慢，右栏里一行一个源，
+      // 数字右对齐才有"终端面板"的意义。title 保持原来那句，鼠标停上去信息不变。
+      return '<span class="srcbadge ' + cls + '" title="' +
+        (s.ok ? ('命中 ' + s.count + ' 条 · ' + s.ms + 'ms') : esc(s.error || '')) + '">' +
+        '<span class="sb-name">' + esc(s.source_name) + '</span>' +
+        '<span class="sb-num">' + (s.ok ? s.count : '—') + '</span>' +
+        (s.ok ? '<span class="sb-ms">' + s.ms + '</span>'
+              : '<span class="sb-ms bad">超时</span>') +
+        '</span>';
     }).join('');
+    const okN = st.filter((s) => s.ok).length;
+    const slow = st.reduce((m, s) => Math.max(m, s.ms || 0), 0);
+    const sum = document.getElementById('sources-sum');
+    if (sum) sum.textContent = okN + '/' + st.length + ' 可用 · 最慢 ' + slow + 'ms';
+    // 接口一个都没答话（服务刚重启、被门禁挡了）就别留一块空面板在那儿假装在统计
+    const box = document.getElementById('rail-sources');
+    if (box) box.hidden = !st.length;
   }
 
   function renderResults(d, ms) {
@@ -1098,7 +1127,10 @@
     const box = document.getElementById('prog');
     if (!box || !p) return;
     const total = p.total || 6, done = p.done || 0;
-    box.querySelector('.progbar i').style.width = Math.max(4, Math.round(done / total * 100)) + '%';
+    // mdui-linear-progress 吃的是 0..1 的 value（服务端第一帧也是这个属性），
+    // 旧写法那种 .progbar > i 的百分比宽度不再存在
+    const bar = box.querySelector('mdui-linear-progress');
+    if (bar) bar.setAttribute('value', Math.max(0.04, done / total).toFixed(3));
     box.querySelector('#progsteps').innerHTML = (p.steps || []).map((s, i) => {
       const cls = s.state === 'ok' ? 'ok' : s.state === 'fail' ? 'fail'
         : s.state === 'skipped' ? 'skipped' : (i === done && p.running ? 'cur' : '');

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>追剧资源搜索（开发）</title>
+    <!-- 开发用入口：线上由 Flask 渲染 zhuiju/templates/shell.html，boot 数据也从那里来。
+         这里塞一份等价的手写数据，让 npm run dev 不连后端也能看版式。 -->
+    <script type="application/json" id="boot-data">
+      {"kw": "", "page": 1, "locked": false, "crawler": false, "asset_v": "dev",
+       "site": "http://127.0.0.1:5000", "hours": 12,
+       "sources": [{"id": "huya", "name": "虎牙资源"}],
+       "categories": [], "hot": {}, "refresh": null, "snapshot": null}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

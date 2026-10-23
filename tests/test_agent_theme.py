@@ -190,45 +190,64 @@ finally:
     stats_mod.MIGRATE_ERROR = ""
     stats_mod.ensure_schema()
 
-print("\n6) 主题：CSS 变量化 + 暗色板 + 页面接线")
+print("\n6) 主题：MDUI 2 装载顺序 + 三态切换 + 页面接线")
 css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
 import re
 root = css[css.index(":root {"):css.index("\n}", css.index(":root {"))]
-dark = css[css.index('[data-theme="dark"] {'):]
-dark = dark[:dark.index("\n}") + 2]        # dark 本身已是子串，下标要从 0 算
-light_vars = set(re.findall(r"(--[a-z0-9-]+)\s*:", root))
-# 只比"颜色类"变量：圆角、阴影、间距这些本来就不需要暗色版本，硬要求覆盖是假规则
-color_vars = lambda blk: {v for v, val in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", blk)
-                           if re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", val)}
-dark_vars = color_vars(dark)
 body = css[css.index("\n}", css.index(":root {")):]
-# 允许在变量定义里写死颜色（调色板本来就是定义处），不允许直接当属性值用在规则里
+# 允许在变量定义里写死颜色（海报那一层就是不跟主题翻），不允许直接当属性值用在规则里
 bad = [l.strip() for l in re.findall(r"[^\n]*#[0-9a-fA-F]{3,8}[^\n]*", body)
        if not l.strip().startswith("--")]
-check(":root 与调色板之外没有写死的颜色", not bad, bad[:4])
-check("暗色板把每一个亮色**颜色**变量都覆盖了（漏一个就串色）",
-      color_vars(root) <= dark_vars, sorted(color_vars(root) - dark_vars))
-check("暗色板里没混进笔误值", "#" in dark and " e5a css" not in dark)
-check("暗色块带 color-scheme，表单控件跟随", "color-scheme: dark" in dark)
-check("亮色也声明了 color-scheme", "color-scheme: light" in root)
+check("组件规则里没有写死的颜色（颜色一律从 MDUI 令牌来）", not bad, bad[:4])
+check("三态各有选择器：亮 = 默认，暗 = 类，跟随系统 = 类 + 媒体查询",
+      all(t in css for t in (":root, .mdui-theme-light {", ".mdui-theme-dark {",
+                             "@media (prefers-color-scheme: dark) {", ".mdui-theme-auto {")), None)
+# 桥接层：站点语义名（--surface…）全部指向 MDUI 令牌，只有海报那层例外（压在任意封面上）
+bridge = dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", root))
+off = {k for k, v in bridge.items()
+       if re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", v) and "--mdui-" not in v}
+check(":root 的颜色 token 全部桥到 --mdui-*（海报三层不跟主题翻是仅有的例外）",
+      off <= {"--poster-ink", "--poster-line"}, sorted(off))
+for pair in ("--mdui-color-success", "--mdui-color-warning"):
+    check(f"补的语义色 {pair} 亮暗两边都有（MDUI 只规定了 error 这一组）",
+          css.count(pair + "-light") >= 1 and css.count(pair + "-dark") >= 2, css.count(pair))
+check("旧的手写主题属性没有残留（data-theme 属性、data-stage 舞台轴）",
+      "[data-theme=" not in css and "data-stage" not in css, None)
 
-for name in ("index.html", "admin.html"):
+for name in ("index.html", "admin.html", "human.html"):
     t = (BASE / "zhuiju" / "templates" / name).read_text(encoding="utf-8")
-    check(f"{name} 有主题预置", '_theme.html' in t)
-    check(f"{name} 预置在样式表之前",
-          t.index('_theme.html') < t.index("app.css") if "app.css" in t else False)
-    check(f"{name} 有切换按钮", "data-theme-toggle" in t)
-    check(f"{name} 挂了 theme.js", "theme.js" in t)
+    check(f"{name} 用同一份主题装载（_theme.html），不各写一份", "_theme.html" in t)
+    check(f"{name} 的主题装载在 app.css 之前（否则暗色用户刷新闪白）",
+          t.index("_theme.html") < t.index("app.css"), None)
+    if name != "human.html":
+        check(f"{name} 有切换按钮并挂了 theme.js", "data-theme-toggle" in t and "theme.js" in t, None)
 th = (BASE / "zhuiju" / "templates" / "_theme.html").read_text(encoding="utf-8")
-# 注释里就写着"defer"这个词，所以只能查真正的属性写法，不能查子串
-check("预置脚本用内联而非 defer（否则暗色刷新闪白）",
-      "<script>" in th and "<script defer" not in th and "<script src" not in th)
-check("预置脚本读 localStorage", "zhuiju_theme" in th and "prefers-color-scheme" in th)
+# 注释里就写着 defer / CDN 这些词，所以只能查真正的属性写法与真正的引用写法
+check("装载全在本地：不引外网、不 defer",
+      "<script defer" not in th and 'src="http' not in th and 'href="http' not in th
+      and "unpkg.com" not in th, None)
+check("顺序：主题类 → mdui.css → mdui.global.js → 主色（页面的 app.css 排在后面）",
+      # 注释里就把这几个名字提了一遍，所以只能比真正的标签写法
+      th.index("classList.add('mdui-theme-'") < th.index("filename='vendor/mdui/mdui.css'")
+      < th.index("filename='vendor/mdui/mdui.global.js'")
+      < th.index("mdui.setColorScheme('#3566E6')"), None)
+check("预置读 MDUI 那个键，非法值一律当跟随系统",
+      "localStorage.getItem('mdui-theme')" in th
+      and "if (t !== 'light' && t !== 'dark') t = 'auto';" in th, None)
+check("主色在首帧生成（等加载完再改会先紫后蓝闪一下），bundle 没跑起来也不报错",
+      "mdui.setColorScheme('#3566E6')" in th and "window.mdui &&" in th, None)
 tj = (BASE / "zhuiju" / "static" / "theme.js").read_text(encoding="utf-8")
-check("theme.js 三态循环", all(k in tj for k in ('"auto"', '"light"', '"dark"')))
-check("theme.js 写 localStorage", "setItem" in tj)
-check("localStorage 写不了也不崩（无痕模式）", "catch" in tj)
-check("跟随系统时监听系统切换", 'addEventListener("change"' in tj or "addListener" in tj)
+check("theme.js 三态循环，改的是 MDUI 的类",
+      all(k in tj for k in ('"auto"', '"light"', '"dark"'))
+      and 'classList.add("mdui-theme-"' in tj and 'classList.remove("mdui-theme-"' in tj, None)
+check("选择记在 mdui-theme 键；写不了也不崩（无痕模式）",
+      'KEY = "mdui-theme"' in tj and "setItem" in tj and "catch" in tj, None)
+check("跟随系统那档实时跟着系统变（类名看不出来，必须问 matchMedia）",
+      'addEventListener("change"' in tj or "addListener" in tj, None)
+check("切换有回音：MDUI 的 snackbar；存不进去时不谎报已保存",
+      "mdui.snackbar" in tj and "已保存 ·" in tj and "这台浏览器不给存" in tj, None)
+check("首屏预置不走 apply，所以不会一进来就闪一遍渐变",
+      "apply(" not in th.split("<script>")[0], None)
 
 print("\n7) 后台页面真的把两列渲染出来了")
 cfg = admin_mod.load()
@@ -254,67 +273,62 @@ check("按来源类型筛选正常", r.count('name="ref_kind"') >= 1)
 r = c.get("/admin?ref_kind=bogus").get_data(as_text=True)
 check("非法来源类型当没填", "Edge 124.0" in r)      # 没被筛成空
 
-print("\n8) 配色静态体检：把上次那种「蓝底红字」的替换事故钉住")
-def palette(block):
-    out = {}
-    for name, val in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", block):
-        v = val.strip()
-        if re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", v):
-            out[name] = v
-    return out
-
-
-def rgb(v):
-    v = v.strip()
-    if v.startswith("#"):
-        h = v[1:]
-        if len(h) == 3:
-            h = "".join(c * 2 for c in h)
-        return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
-    n = re.findall(r"[\d.]+", v)
-    return [float(n[0]), float(n[1]), float(n[2])]
-
-
-def contrast(a, b):
-    def lum(c):
-        f = lambda v: (v / 255) / 12.92 if v / 255 <= .03928 else ((v / 255 + .055) / 1.055) ** 2.4
-        r, g, bl = rgb(c)
-        return .2126 * f(r) + .7152 * f(g) + .0722 * f(bl)
-    l1, l2 = lum(a), lum(b)
-    return round((max(l1, l2) + .05) / (min(l1, l2) + .05), 2)
-
-
-# 这些配对是从 CSS 里读出来的实际搭配，改任何一处配色都会在这里暴露
-PAIRS = [("--ink", "--surface"), ("--ink-2", "--surface"), ("--ink-2", "--surface-2"),
-         ("--dim", "--surface"), ("--on-accent", "--brand"), ("--brand-ink", "--brand-soft"),
-         ("--ok", "--ok-bg"), ("--bad", "--bad-bg"), ("--warn", "--warn-bg"),
-         # 海报上的「详情」按钮压在任意封面上，这对底色不跟主题翻转（暗色下若跟着
-         # --on-accent 翻成近黑，就成了黑压黑），两个主题都要单独达标
-         ("--poster-ink", "--poster-scrim")]
-for label, blk in (("亮色", root), ("暗色", dark)):
-    pal = palette(blk)
-    for fg, bg in PAIRS:
-        if fg not in pal or bg not in pal:
-            check(f"{label} {fg}/{bg} 两色都在调色板里", False, sorted({fg, bg} - set(pal)))
-            continue
-        c_val = contrast(pal[fg], pal[bg])
-        check(f"{label} {fg} on {bg} 对比度 {c_val} ≥ 4.5", c_val >= 4.5, c_val)
+print("\n8) 令牌桥接体检：换主题只改 MDUI 的令牌，站点这层不藏颜色")
+bridge8 = dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", root))
+# 这几对是页面上真实存在的搭配。查的不是对比度数值 —— 那由 MDUI 加 setColorScheme 在运行时
+# 决定，静态算不出来（实测在浏览器里量，数字记在 docs/theme.md）。这里查的是来源：
+# 谁把某个 token 改回写死的十六进制，它就脱离主题系统，暗色下第一个坏掉的就是它
+for fg, bg in (("--ink", "--surface"), ("--ink-2", "--surface-2"), ("--brand", "--brand-soft"),
+               ("--ok", "--ok-bg"), ("--bad", "--bad-bg"), ("--warn", "--warn-bg"),
+               ("--on-accent", "--brand"), ("--dim", "--surface")):
+    check(f"{fg} / {bg} 都是从 MDUI 令牌派生的（不各自写死）",
+          fg in bridge8 and bg in bridge8
+          and "--mdui-" in bridge8[fg] and "--mdui-" in bridge8[bg],
+          (bridge8.get(fg), bridge8.get(bg)))
+check("海报上那层是例外：不跟主题翻（跟着 --on-accent 翻成近黑就成了黑压黑）",
+      bridge8["--poster-ink"].startswith("rgb(255")
+      and "mdui-color-scrim" in bridge8["--poster-scrim"],
+      (bridge8.get("--poster-ink"), bridge8.get("--poster-scrim")))
+VENDOR = BASE / "zhuiju" / "static" / "vendor" / "mdui"
+check("vendored 的 MDUI 真的在仓库里（不引 CDN），并且记了版本号",
+      (VENDOR / "mdui.css").stat().st_size > 1000
+      and (VENDOR / "mdui.global.js").stat().st_size > 100000
+      and re.match(r"^\d+\.\d+\.\d+$",
+                   (VENDOR / "VERSION").read_text(encoding="utf-8").strip()) is not None, None)
 
 gobtn = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
                         re.search(r"\.gobtn \{([^}]*)\}", css).group(1)))
 check("主按钮前景是 --on-accent 而不是语义色", "var(--on-accent)" in gobtn.get("color", ""),
       gobtn.get("color"))
-check("主按钮与输入框同一套圆角", gobtn.get("border-radius") == "8px", gobtn.get("border-radius"))
+field_input = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
+                              re.search(r"\.admfield input, \.admfield select \{([^}]*)\}",
+                                        css).group(1)))
+check("主按钮与输入框同一套圆角（都走 --r-pill，按钮一律药丸）",
+      gobtn.get("border-radius") == field_input.get("border-radius") == "var(--r-pill)",
+      (gobtn.get("border-radius"), field_input.get("border-radius")))
+check("全站不再有第二种药丸写法（99px / 999px 那种硬编码已收干净）",
+      "border-radius: 99px" not in css and "border-radius: 999px" not in css, None)
+check("圆角与阴影取 MDUI 的 shape / elevation，不留自造的数",
+      bridge8["--r-pill"].startswith("var(--mdui-shape")
+      and bridge8["--r-l"].startswith("var(--mdui-shape")
+      and bridge8["--shadow-s"].startswith("var(--mdui-elevation")
+      and bridge8["--shadow-m"].startswith("var(--mdui-elevation"), None)
+check("字号也走 MDUI 的 typescale（原来那套 11 / 11.5px 是自造的）",
+      bridge8["--fs-min"].startswith("var(--mdui-typescale")
+      and bridge8["--fs-sm"].startswith("var(--mdui-typescale")
+      and bridge8["--fs-input"].startswith("var(--mdui-typescale"), None)
 unified = re.search(r"\.pbtn, \.pager a, \.jumpbtn, \.themebtn, \.fbtn, \.frontbtn \{", css)
 check("翻页/跳转/主题/筛选/回前台胶囊合并成一处定义", unified is not None)
-check("旧的分立胶囊定义已删除", css.count(".pbtn {\n") == 0 and css.count(".pager a {\n") == 0)
-check("主题切换渐变只在切换期间生效",
-      ".theme-anim" in css and "prefers-reduced-motion" in css)
-tj = (BASE / "zhuiju" / "static" / "theme.js").read_text(encoding="utf-8")
-check("theme.js 切换时才加 theme-anim 并定时摘掉",
-      'classList.add("theme-anim")' in tj and "classList.remove" in tj and "setTimeout" in tj)
-check("首屏预置不走 apply，所以不会一进页面就闪一遍渐变",
-      "apply(" not in th.split("<script>")[0] and "apply(\"auto\", true)" not in tj.split("sync();")[0])
+check("主题切换渐变只在切换期间生效，时长取 MDUI 的 motion 令牌",
+      ".theme-anim" in css and "prefers-reduced-motion" in css
+      and "--mdui-motion-duration-medium2" in css, None)
+check("没 JS 的浏览器上未注册的组件不露裸文本（:not(:defined) 那条）", ":not(:defined)" in css, None)
+ajs3 = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+check("换成自定义元素后回车仍然提交表单（「回车即可」这句承诺不能落空）",
+      "form.requestSubmit()" in ajs3 and "e.key !== 'Enter'" in ajs3, None)
+check("进度条改喂 value（旧的 .progbar > i 百分比宽度随组件一起删了）",
+      "setAttribute('value'" in ajs3 and "querySelector('.progbar" not in ajs3
+      and "progbar" not in css, None)
 
 print("\n9) 宽度、系统列、归属地只到国家")
 # 这一节自带数据：不依赖前面留下的记录，否则改到别的节就会莫名其妙红
@@ -328,8 +342,10 @@ for ip, ua_ in (("223.5.5.5", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWe
                      referrer="http://127.0.0.1:5000/", own_hosts=OWN)
 d2 = c.get("/admin").get_data(as_text=True)
 wrap = re.search(r"\.wrap \{([^}]*)\}", css).group(1)
-check("内容宽度随屏走而不是固定 1000px", "min(1680px" in wrap and "100% - 48px" in wrap, wrap.strip())
-check("超宽屏有上限，不把表格拉到没边", "1680px" in wrap)
+check("内容宽度随屏走、有上限，上限走 --measure（不再写死一个数）",
+      "min(var(--measure), 100% - 48px)" in wrap and "--measure: 1680px;" in root, wrap.strip())
+check("前台收到阅读宽度，后台不吃这一档（数据表本来就要横向铺）",
+      "body.home { --measure: 1280px; }" in css, None)
 check("边框算在宽度内（不会溢出横向滚动）", "box-sizing: border-box" in wrap)
 ladder = [(int(m.group(2)), m.group(1), int(m.group(3))) for m in
           re.finditer(r"@media \((min|max)-width: (\d+)px\)[^{]*\{\s*\.hotgrid \{ --hot-cols: (\d+)", css)]
@@ -463,10 +479,14 @@ check("窄屏覆盖排在文件最后（同优先度靠后者胜，写在中间�
       idx_narrow > max(css.index(".themebtn {"), css.index(".dbtn {"),
                       css.index(".pbtn, .pager a"), css.index(".csite .ct")),
       idx_narrow)
-check("小字号都走 token，文件里不留硬编码的 11 / 11.5px",
-      not re.search(r"font-size:\s*11(\.5)?px", css) and "--fs-min: 11px" in css
-      and "--fs-sm: 11.5px" in css, re.findall(r"font-size: 11[^;]*", css)[:3])
-check("窄屏把两个 token 抬到 12.5px", "--fs-min: 12.5px" in tail and "--fs-sm: 12.5px" in tail)
+check("小字号都走 MDUI 的 typescale，文件里不留硬编码的 11 / 11.5px",
+      not re.search(r"font-size:\s*11(\.5)?px", css)
+      and "--fs-min: var(--mdui-typescale-label-small-size)" in css
+      and "--fs-sm: var(--mdui-typescale-label-medium-size)" in css,
+      re.findall(r"font-size: 11[^;]*", css)[:3])
+check("窄屏把两个小字号换成 body-small（仍然只引 typescale，不写死数）",
+      "--fs-min: var(--mdui-typescale-body-small-size)" in tail
+      and "--fs-sm: var(--mdui-typescale-body-small-size)" in tail, None)
 check("桌面那份 .wrap 仍是 100% - 48px（窄屏是覆盖，不是改写）",
       "100% - 48px" in css[:idx_narrow])
 check("窄屏 .wrap 整宽 + 只留 10px 内边距", "width: 100%; padding: 0 10px" in tail.replace("\n          ", " ")
@@ -487,8 +507,8 @@ check("关掉点击灰底与双击缩放延迟", "-webkit-tap-highlight-color: t
       and "touch-action: manipulation" in tail)
 # 输入框字号也必须走 token：媒体查询不加特异性，`.admfield input`（0,1,1）压着
 # `input`（0,0,1），第一次只写了兜底那条，量出来后台口令框还是 12.5px —— iOS 一聚焦就放大整页
-check("输入控件字号走 --fs-input，桌面 12.5px / 窄屏 16px",
-      "--fs-input: 12.5px" in css[:idx_narrow] and "--fs-input: 16px" in tail,
+check("输入控件字号走 --fs-input，桌面就是 body-large（16px：iOS 聚焦不会放大整页）",
+      "--fs-input: var(--mdui-typescale-body-large-size)" in css[:idx_narrow],
       re.findall(r"--fs-input[^;]*", css))
 check("后台筛选框与翻页跳转框都吃这个 token",
       re.search(r"\.admfield input, \.admfield select \{[^}]*var\(--fs-input\)", css) is not None
@@ -540,6 +560,102 @@ check("触屏上整张海报都是命中区，桌面仍只认那颗按钮",
 check("点过的标签会被带进视野（横滑时不会点到看不见的标签）",
       "scrollIntoView({ block: 'nearest', inline: 'nearest' })" in ajs)
 check("没有任何地方劫持右键", "contextmenu" not in ajs and "contextmenu" not in idxh)
+
+print("\n13) 版式重构：药丸、留白节奏、终端化数据")
+def _rule(head):
+    i = css.find(head)
+    if i < 0:
+        return None
+    return css[i:css.index("\n}", i) + 2]
+
+
+# 按钮一律药丸：混着 8px / 5px / 99px 就是"每张卡片各圆各的"，看着像没设计过
+PILL_HEADS = [".gobtn {", ".srcbtn {", ".eps a {",
+              ".pbtn, .pager a, .jumpbtn, .themebtn, .fbtn, .frontbtn {",
+              ".reset {", ".admintoc a {", ".row .ct {", ".csite .ct {",
+              ".who {", ".behflag {", ".dbtn {", ".pstep {", ".ver {",
+              '.admfield input, .admfield select {',
+              '.loginform input[type="password"], .loginform input[type="text"] {',
+              ".tab {", ".asec-fold > summary {"]
+noPill = [h for h in PILL_HEADS if (h and "border-radius: var(--r-pill);" not in _rule(h))]
+check("按钮/输入框/标签一律药丸（同一个圆角只有 --r-pill 一个来源）",
+      not noPill and "border-radius: 99px" not in css and "border-radius: 999px" not in css,
+      noPill[:4])
+# 数据与状态是"机器说的话"：等宽才对齐，一列数字用比例字体会跳
+MONO_HEADS = [".meta {", ".fresh {", ".stat b {", ".table .num {", ".pageof {",
+              ".slip-msg {", ".cloudbar {", ".progsteps {", ".eps a {", "code {"]
+noMono = [h for h in MONO_HEADS if h in css and "var(--mono)" not in _rule(h)]
+check("数字与状态行走等宽（表格数字、进度步骤、滑块回话、meta 那一行）",
+      not noMono and all(h in css for h in MONO_HEADS), noMono[:4])
+lit_fonts = [l.strip() for l in css.splitlines()
+             if l.strip().startswith("font-family:") and "var(--" not in l]
+check("字体只从 token 取：规则里没有写死的字体族（材质归调色板，结构归组件）",
+      not lit_fonts, lit_fonts[:3])
+for tok in ("--font-display", "--font-body", "--mono", "--head-track", "--label-track",
+            "--r-pill", "--r-cover", "--cover-frame", "--btn-glow", "--btn-edge", "--prog-fill"):
+    check(f"{tok} 在 :root 里有默认值（不写也能跑，只有 MDUI 令牌是必须的）", f"  {tok}:" in root, None)
+check("海报的镜框线走 --cover-frame，三处海报（结果卡、猜你想搜、详情面板）都吃同一个 token",
+      bridge["--cover-frame"] == "var(--mdui-elevation-level1)"
+      and all("box-shadow: var(--cover-frame);" in _rule(h)
+              for h in (".cover {", ".hcover {", ".dpcover {")), None)
+check("卡片留白与海报尺寸一起放大，手机端再收回来（360 屏上文字区不能被吃掉）",
+      "padding: 18px 20px;" in _rule(".card {") and "gap: 20px;" in _rule(".card {")
+      and "flex: 0 0 104px;" in _rule(".cover {")
+      and ".card { padding: 14px 16px; gap: 14px; }" in css
+      and ".cover { flex-basis: 96px; width: 96px; }" in css, None)
+check("表头是拉开字距的栏目名，正文数字用 tabular-nums",
+      "letter-spacing: var(--label-track);" in _rule(".table th {")
+      and "font-variant-numeric: tabular-nums;" in _rule(".table {"), None)
+check("跑着的状态行有一枚闪烁光标，且 reduced-motion 下停住",
+      '.fresh[data-state="running"]::after {' in css and "@keyframes caret" in css
+      and '.fresh[data-state="running"]::after { animation: none; }' in css, None)
+check("口令框不再是浏览器默认方框（和旁边的药丸按钮穿帮）",
+      _rule('.loginform input[type="password"], .loginform input[type="text"] {') is not None
+      and "padding: 10px 18px;" in _rule('.loginform input[type="password"], .loginform input[type="text"] {'), None)
+
+print("\n14) 栅格：舞台在左、资料栏在右（只在够宽且真有结果时）")
+idx = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
+grid_css = css[css.index("@media (min-width: 1220px) {"):css.index(".railhead {")]
+check("栅格只在前台 + 搜索过那一屏启用（落地页右边会空一大块，所以不用）",
+      "body.home.searched main.wrap {" in grid_css
+      and "grid-template-columns: minmax(0, 1fr) var(--rail);" in grid_css, None)
+check("舞台入口与标签行横跨两栏，结果在左、资料栏在右并粘性跟随",
+      "main.wrap > .searchbar,\n  body.home.searched main.wrap > .statline { grid-column: 1 / -1; }" in grid_css
+      and "main.wrap > .panel { grid-column: 1; }" in grid_css
+      and "main.wrap > .rail { grid-column: 2; position: sticky; top: 84px; }" in grid_css, None)
+check("切到网盘 / 目录标签时资料栏收掉（写在媒体查询之外，任何宽度都成立）",
+      css.index('body.home:not([data-tab="vod"]) .rail { display: none; }')
+      < css.index("@media (min-width: 1220px) {")
+      and 'body.home.searched:not([data-tab="vod"]) main.wrap > .panel { grid-column: 1 / -1; }' in css,
+      None)
+check("模板第一帧就写好 home / searched / data-tab，不靠 JS 补（否则 SSR 那一屏会先排错再跳）",
+      '<body class="home{% if seo.kw %} searched{% endif %}" data-tab="vod">' in idx, None)
+check("接口状态从 #panel-vod 搬到资料栏，摘要也在同一栏里（旧位置不留一份）",
+      idx.index('<aside class="rail"') < idx.index('id="ssr"') < idx.index('id="sources"')
+      and idx.count('id="sources"') == 1 and idx.count('id="ssr"') == 1, None)
+ajs2 = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
+check("搜索 / 回主页 / 切标签都跟着改 body 上的那两个开关",
+      'document.body.classList.toggle("searched", !!kw)'.replace('"', "'") in ajs2
+      or "document.body.classList.toggle('searched', !!kw)" in ajs2, None)
+check("goHome 摘掉 searched，switchTab 把当前标签写到 body",
+      "document.body.classList.remove('searched')" in ajs2
+      and "document.body.dataset.tab = tab;" in ajs2, None)
+check("接口状态一行一个源：名字 / 命中数 / 耗时 三段，数字右对齐走等宽",
+      'grid-template-columns: 7px minmax(0, 1fr) auto 52px;' in css
+      and "font-variant-numeric: tabular-nums;" in css
+      and 'class="sb-name"' in ajs2 and 'class="sb-num"' in ajs2 and 'class="sb-ms"' in ajs2, None)
+check("顶上给一句汇总（几个可用、最慢多少），一个源都没答话时整块收起",
+      "可用 · 最慢" in ajs2 and "box.hidden = !st.length" in ajs2, None)
+check("后台不吃前台的阅读宽度（body 上没有 home）",
+      '<body data-tab="{{ tab or ' in (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8"), None)
+
+check("窄屏没有右栏时接口状态仍排在结果上面（翻完一百张卡片才看到它，等于没有）",
+      "@media (max-width: 1219.98px) {" in css
+      and "body.home main.wrap > .rail { display: contents; }" in css
+      and "body.home main.wrap > .rail > .railcard { order: -1; }" in css, None)
+check("接口状态那块默认 hidden：没搜过就不留一张空卡片在页面上",
+      '<div class="railcard" id="rail-sources" hidden>' in idx
+      and "box.hidden = !st.length" in ajs2, None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

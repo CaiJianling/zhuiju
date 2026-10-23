@@ -32,7 +32,11 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔍</text></svg>">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ asset_v }}">
 </head>
-<body>
+{# body 上这两个类只管版式：home = 前台（收窄到阅读宽度），searched = 这一屏有检索结果，
+   才把摘要与「猜你想搜」挪到右栏。落地页没有结果，右栏会留一大块白，所以跨两列。
+   服务端先按 seo.kw 写好，之后由 app.js 跟着搜索/回主页切换 —— 只靠 JS 的话，
+   直接访问 /s/庆余年 的第一帧会按落地页排，排完再跳一次。 #}
+<body class="home{% if seo.kw %} searched{% endif %}" data-tab="vod">
 <header class="topbar">
   <div class="wrap">
     <h1>追剧资源搜索 <span class="ver">本地版</span>
@@ -49,7 +53,9 @@
     </p>
     {% if refresh.state == 'running' %}
     <div class="prog" id="prog">
-      <div class="progbar"><i style="width: {{ refresh.progress.pct }}%"></i></div>
+      {# 进度条交给 MDUI：它的 value 是 0..1，服务端这里给的就是第一帧的位置，
+         之后由 watchProgress() 每次轮询改写 value（不再手搓 .progbar > i 的宽度） #}
+      <mdui-linear-progress value="{{ ((refresh.progress.pct or 0) / 100) | round(3) }}"></mdui-linear-progress>
       <div class="progsteps" id="progsteps"></div>
     </div>
     {% endif %}
@@ -59,21 +65,26 @@
 <main class="wrap">
   <form class="searchbar" id="form" autocomplete="off">
     <div class="field">
+      {# 回主页那颗保持原生 button：mdui-icon-button 要 icon 属性，那得再引一份图标字体，
+         而这里就是一个内联 SVG，MDUI 的令牌一样能把它描出来。 #}
       <button class="homebtn" type="button" id="home" aria-label="回主页" title="回主页 · 显示猜你想搜">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.6 12 3.4l9 7.2v9.4a1 1 0 0 1-1 1h-5v-6.2H9V21H4a1 1 0 0 1-1-1z"/></svg>
       </button>
-      <input id="kw" name="kw" type="search" placeholder="例如：庆余年 / 流浪地球 / 繁花 / 灌篮高手"
-             aria-label="影视名称关键词" maxlength="60">
-      <button class="go" type="submit" id="go">搜索</button>
+      <mdui-text-field id="kw" name="kw" variant="filled" round
+                      placeholder="例如：庆余年 / 流浪地球 / 繁花 / 灌篮高手"
+                      aria-label="影视名称关键词" maxlength="60"></mdui-text-field>
+      <mdui-button id="go" type="submit" variant="filled" round>搜索</mdui-button>
     </div>
     <div class="examples" id="examples">
       <span class="hint">试试：</span>
-      <button type="button" class="chip">庆余年</button>
-      <button type="button" class="chip">流浪地球</button>
-      <button type="button" class="chip">繁花</button>
-      <button type="button" class="chip">甄嬛传</button>
-      <button type="button" class="chip">灌篮高手</button>
-      <button type="button" class="chip">科幻</button>
+      {# 这些是"点了就搜"的快捷入口，用 MDUI 的 tonal 按钮：本身就是药丸，
+         不用我们再写一套 .chip 的形状与 hover #}
+      <mdui-button class="chip" variant="tonal" round>庆余年</mdui-button>
+      <mdui-button class="chip" variant="tonal" round>流浪地球</mdui-button>
+      <mdui-button class="chip" variant="tonal" round>繁花</mdui-button>
+      <mdui-button class="chip" variant="tonal" round>甄嬛传</mdui-button>
+      <mdui-button class="chip" variant="tonal" round>灌篮高手</mdui-button>
+      <mdui-button class="chip" variant="tonal" round>科幻</mdui-button>
     </div>
   </form>
 
@@ -90,11 +101,10 @@
   </section>
 
   <section class="panel active" id="panel-vod">
-    <div class="sources" id="sources"></div>
     <div class="pager" id="pager" hidden>
-      <button id="prev">上一页</button>
+      <mdui-button id="prev" variant="text" round>上一页</mdui-button>
       <span id="pagemark"></span>
-      <button id="next">下一页</button>
+      <mdui-button id="next" variant="text" round>下一页</mdui-button>
     </div>
     <div class="list" id="results"></div>
   </section>
@@ -113,22 +123,34 @@
     <div class="list" id="dirlist"></div>
   </section>
 
-  {# ---------- 服务端渲染部分：爬虫不执行 JS 也能看到内容 ---------- #}
-  {% if seo.kw %}
-  <section class="ssr" id="ssr" aria-label="搜索结果摘要">
-    <h2>《{{ seo.kw }}》的检索结果</h2>
-    <p class="ssrnote">{{ seo.description }}</p>
-    {% if seo.snapshot['items'] %}
-    <ul class="ssrlist">
-      {% for it in seo.snapshot['items'] %}
-      <li><a href="{{ it.url }}">{{ it.title }}</a>
-        <span>{{ [it.year, it.type, it.remarks] | select | join(' · ') }}
-          {%- if it.n_sources %} · {{ it.n_sources }} 个源{% endif %}</span></li>
-      {% endfor %}
-    </ul>
+  {# ---------- 右栏（资料栏）：检索摘要 + 接口状态 ----------
+     搜索那一屏它是右栏，和左边的结果上沿对齐；滚结果时整栏粘性跟随。
+     摘要（#ssr）本来就是服务端给爬虫的那份，挪进栏里不改变它的内容与可见性；
+     接口状态这块以前横排在结果上方，15 个源挤成三行药丸，谁快谁慢扫不出来 ——
+     现在一行一个源，命中数与耗时右对齐。
+     它从 #panel-vod 里搬出来了，显隐不再由父级面板代管：body.searched 决定出不出现，
+     body[data-tab] 决定只在「影视检索」那一栏出现（见 switchTab 与 app.css）。 #}
+  <aside class="rail" id="rail" aria-label="资料栏">
+    {% if seo.kw %}
+    <section class="ssr" id="ssr" aria-label="搜索结果摘要">
+      <h2>《{{ seo.kw }}》的检索结果</h2>
+      <p class="ssrnote">{{ seo.description }}</p>
+      {% if seo.snapshot['items'] %}
+      <ul class="ssrlist">
+        {% for it in seo.snapshot['items'] %}
+        <li><a href="{{ it.url }}">{{ it.title }}</a>
+          <span>{{ [it.year, it.type, it.remarks] | select | join(' · ') }}
+            {%- if it.n_sources %} · {{ it.n_sources }} 个源{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
     {% endif %}
-  </section>
-  {% endif %}
+    <div class="railcard" id="rail-sources" hidden>
+      <h2 class="railhead">接口状态 <span class="railsub" id="sources-sum"></span></h2>
+      <div class="sources" id="sources"></div>
+    </div>
+  </aside>
 
   {% if not seo.kw and (seo.hot.movie or seo.hot.tv) %}
   <section class="hot" id="hot" aria-label="猜你想搜">

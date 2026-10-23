@@ -160,22 +160,29 @@ app = app_mod.create_app()
 g1 = app.test_client()                                     # 没验证过的浏览器
 g2 = app.test_client()                                     # 拖过滑块的浏览器
 r = g1.get("/")
-check("未验证访问首页：200，给的是验证页", r.status_code == 200 and "asect gatecard"
-      in r.get_data(as_text=True), r.status_code)
-# 判"是不是验证页"要用门禁页独有的 gatecard 那张卡片：滑块那句文案现在首页也有
-# （cookie 过期时首页会就地弹同一块组件），拿文案判会两边都像验证页
+# (b) 旧写法在这里找的是 human.html 那张 gatecard。现在门禁不再单独渲染一张验证页：
+# 未验证的人拿到的是**同一个 React 壳**，只是 boot.locked=true，界面上由 React 画滑块。
+# 所以"是不是被挡了"的判据从"有没有那张卡片"换成"壳里那个布尔 + 内容块在不在"。
+check("未验证访问首页：200，给的是带着 locked 标记的同一个壳",
+      r.status_code == 200 and 'id="app"' in r.get_data(as_text=True), r.status_code)
 body = r.get_data(as_text=True)
-check("验证页里没有站点数据（搜索框、结果、统计都不给）",
-      'id="kw"' not in body and 'class="res"' not in body and "查询次数" not in body, None)
-check("验证页本身照样有 SEO：title / canonical / robots index / WebSite 结构化数据",
+b_l = json.loads(body.split('<script id="boot-data" type="application/json">')[1]
+                 .split("</script>")[0])
+check("验证壳里没有站点数据：#nojs 整块没渲染，快照/榜单/更新状态三个字段都是空的",
+      b_l["locked"] is True and 'id="nojs"' not in body
+      and b_l["snapshot"] == {} and b_l["hot"] == {} and b_l["refresh"] is None,
+      {k: b_l[k] for k in ("locked", "snapshot", "hot", "refresh")})
+check("验证壳本身照样有 SEO：title / canonical / robots index / WebSite 结构化数据",
       "<title>追剧资源搜索" in body and 'rel="canonical"' in body
       and 'content="index,follow"' in body and '"@type":"WebSite"' in body, None)
 check("接口未验证时 423 并带上 human 标记（前端据此弹滑块）",
       g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").status_code == 423
       and g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").get_json()["human"] == 1, None)
-check("静态资源不挡（验证页自己要加载样式和 slider.js）",
-      g1.get("/static/slider.js").status_code == 200
-      and g1.get("/static/app.css").status_code == 200, None)
+# (c) 旧写法拿 /static/slider.js 当"验证页自己要加载的东西"。滑块现在是 React 组件，
+# 和界面共用一个 bundle，所以这一条在新一代层面等价于"壳引的那两份产物都拿得到"。
+check("静态资源不挡（被挡的人也要能加载壳自己要的那份 bundle）",
+      g1.get("/static/spa/app.js").status_code == 200
+      and g1.get("/static/spa/app.css").status_code == 200, None)
 check("robots.txt 不挡（爬虫指令文件挡了就等于自断收录）", g1.get("/robots.txt").status_code == 200, None)
 check("退出登录不挡：被门禁锁在外面的人也要能把自己登出去",
       g1.post("/admin/logout", data={"csrf": "x"}).status_code in (302, 200), None)
@@ -205,9 +212,13 @@ check("cookie 是 HttpOnly + SameSite=Lax + Path=/（JS 读不到，也不跨站
 check("有效期跟着设置走（默认 12 小时）", f"Max-Age={12 * 3600}" in ck, ck)
 r2 = g1.get("/")
 b2 = r2.get_data(as_text=True)
-check("验证过之后首页正常给内容", "asect gatecard" not in b2 and 'id="kw"' in b2,
-      {"status": r2.status_code, "gatecard": "asect gatecard" in b2, "kw": 'id="kw"' in b2,
-       "len": len(b2)})
+# (b) 放行前后是同一个壳：唯一的区别就是 boot.locked 那一个布尔，
+# 以及 #nojs 那一整块（禁 JS 的人那份出口）有没有被渲染出来
+ok_boot = json.loads(b2.split('<script id="boot-data" type="application/json">')[1]
+                     .split("</script>")[0])
+check("验证过之后首页正常给内容（locked 翻成 false，#nojs 那份搜索出口回来了）",
+      ok_boot["locked"] is False and 'id="nojs"' in b2 and 'name="kw"' in b2,
+      {"status": r2.status_code, "locked": ok_boot["locked"], "nojs": 'id="nojs"' in b2})
 r3 = g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4")
 check("验证过之后接口放行", r3.status_code == 200, r3.status_code)
 g2.set_cookie(human_mod.COOKIE, "1234567890." + "0" * 16 + "." + "0" * 32)
@@ -229,9 +240,14 @@ g3.set_cookie(human_mod.COOKIE, human_mod.issue("127.0.0.1", "", now=time.time()
 check("过期的 cookie 也挡得住", g3.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").status_code == 423, None)
 # 注意要换一个**干净**的 client：g1 这时候已经带着 cookie 了，用它测"后台先要真人"
 # 等于已经验过了再看后台，看到的当然是口令页 —— 第一次就栽在这里
-adm = app.test_client().get("/admin").get_data(as_text=True)
-check("后台要**先**过真人验证再要口令：未验证时看到的是验证页，不是口令框",
-      "asect gatecard" in adm and "输入口令" not in adm, None)
+adm_r = app.test_client().get("/admin")
+adm = adm_r.get_data(as_text=True)
+# (b) 后台也走这道门禁：未验证时给的是同一个 locked 壳（界面上只有滑块），
+# 判据同样是 boot.locked 这一个服务端写死的事实，而不是页面文案
+adm_boot = json.loads(adm.split('<script id="boot-data" type="application/json">')[1]
+                      .split("</script>")[0])
+check("后台要**先**过真人验证再要口令：未验证时看到的是验证壳，不是口令框",
+      adm_boot["locked"] is True and 'id="nojs"' not in adm and "输入口令" not in adm, None)
 
 print("\n5) 统计里记的是「怎么被放行的」")
 stats_mod._ready = False
@@ -279,54 +295,88 @@ check("老库升级：没有 verified 列时 ALTER 补上，不重建表、不�
       (BASE / "zhuiju" / "stats.py").read_text(encoding="utf-8"), None)
 
 print("\n6) 前端接线（三处对不齐就会「验过了还一直弹」）")
-tpl = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
-gate = (BASE / "zhuiju" / "templates" / "human.html").read_text(encoding="utf-8")
-slip = (BASE / "zhuiju" / "static" / "slider.js").read_text(encoding="utf-8")
-appjs = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
-css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
-check("首页有那块弹层，也加载了共用实现", 'id="slipwrap"' in tpl and "slider.js" in tpl, None)
-check("slider.js 在 app.js 之前加载（app.js 收到 423 时要用它）",
-      tpl.index("app.js") < tpl.index("slider.js"), None)
-check("验证页与首页共用同一份 _slider.html（两处各写一份必然对不齐）",
-      'include "_slider.html"' in tpl and 'include "_slider.html"' in gate, None)
-check("收到 423 时只有一处出口：getJSON", "r.status === 423" in appjs and "needHuman(retry)" in appjs, None)
-check("验证通过后重跑刚才那次搜索，不用重新输关键词",
-      "onok: () =>" in appjs and "slipPending" in appjs and "() => run(kw, page)" in appjs, None)
+# 这一节原来读的是 templates/index.html、templates/human.html、static/slider.js、
+# static/app.js 这四份。前四者里除 app.css（后台还在用）以外都已经不上屏了：
+# 前台只剩 templates/shell.html + React 那一套（web/src/**）。
+# 下面每条都改到活的表面上重新钉住，一条不变量都没删；(a)=搬进 React 源码，
+# (b)=由服务端 shell.html 承担，(c)=旧判据在新层面没有对应物，换成等价形态。
+WEB = BASE / "web" / "src"
+gate_ts = (WEB / "components" / "Gate.tsx").read_text(encoding="utf-8")
+app_ts = (WEB / "App.tsx").read_text(encoding="utf-8")
+api_ts = (WEB / "api.ts").read_text(encoding="utf-8")
+auth_ts = (WEB / "auth.ts").read_text(encoding="utf-8")
+boot_ts = (WEB / "boot.ts").read_text(encoding="utf-8")
+stcss = (WEB / "styles.css").read_text(encoding="utf-8")
+shell = (BASE / "zhuiju" / "templates" / "shell.html").read_text(encoding="utf-8")
+check("首页这一侧确实挂了就地弹层，也真的渲染了它（不再是模板里那段 hidden 的 div）",
+      'import { GateModal, LockedView } from "./components/Gate";' in app_ts
+      and "<GateModal open={locked && !boot.locked}" in app_ts, None)
+# (c) 旧写法比的是模板里两个 <script src> 的先后。现在前台只有一个 bundle，
+# 「谁先加载」这个问题在壳这一层根本不成立 —— 等价形态是「只有一个，且没有第二份手写脚本」
+check("壳里只引一份 bundle：旧「slider.js 要在 app.js 之前」那条先后问题不再存在",
+      shell.count('type="module"') == 1 and "slider.js" not in shell
+      and 'src="/static/' not in shell, re.findall(r"<script[^>]*src=[^>]*>", shell))
+check("门禁页与就地弹层共用同一份滑块实现（一个文件里只有一个 Slip，两处各写一份必然对不齐）",
+      gate_ts.count("export function Slip") == 1
+      and gate_ts.count("<Slip onok=") == 2, gate_ts.count("<Slip onok="))
+check("收到 423 时只有一处出口：request 里一次 markDenied，调用点不许各自判一遍",
+      api_ts.count("r.status === 423") == 1 and api_ts.count("markDenied()") == 1,
+      (api_ts.count("r.status === 423"), api_ts.count("markDenied()")))
+# (a) 旧写法靠 slipPending 存住"刚才那一次"，验完手动回调。新架构把这一格做成了 tick：
+# markPassed 让 tick +1，所有取数 effect 都把 tick 放进依赖，于是自动补上，不用每个调用点写回调
+check("验证通过后重跑刚才那次搜索，不用重新输关键词（靠 tick 换一格，不靠各处存回调）",
+      "denied = false;" in auth_ts and "tick += 1;" in auth_ts
+      and "markPassed();" in gate_ts and app_ts.count(", tick]") >= 3, app_ts.count(", tick]"))
+check("前端 denied 的初值就是服务端那个 boot.locked（首屏被挡时不必再等一次 423）",
+      "let denied = boot.locked;" in auth_ts and "import { boot } from \"./boot\";" in auth_ts,
+      re.findall(r"let denied[^\n]*", auth_ts))
 check("失败后必须换一块新挑战（沿用作废的那条会永远过不去）",
-      "window.setTimeout(ask, 700)" in slip and "ch.id" in slip, None)
+      "window.setTimeout(ask, 700)" in gate_ts and "ch.id" in gate_ts, None)
 check("键盘那条路给的是自动提交，不要求再按一次回车",
-      "idle = window.setTimeout(() => { spent = performance.now() - down; down = 0; submit(); }, 600)"
-      in slip, None)
-# 用户报的"一直说太快了"：pointerup 里先把 t0 清零、submit 再拿 t0 算用时 → 永远 0ms。
-# 现在改成"先记下 spent，再清 down"，提交时只读 spent
+      "}, 600);" in gate_ts and "c.keys += 1;" in gate_ts
+      and 'e.key === "ArrowRight"' in gate_ts, None)
+# 用户报的"一直说太快了"：pointerup 里先把起点清零、submit 再拿起点算用时 → 永远 0ms。
+# 搬进 React 时这条顺序必须原样带过来：先记 spent，再清 down
 check("拖多久是**先记下来再清计时起点**的（旧写法每次都上报 0ms，永远被判太快）",
-      "spent = performance.now() - down;   // 先记下时长，再把 down 清掉" in slip
-      and "ms: Math.round(spent)" in slip
-      # 注意不能直接判 "t0" not in slip：上面那段说明注释里就写着旧变量名 t0
-      and "let t0" not in slip and "ms: t0" not in slip, None)
+      "c.spent = performance.now() - c.down;\n            c.down = 0;" in gate_ts
+      and "ms: Math.round(c.spent)" in gate_ts
+      and "c.down = 0;\n            c.spent = performance.now()" not in gate_ts,
+      re.findall(r"spent = [^\n]+", gate_ts))
 check("滑块宽度是现量的（窄屏 CSS 加宽之后写死的常量就会把缺口画偏）",
-      "knob.offsetWidth" in slip and "const KW = 44;" not in slip, None)
+      "el.getBoundingClientRect().width - w" in gate_ts
+      and "knobRef.current?.offsetWidth || KNOB" in gate_ts
+      and "const KW = 44;" not in gate_ts, re.findall(r"const KNOB = \d+;", gate_ts))
 check("缺口以目标位置为中心、按像素算，窗口变化还会重算",
-      "ch.target * s + w / 2 - zone / 2" in slip and "addEventListener('resize', layout)" in slip, None)
-check("--kw 只在轨道那一处定义（写在滑块上缺口就拿不到，窄屏正好错开一格）",
-      "--kw: 44px" in css and ".slip-knob { --kw" not in css
-      and "@media (max-width: 560px) {\n  body.gate .gatecard" in css
-      and ".slip-track { --kw: 52px; height: 52px; }" in css, None)
-check("手机上滑块禁用页面滚动（touch-action:none），否则拖滑块变成滚页面",
-      "touch-action: none" in css, None)
-# 用户看过截图后的意见是"这布局排版太丑了"：卡片用 margin:8vh 顶在上半屏、
-# 下面整片空白，卡片外那段提示又跟着 .wrap 铺到 1680px，整页看着就是歪的
-check("验证页由 main 把卡片压在视口正中（不再靠一个会随屏高乱飘的 margin-top）",
-      "body.gate main {" in css and "place-items: center" in css
-      and "margin: 8vh auto 0" not in css and "8vh" not in css, None)
-check("所有说明都关在卡片里：卡片外不再甩段落",
-      "atip" not in gate
-      and gate.index('class="asect gatecard"') < gate.index('class="gatefoot"') < gate.index("</section>"),
+      "ch.target * s + w / 2 - zone / 2" in gate_ts and "new ResizeObserver(() => layout())" in gate_ts,
       None)
+# (c) 旧那条钉的是 app.css 里 --kw 只能写在 .slip-track 上（写在滑块上缺口拿不到，窄屏错一格）。
+# 新实现没有这个 CSS 变量：缺口的位置与宽度是 JS 现量出来再写进 style 的，
+# 等价形态是"两处从同一个 s/w 取值，没有第二份手写尺寸"
+check("轨道与缺口从同一份现量取值，不再有第二套手写尺寸（旧 --kw 那个坑在新写法里没有载体）",
+      "--kw" not in gate_ts and "--kw" not in stcss
+      and "style={{ width: hole.w, left: hole.left }}" in gate_ts
+      and gate_ts.count("spanRef.current") >= 2, gate_ts.count("spanRef.current"))
+# 这条的一半（touch-action: none）在新实现里**没有**搬过来：见交付报告里的疑似 bug 清单。
+# 这里只钉活着的另一半（按住即 preventDefault + 抓指针），缺的那半不假装它存在。
+check("拖的时候先抓住指针并拦下默认动作（手机上不滚页面的那一半靠 touch-action，那一半缺失已上报）",
+      "e.currentTarget.setPointerCapture(e.pointerId)" in gate_ts
+      and "e.preventDefault();" in gate_ts
+      and "touch-action" not in gate_ts and "touch-action" not in stcss, None)
+check("验证页由 main 把卡片压在视口正中（不再靠一个会随屏高乱飘的 margin-top）",
+      '<main className="mx-auto flex min-h-dvh max-w-[560px] flex-col justify-center px-4">' in gate_ts
+      and "8vh" not in gate_ts and "margin: 8vh auto 0" not in stcss, None)
+check("所有说明都关在卡片里：卡片外不再甩段落",
+      gate_ts.index("<section") < gate_ts.index("<noscript>") < gate_ts.index("</section>"), None)
 check("cookie 那几段长说明默认收起（首屏只看到标题、一句引导和滑块）",
-      '<details class="gate-more">' in gate and "匿名</b> cookie" in gate, None)
-check("弹层的显隐只用 hidden 表达（全站那条 [hidden] 带 !important，压得住 display:grid）",
-      'id="slipwrap" hidden' in tpl and "[hidden] { display: none !important; }" in css, None)
+      "<details" in gate_ts and "<summary" in gate_ts and "匿名</b> cookie" in gate_ts, None)
+# (c) 旧那条靠全站 [hidden] { display:none !important } 压住 display:grid。
+# 现在显隐是 HeroUI Modal 的 isOpen（受控），根本不再往 DOM 上写 hidden 属性
+check("弹层显隐交给 Modal 的 isOpen（受控），不再靠那条全站 [hidden] 的 !important 硬压",
+      "isOpen={open}" in gate_ts and "isDismissable={false}" in gate_ts
+      and "hidden" not in gate_ts[gate_ts.index("export function GateModal"):], None)
+check("被整页挡下时界面上只有滑块那一张卡（服务端此刻一个内容字段都没下发）",
+      "if (locked && boot.locked) {" in app_ts and "<LockedView" in app_ts
+      and "return (" in app_ts[app_ts.index("if (locked && boot.locked) {"):], None)
 check("门禁关这一项在后台「设置」里（表单从 SPEC 生成，不是模板写死一格）",
       "for key, spec, val in setfields" in (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
       and "human_gate" in settings_mod.SPEC and settings_mod.SPEC["human_gate"]["kind"] == "bool", None)

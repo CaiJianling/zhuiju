@@ -339,8 +339,32 @@ def create_app() -> Flask:
 
     def _csrf_ok() -> bool:
         want = session.get("csrf") or ""
-        got = request.form.get("csrf") or ""
+        # 后台改成 React 之后，POST 走 JSON：csrf 放在头里而不是表单里。
+        # 两条都认，因为没 JS 时那条老表单出口还要留着能用（同一条规则，两个来源）。
+        got = request.form.get("csrf") or request.headers.get("X-CSRF-Token") or ""
         return bool(want) and hmac.compare_digest(str(want), str(got)[:64])
+
+    def _wants_json() -> bool:
+        """这一发是不是 React 打的（而不是没 JS 时的表单提交）。
+
+        认 X-Requested-With: fetch 是因为 STRM 那几颗按钮早就用这个头做内容协商了
+        （见 _strm_back），再加一条 Accept 兜底：手搓 fetch 的人不一定会带头。
+        """
+        if (request.headers.get("X-Requested-With") or "").lower() == "fetch":
+            return True
+        return "application/json" in (request.headers.get("Accept") or "")
+
+    def _no_auth():
+        """没登录：JSON 客户端要的是"该弹登录框了"，表单客户端要的是那一页本身。"""
+        if _wants_json():
+            return jsonify({"ok": False, "authed": False, "error": "需要口令"}), 401
+        return _login_page(None, 401)
+
+    def _login_back(msg: str, code: int):
+        """登录/口令那一串失败：同上，两种客户端各回各的。"""
+        if _wants_json():
+            return jsonify({"ok": False, "authed": False, "error": msg}), code
+        return _login_page(msg, code)
 
     def _authed() -> bool:
         at = session.get(admin_mod.SESSION_KEY)
@@ -413,14 +437,12 @@ def create_app() -> Flask:
             # 423：这个状态码本来就没什么别的用途，前端据此弹滑块；
             # 不用 401/403 是因为那不是"你没权限"，是"还不知道你是不是人"
             return jsonify({"error": "需要先通过真人验证", "human": 1}), 423
-        host = request.host_url.rstrip("/")
-        return make_response(render_template(
-            "human.html", asset_v=_asset_ver(), csrf=_csrf_token(), hours=human_mod.max_age() // 3600,
-            back=request.script_root + request.path,
-            seo={"title": "追剧资源搜索 - 电影电视剧资源一站聚合",
-                 "description": "输入电影、电视剧或动漫名称，一次查询多个影视资源站，"
-                                "并汇总网盘、磁力与资源站入口。",
-                 "canonical": f"{host}/", "site": host}), 200)
+        # 页面这一侧不再单独渲染一张"验证页"：交同一个 React 壳，只是 boot.locked=true，
+        # 于是界面里出的就是一块滑块，而 SEO 的站点级 title/description/SearchAction
+        # 照旧写在 HTML 里（不 noindex、不 403，万一爬虫豁免那条判据不准，
+        # 它看到的仍然是这个站点的门面，不是一个把收录掐死的死胡同）。
+        # 关键点：locked 时快照与榜单一个字段都不下发，没验过的人拿不到任何内容。
+        return make_response(_page(locked=True), 200)
 
     @app.post("/api/human/challenge")
     def api_human_challenge():
@@ -458,33 +480,56 @@ def create_app() -> Flask:
         if request.path in ("/", "/sitemap.xml", "/admin"):
             strmjob.maybe_trigger()
 
-    def _page(kw: str = "", snap: dict | None = None):
+    def _page(kw: str = "", snap: dict | None = None, locked: bool = False):
+        """前台唯一的 HTML：一个 SEO 壳 + 一份 boot 数据 + React 的挂载点。
+
+        `locked`（还没通过真人验证）时三个数据字段一律不给 —— 快照、猜你想搜、更新状态
+        都不下发，页面里能看到的只有站名与一句话简介，界面上只剩一块滑块。
+        """
         host = request.host_url.rstrip("/")
+        snap = snap or {}
         seo = {
             "kw": kw,
             "canonical": f"{host}/s/{urllib.parse.quote(kw)}" if kw else f"{host}/",
             "title": (f"《{kw}》影视资源怎么找 - 追剧资源搜索" if kw
                       else "追剧资源搜索 - 电影电视剧资源一站聚合"),
-            "description": (seo_mod.describe(kw, snap or {}) if kw else
+            "description": (seo_mod.describe(kw, snap) if kw else
                             "输入电影、电视剧或动漫名称，一次查询多个影视资源站，"
                             "并汇总网盘、磁力与资源站入口。"),
-            "snapshot": snap or {},
-            "hot": _first_row(_proxied_hot(hot_mod.get())),
+            "snapshot": snap,
+            # 门禁挡着的时候连榜单都不下发；这一份是 boot 与 #nojs 共用的同一份数据，
+            # 不是"给爬虫看的一套、给人看的一套"
+            "hot": {} if locked else _first_row(_proxied_hot(hot_mod.get())),
             "site": host,
         }
-        return render_template(
-            "index.html",
-            categories=catalog_mod.categories(),
+        try:
+            page = max(1, min(20, int(request.args.get("page") or 1)))
+        except ValueError:
+            page = 1
+        boot = {
+            "kw": kw,
+            "page": page,
+            "site": host,
+            "canonical": seo["canonical"],
+            "title": seo["title"],
+            "description": seo["description"],
+            "locked": locked,
+            # 爬虫豁免那条路：g.verified == 0。写进 boot 只为了让人一眼看懂 HTML 里
+            # 为什么多一份服务端渲染，React 并不据它改行为
+            "crawler": getattr(g, "verified", None) == 0,
+            "back": request.script_root + request.path,
+            "gate_hours": human_mod.max_age() // 3600,
             # 首页那句"结果来自 N 个采集接口"和骨架屏那句"正在并发查询 N 个"数的是
             # **会被并发到的**源：停用的一律不算，只供最新流的那两个（见 Source.searchable）
             # 也不算 —— 它们不会进 search()，把它们数进去就是虚报
-            sources=[{"id": s.id, "name": s.name, "note": s.note, "root": s.root}
-                     for s in load_sources() if s.enabled and s.searchable],
-            updated=catalog_mod.catalog().get("updated_at", ""),
-            asset_v=_asset_ver(),
-            refresh=refresh_info(),
-            seo=seo,
-        )
+            "sources": [{"id": s.id, "name": s.name, "note": s.note, "root": s.root}
+                        for s in load_sources() if s.enabled and s.searchable],
+            "categories": catalog_mod.categories(),
+            "hot": seo["hot"],
+            "refresh": None if locked else refresh_info(),
+            "snapshot": snap,
+        }
+        return render_template("shell.html", seo=seo, boot=boot, asset_v=_asset_ver())
 
     @app.get("/")
     def index():
@@ -829,7 +874,7 @@ def create_app() -> Flask:
     def admin_strm_settings():
         """后台改采集设置（含时间范围）：写进 strm.db，立刻生效不用重启。"""
         if not _authed():
-            return _login_page(None, 401)
+            return _no_auth()
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
         try:
@@ -844,7 +889,7 @@ def create_app() -> Flask:
     def admin_strm_run():
         """立刻催一轮采集（不等最小间隔）。已经在跑就只是回到页面看进度。"""
         if not _authed():
-            return _login_page(None, 401)
+            return _no_auth()
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
         out = strmjob.start_now()
@@ -860,7 +905,7 @@ def create_app() -> Flask:
         清完顺手起一轮：不接着查的话页面上那个数字一动不动，人只会以为按钮坏了。
         """
         if not _authed():
-            return _login_page(None, 401)
+            return _no_auth()
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
         try:
@@ -879,7 +924,7 @@ def create_app() -> Flask:
         这时候再起一轮采集就是在改同一批文件，两边会互相踩。
         """
         if not _authed():
-            return _login_page(None, 401)
+            return _no_auth()
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
         full = (request.form.get("mode") or "") == "full"
@@ -892,15 +937,23 @@ def create_app() -> Flask:
             return _strm_back(strm_run="0", why=f"{type(exc).__name__}: {exc}"[:120])
         return _strm_back(strm_run="1", why="全量重建并打包" if full else "增量导出并打包")
 
-    @app.get("/admin")
-    def admin():
-        """后台统计：口令通过才给看，全部数据来自 SQLite。"""
-        if not _authed():
-            return _login_page(None, 401)
-        # 用的还是首次启动随机生成的口令 -> 先领着去改成自己定的
-        # （环境变量指定口令时不算，那种部署方式本来就不打算改文件）
-        if admin_mod.is_temp_password():
-            return redirect(url_for("admin_password", first=1))
+    def _admin_args(**over) -> dict:
+        """当前筛选条件 + 覆盖项，拼成指向 /admin 的查询参数。
+
+        tab 永远带上：显示哪几块是由它决定的，链接少了它就等于"点一下回到总览"。
+        """
+        base = {k: v for k, v in (over.pop("flt", {}) or {}).items() if v}
+        base.update(over)
+        if "tab" not in base:
+            base["tab"] = admin_tab((request.args.get("tab") or "").strip())
+        return base
+
+    def _admin_ctx() -> dict:
+        """后台一屏的全部数据。React 的 /api/admin/view 与老模板共用这一份口径。
+
+        注意：**tab 只决定哪几块显示，不参与任何数据口径** —— 同一套筛选条件在四个标签里
+        数的是同一批记录，切个标签不该把数字变了。所以这里不管 tab 算一遍全套。
+        """
         flt = {k: (request.args.get(k) or "").strip()[:80]
                for k in ("ip", "kw", "via", "geo", "browser", "os", "device", "ref_kind",
                          "who", "day_from", "day_to", "title", "host", "place", "kind")}
@@ -928,8 +981,6 @@ def create_app() -> Flask:
         if scope not in ("all", "query", "click"):
             scope = "all"
         flt["scope"] = scope
-        # 标签页：非法值回总览（见 admin_tab）。tab 只决定"哪几块显示"，不参与任何数据口径 ——
-        # 同一套筛选条件在四个标签里数的是同一批记录，切个标签不该把数字变了
         tab = admin_tab((request.args.get("tab") or "").strip())
         rows = stats_mod.list_activity(flt, page=page, per=per, scope=scope)
         agg = stats_mod.summary(flt)
@@ -942,9 +993,15 @@ def create_app() -> Flask:
         beh_all = stats_mod.behavior(flt, limit=500)
         beh = beh_all[:40]
         beh_map = {b["ip"]: b for b in beh_all}
-        geo_info = geoip.available()
-        markers = _markers(agg["by_geo"]) if geo_info["points"] else []
-        base = geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}, "error": "没有底图文件"}
+        # 两块**贵**的数据按标签算：STRM 的 manifest+status 要 3.5 秒（在近一年的
+        # strm.db 上聚合），底图那份是 230KB 的路径。切到「设置」还去算它们，
+        # 就是点一下等五秒 —— 老模板是整页刷新所以没人察觉，换成 SPA 就必须切干净。
+        want_strm = tab == "strm"
+        want_map = tab == "overview"
+        sjob = strmjob.status() if want_strm else None
+        geo_info = geoip.available() if want_map else {"ready": False, "points": 0, "basemap": False}
+        markers = _markers(agg["by_geo"]) if (want_map and geo_info["points"]) else []
+        base = (geoip.basemap() if geo_info["basemap"] else {"d": "", "by_iso": {}}) if want_map else {"d": "", "by_iso": {}}
         drawn = {m["iso"] for m in markers if m["iso"] in base["by_iso"]}
         # 翻页链接要把当前筛选条件一起带上，否则点了下一页筛选就丢了
         keep = {k: v for k, v in flt.items() if v}
@@ -955,74 +1012,125 @@ def create_app() -> Flask:
         # 「看全部历史」那个链接要留住除日期以外的筛选，否则一去看全部，筛的东西全丢了
         keep_args = {k: v for k, v in flt.items()
                      if v and k not in ("day_from", "day_to", "per", "page")}
-        # 「全部 / 只看搜索 / 只看点开」三个胶囊的地址在 Python 里拼好：
-        # Jinja 的字典字面量不认 `{**keep, ...}`（一渲染就是 unexpected '**'），
-        # 而换范围必须回到第 1 页——两边条数不一样，停在第 4 页看"只看点开"会是空的
+        # 换范围必须回到第 1 页：两边条数不一样，停在第 4 页看"只看点开"会是空的
         args_scope = {s: {k: v for k, v in keep.items() if k != "page"} | {"scope": s}
                       for s in SCOPE_CN}
-        # 汇总卡片里那颗「详情 / 观看点击」要点开的表上去，所以除了换 scope 还得换标签；
-        # 这件事在 Python 里拼好整条 URL：Jinja 的函数调用不接受 `f(**d, k=v)` 这种混合写法
-        # （直接 TemplateSyntaxError），留给模板就只能再加一个中间变量，不如这里一行搞定
-        click_url = url_for("admin", **{**args_scope["click"], "tab": "detail"})
-        return render_template(
-            "admin.html", authed=True, error=None, csrf=_csrf_token(),
-            tab=tab, tabs=ADMIN_TABS,
-            click_url=click_url,
+        # 汇总卡片里那颗「详情 / 观看点击」要点开的表上去，所以除了换 scope 还得换标签
+        click_url = url_for("admin", tab="detail", **{**args_scope["click"], "scope": "click"})
+        p = rows["page"]
+        return {
+            "authed": True,
+            "csrf": _csrf_token(),
+            "tab": tab,
+            "tabs": [{"id": k, "label": v["label"], "blocks": v["blocks"],
+                      "href": url_for("admin", **_admin_args(tab=k))}
+                     for k, v in ADMIN_TABS.items()],
             # 「设置」那一节的表单从 settings.SPEC 生成：加一项设置只改 settings.py，
-            # 不用再来模板里补一格（补漏一次的后果是"后端认这个键、页面上看不见"）
-            setfields=settings_mod.fields(),
+            # 不用再来模板里补一格（补漏一次的后果是"后端认这个键、页面上看不见"）。
+            # settings.fields() 给的是 (key, spec, value) 三元组：Jinja 那边直接解包，
+            # 但过 JSON 就成数组了 —— React 按对象读，所以这里先摊平成字典。
+            "setfields": [{"key": k, "spec": sp, "value": val} for k, sp, val in settings_mod.fields()],
             # 每一项现在是谁定的（env / file / default）：被环境变量顶着的时候
             # 页面上必须说出来，否则"我改了怎么没生效"根本查不到头
-            setsrc={k: settings_mod.source_of(k) for k in settings_mod.DEFAULTS},
-            asset_v=_asset_ver(), via_cn=VIA_CN, ref_kind_cn=REF_KIND_CN,
-            place_cn=CLICK_PLACE_CN, kind_cn=CLICK_KIND_CN, scope_cn=SCOPE_CN,
-            who_cn={k: stats_mod.who_label(k) for k in stats_mod.WHO_LABELS},
-            beh=beh, beh_map=beh_map,
-            # Emby STRM 那一节：设置与库都在 strm.db，进度在采集进程写的文件里，
-            # 分卷清单从 file/zip 两张表聚合出来（页面只讲"采到哪了、有几卷"）
-            smeta=strm_mod.manifest(), sjob=strmjob.status(),
-            sspec=strm_mod.spec_rows(),
-            smsg=_strm_notice(request.args, strmjob.status()),
+            "setsrc": {k: settings_mod.source_of(k) for k in settings_mod.DEFAULTS},
+            "setinfo": _setinfo(),
+            "labels": {"via": VIA_CN, "ref_kind": REF_KIND_CN, "place": CLICK_PLACE_CN,
+                       "kind": CLICK_KIND_CN, "scope": SCOPE_CN,
+                       "who": {k: stats_mod.who_label(k) for k in stats_mod.WHO_LABELS}},
             # 改判门槛要写在页面上（几条命中降到哪一档），不能只在代码里
-            BEHAVIOR_SUSPECT=stats_mod.BEHAVIOR_SUSPECT,
-            BEHAVIOR_SCRIPT=stats_mod.BEHAVIOR_SCRIPT,
-            day_all=day_all, day_window=DEFAULT_WINDOW,
-            keep_days=stats_mod.KEEP_DAYS, keep_args=keep_args,
-            flt={**flt, "per": rows["per"]},
-            agg=agg, rows=rows, temp=False, args_scope=args_scope,
-            cagg=cagg,
-            geo=geo_info, map_paths=base["d"], map_active="".join(
-                base["by_iso"][i] for i in sorted(drawn)),
-            geo_warn=stats_mod.MIGRATE_ERROR,
-            fetch_cmd=autoupdate.py_exe("tools/fetch_geo.py"),
-            upd=autoupdate.status(),
-            markers=markers, offmap=[m for m in markers if m["iso"] not in base["by_iso"]],
-            setinfo=_setinfo(),
-            notice=("口令已更新，下次登录请用新口令" if request.args.get("set") else None)
-                   or ("设置已保存，判断「今天该不该更新」立刻按新时间点走，不用重启"
-                       if request.args.get("settings_saved") else None),
-            settings_err=bool(request.args.get("settings_err")),
-            pct_empty=round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
-            args_next={**keep, "page": rows["page"] + 1},
-            args_prev={**keep, "page": rows["page"] - 1})
+            "thresholds": {"suspect": stats_mod.BEHAVIOR_SUSPECT, "script": stats_mod.BEHAVIOR_SCRIPT},
+            "beh": beh, "beh_map": beh_map,
+            # Emby STRM 那一节：设置与库都在 strm.db，进度在采集进程写的文件里，
+            # 分卷清单从 file/zip 两张表聚合出来（页面只讲"采到哪了、有几卷"）。
+            # 只在「Emby STRM」这一屏算：manifest 要在近一年的 strm.db 上聚合两轮。
+            # status() 只调一次 —— 之前 sjob 与 smsg 各调一次，等于白等一倍时间。
+            **({"smeta": strm_mod.manifest(), "sjob": sjob, "sspec": strm_mod.spec_rows(),
+                "smsg": _strm_notice(request.args, sjob)} if want_strm else {}),
+            "day_all": day_all, "day_window": DEFAULT_WINDOW, "keep_days": stats_mod.KEEP_DAYS,
+            "flt": {**flt, "per": rows["per"]},
+            "agg": agg, "rows": rows, "cagg": cagg,
+            # 地图那三份也是按标签给：底图路径 230KB，只有「总览」这一屏画它
+            **({"geo": geo_info, "markers": markers,
+                "offmap": [m for m in markers if m["iso"] not in base["by_iso"]],
+                "map_active": "".join(base["by_iso"][i] for i in sorted(drawn)),
+                "geo_warn": stats_mod.MIGRATE_ERROR,
+                "fetch_cmd": autoupdate.py_exe("tools/fetch_geo.py")} if want_map else {}),
+            "upd": autoupdate.status(),
+            "notice": ("口令已更新，下次登录请用新口令" if request.args.get("set") else None)
+                      or ("设置已保存，判断「今天该不该更新」立刻按新时间点走，不用重启"
+                          if request.args.get("settings_saved") else None),
+            "settings_err": bool(request.args.get("settings_err")),
+            "pct_empty": round(agg["empty"] / agg["count"] * 100) if agg["count"] else 0,
+            # 翻页/换范围/看全部历史的地址一律在服务端算好：那几条"带上当前筛选、
+            # 换范围回第 1 页、day=all 不能被悄悄丢掉"的规则只写在这一处
+            "links": {
+                "prev": url_for("admin", **{**keep, "page": p - 1}) if p > 1 else None,
+                "next": url_for("admin", **{**keep, "page": p + 1}) if p < rows["pages"] else None,
+                "all_days": url_for("admin", **{**keep_args, "day": "all", "tab": tab}),
+                "scopes": {s: url_for("admin", tab=tab, **a) for s, a in args_scope.items()},
+                "click_detail": click_url,
+            },
+        }
+
+    @app.get("/admin")
+    def admin():
+        """后台：一个壳 + 一份 /api/admin/view。口令没过，壳里什么数据都没有。"""
+        if not _authed():
+            return render_template("admin_shell.html", boot={"authed": False, "route": "/admin",
+                                                             "asset_v": _asset_ver()},
+                                   asset_v=_asset_ver())
+        # 用的还是首次启动随机生成的口令 -> 先领着去改成自己定的
+        # （环境变量指定口令时不算，那种部署方式本来就不打算改文件）
+        if admin_mod.is_temp_password():
+            return redirect(url_for("admin_password", first=1))
+        return render_template("admin_shell.html", boot={"authed": True, "route": "/admin",
+                                                         "asset_v": _asset_ver()},
+                               asset_v=_asset_ver())
+
+    @app.get("/api/admin/view")
+    def api_admin_view():
+        """后台一屏的数据。没登录只回一句"要口令"，一个统计字段都不下发。"""
+        if not _authed():
+            # temp 只说"还是不是首次生成的随机口令"，不含口令本身；登录框要靠它提醒
+            # 人去改掉那串随机口令（老模板 authed=False 那一支也是这么写的）
+            return jsonify({"authed": False, "csrf": _csrf_token(), "temp": admin_mod.is_temp_password(),
+                            "min_len": admin_mod.MIN_LEN, "env_lock": admin_mod.using_env_password(),
+                            "error": "需要口令"}), 401
+        return jsonify(_admin_ctx())
+
+    @app.get("/api/admin/map")
+    def api_admin_map():
+        """世界底图的那串路径。它和筛选条件无关，单独一个接口好让浏览器缓存住 ——
+        跟着 view 一起发的话，每次筛选都要重传几百 KB。"""
+        if not _authed():
+            return jsonify({"error": "需要口令"}), 401
+        info = geoip.available()
+        if not info["basemap"]:
+            return jsonify({"d": "", "by_iso": {}, "error": "没有底图文件，跑一次 "
+                                                             + autoupdate.py_exe("tools/fetch_geo.py")})
+        base = geoip.basemap()
+        return jsonify({"d": base["d"], "by_iso": base["by_iso"], "error": None})
 
     @app.route("/admin/password", methods=("GET", "POST"))
     def admin_password():
         """改口令：写在配置文件里，不用重启服务。"""
         if not _authed():
-            return _login_page(None, 401)
+            return _no_auth()
         first = bool(request.args.get("first"))
-        ctx = dict(csrf=_csrf_token(), asset_v=_asset_ver(), first=first,
-                   min_len=admin_mod.MIN_LEN,
-                   env_lock=admin_mod.using_env_password(),
-                   temp=admin_mod.is_temp_password())
         if request.method == "GET":
-            return render_template("admin_password.html", error=None, **ctx)
+            return render_template("admin_shell.html",
+                                   boot={"authed": True, "route": "/admin/password", "first": first,
+                                         "min_len": admin_mod.MIN_LEN,
+                                         "env_lock": admin_mod.using_env_password(),
+                                         "temp": admin_mod.is_temp_password(),
+                                         "asset_v": _asset_ver()},
+                                   asset_v=_asset_ver())
         if not _csrf_ok():
+            if _wants_json():
+                return jsonify({"ok": False, "error": "表单已过期，请重新提交"}), 400
             return _login_page("表单已过期，请重新提交", 400)
         new = (request.form.get("password") or "")[:admin_mod.MAX_LEN + 20]
         again = (request.form.get("password2") or "")[:admin_mod.MAX_LEN + 20]
-        err = None
         # 当前口令必须验一次：改了文件才生效这件事，不该让一个过期会话替你做
         if not admin_mod.password_ok(request.form.get("current") or ""):
             err = "当前口令不对"
@@ -1031,15 +1139,23 @@ def create_app() -> Flask:
         else:
             err = admin_mod.password_error(new)
         if err:
-            return render_template("admin_password.html", error=err, **ctx), 400
+            if _wants_json():
+                return jsonify({"ok": False, "error": err}), 400
+            return render_template("admin_password.html", error=err,
+                                   csrf=_csrf_token(), asset_v=_asset_ver(), first=first,
+                                   min_len=admin_mod.MIN_LEN, env_lock=admin_mod.using_env_password(),
+                                   temp=admin_mod.is_temp_password()), 400
         admin_mod.set_password(new)
+        if _wants_json():
+            return jsonify({"ok": True, "msg": "口令已更新，下次登录请用新口令",
+                            "redirect": url_for("admin", set=1)})
         return redirect(url_for("admin", set=1))
 
     @app.post("/admin/settings")
     def admin_settings():
         """保存后台设置（几点算新的一天、门禁开不开、验证管多久）。写 data/settings.json，不用重启。"""
         if not _authed():
-            return _login_page(None, 401)
+            return _no_auth()
         if not _csrf_ok():
             return _login_page("表单已过期，请重新提交", 400)
         bad = 0
@@ -1051,6 +1167,11 @@ def create_app() -> Flask:
             ok, _err = settings_mod.set_value(key, request.form.get(key))
             bad += 0 if ok else 1
         # 回到「设置」那一格：现在分标签页了，跳回默认标签等于"我点了保存，页面自己跑掉了"
+        if _wants_json():
+            return jsonify({"ok": not bad,
+                            "error": None if not bad else "有认不出来的取值，那一项一条都没写",
+                            "msg": "设置已保存，判断「今天该不该更新」立刻按新时间点走，不用重启"
+                                   if not bad else None})
         if bad:
             return redirect(url_for("admin", settings_err=1, tab="settings"))
         return redirect(url_for("admin", settings_saved=1, tab="settings"))
@@ -1060,25 +1181,29 @@ def create_app() -> Flask:
         who = admin_mod.client_ip(request.environ)
         wait = admin_mod.throttle.blocked(who)
         if wait:                      # 同一来源连续错太多次就先冷却，脚本猜口令猜不动
-            return _login_page(f"失败次数过多，请 {wait} 秒后再试", 429)
+            return _login_back(f"失败次数过多，请 {wait} 秒后再试", 429)
         if not _csrf_ok():
-            return _login_page("表单已过期，请重新提交", 400)
+            return _login_back("表单已过期，请重新提交", 400)
         if admin_mod.password_ok(request.form.get("password") or ""):
             admin_mod.throttle.reset(who)
             session[admin_mod.SESSION_KEY] = time.time()
             session.permanent = True
             session["csrf"] = secrets.token_hex(16)     # 登录后换一枚，旧表单不能再复用
             # 还在用首次生成的随机口令 -> 直接领去改，别让人先撞一次统计页
-            if admin_mod.is_temp_password():
-                return redirect(url_for("admin_password", first=1))
-            return redirect(url_for("admin"))
+            dest = url_for("admin_password", first=1) if admin_mod.is_temp_password() else url_for("admin")
+            if _wants_json():
+                return jsonify({"ok": True, "redirect": dest})
+            return redirect(dest)
         left = admin_mod.throttle.fail(who)
-        return _login_page(f"口令不正确（还可尝试 {left} 次）", 401)
+        return _login_back(f"口令不正确（还可尝试 {left} 次）", 401)
 
     @app.post("/admin/logout")
     def admin_logout():
         if _csrf_ok():
             session.pop(admin_mod.SESSION_KEY, None)
+        if _wants_json():
+            # 退出必须留在 /admin：不豁免的话"退出"这一步会先撞一次门禁（见 HUMAN_EXEMPT）
+            return jsonify({"ok": True, "redirect": url_for("admin")})
         return redirect(url_for("admin"))
 
     @app.errorhandler(404)

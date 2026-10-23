@@ -1,15 +1,23 @@
-{# 主题预置：必须在样式表之前、且内联（不能 defer），否则暗色用户每次刷新都会闪一下白。 #}
+{# 主题装载单点：后台那两页（admin.html / admin_password.html）都 include 这一段。
+
+   机制与前台 templates/shell.html 完全一致 —— 同一个 localStorage 键（heroui-theme）、
+   同一对 <html> 属性（class="dark" + data-theme="dark"），所以这台机器上切过一次亮/暗，
+   前后台一起跟着翻面，不存在"两个页面各记各的偏好"。
+
+   令牌本体在 zhuiju/static/spa/app.css（@heroui/styles 编出来的那份，含亮暗两套变量），
+   本站自己的规则在 static/app.css，它只引用令牌名、不写颜色。 #}
 <script>
-(function () {
-  // 顺带打上"JS 在跑"的标记：海报淡入（opacity:0 -> .loaded -> 淡上来）只在有 JS 时成立，
-  // 不这么闸门，爬虫与禁用 JS 的浏览器会拿到 opacity:0 却等不到 .loaded，整片海报是空的。
-  // 和主题一样，这个也必须在这张样式表之前打在 <html> 上，晚一帧就是先看见图再看见它变透明。
-  document.documentElement.classList.add('hasjs');
-  var m = "auto";
-  try { m = localStorage.getItem("zhuiju_theme") || "auto"; } catch (e) {}
-  var d = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  var dark = m === "dark" || (m !== "light" && d);
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
-  document.documentElement.dataset.themeMode = m;
-})();
+  (function () {
+    var d = document.documentElement;
+    d.classList.add('hasjs');
+    var t = 'system';
+    try { t = localStorage.getItem('heroui-theme') || 'system'; } catch (e) { }
+    if (t !== 'light' && t !== 'dark') t = 'system';
+    var r = t === 'system'
+      ? (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : t;
+    d.classList.add(r);
+    d.setAttribute('data-theme', r);
+  })();
 </script>
+<link rel="stylesheet" href="{{ url_for('static', filename='spa/app.css') }}?v={{ asset_v }}">

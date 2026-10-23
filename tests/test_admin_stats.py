@@ -187,8 +187,22 @@ th.reset("1.1.1.1")
 check("登录成功后清零", th.blocked("1.1.1.1") == 0)
 
 print("\n6) 路由：没登录什么都看不到")
+# 后台已转 React：/admin 只是一个壳（admin_shell.html + spa/admin.js），这一屏的数据全在
+# GET /api/admin/view 的 JSON 里，渲染写法在 web/src/admin/**。原来钉在 /admin 那页 HTML 上的
+# 判据，数据部分搬到 view 的 JSON，写法部分搬到组件源码 —— 下面几个源码字符串就是新载体。
+AD = BASE / "web" / "src" / "admin"
+adminapp_ts = (AD / "AdminApp.tsx").read_text(encoding="utf-8")
+login_ts = (AD / "Login.tsx").read_text(encoding="utf-8")
+detail_ts = (AD / "Detail.tsx").read_text(encoding="utf-8")
+overview_ts = (AD / "Overview.tsx").read_text(encoding="utf-8")
+filters_ts = (AD / "Filters.tsx").read_text(encoding="utf-8")
+settings_ts = (AD / "Settings.tsx").read_text(encoding="utf-8")
+adminui_ts = (AD / "ui.tsx").read_text(encoding="utf-8")
+adminapi_ts = (AD / "api.ts").read_text(encoding="utf-8")
 # Jinja 里 dict.items 会被解析成字典的 items 方法而不是 "items" 键，
 # 这个坑在 index.html 上已经踩过一次（seo.snapshot.items），模板里统一用下标
+# (c) admin.html 现在只当「禁用 JS 的登录兜底页」，但它仍带着 rows['items'] 这套下标写法，
+#     判据本身还成立，锚点也没变 —— 保留。
 admin_tpl = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
 check("admin 模板不用裸 .items 属性写法", ".items %}" not in admin_tpl and ".items " not in admin_tpl,
       re.findall(r"\{\{[^}]*\.items[^}]*\}\}|{%[^%]*\.items[^%]*%}", admin_tpl))
@@ -199,19 +213,27 @@ from zhuiju import app as app_mod  # noqa: E402
 app_mod.admin_mod.secret_key()          # 确保配置已生成，再建 app
 client = app_mod.create_app().test_client()
 
-r = client.get("/admin")
-check("未登录返回 401 而不是 200", r.status_code == 401, r.status_code)
-html = r.get_data(as_text=True)
-check("给的是口令页", "输入口令" in html)
-check("口令页里没有任何查询数据", "庆余年" not in html and "10.0.0.1" not in html)
-check("口令页带 noindex", 'name="robots" content="noindex' in html)
-check("表单里有 csrf 字段", 'name="csrf" value="' in html)
+# (a) 原来这三条（401 / 口令页 / csrf 字段）钉的是 GET /admin 直接回口令页。后台转 React 后
+#     /admin 是公开的 200 壳，门槛挪到了 GET /api/admin/view：未登录它回 401，body 里带 csrf。
+r = client.get("/api/admin/view")
+check("未登录时取数接口返回 401 而不是 200", r.status_code == 401, r.status_code)
+denied = r.get_json()
+html = client.get("/admin").get_data(as_text=True)
+check("给的是壳 + 后台入口（admin.js 上屏），未登录时 view 里没有任何统计数据字段",
+      "spa/admin.js" in html and denied.get("authed") is False
+      and not any(k in denied for k in ("agg", "rows", "beh", "links")), list(denied)[:8])
+check("未登录那一屏里没有任何查询数据（既不在壳里、也不在 view body 里）",
+      "庆余年" not in html and "10.0.0.1" not in html and "庆余年" not in r.get_data(as_text=True), None)
+check("后台壳带 noindex", 'name="robots" content="noindex' in html, None)
+check("未登录的 view body 里给了 csrf（登录框就靠它，不再从 HTML 抠 name=\"csrf\"）",
+      isinstance(denied.get("csrf"), str) and re.fullmatch(r"[0-9a-f]{32}", denied["csrf"]), denied.get("csrf"))
 
 print("\n7) 登录流程")
-tok = re.search(r'name="csrf" value="([0-9a-f]+)"', html).group(1)
+tok = denied["csrf"]
 r = client.post("/admin/login", data={"csrf": tok, "password": "cuo-de-mi-ma"})
 check("错口令 401", r.status_code == 401, r.status_code)
-check("错口令后提示剩余次数", "还可尝试" in r.get_data(as_text=True))
+check("错口令后提示剩余次数（口令不正确那句来自服务端节流器）",
+      "还可尝试" in r.get_data(as_text=True), None)
 r = client.post("/admin/login", data={"csrf": "deadbeef", "password": "wo-ziji-de-mima"})
 check("csrf 不对时拒掉（400）", r.status_code == 400, r.status_code)
 r = client.post("/admin/login", data={"csrf": tok, "password": "wo-ziji-de-mima"},
@@ -220,33 +242,46 @@ check("对口令后 302 跳回统计页", r.status_code == 302 and "/admin" in r
       r.headers.get("Location"))
 check("Set-Cookie 是 HttpOnly + SameSite=Lax",
       "HttpOnly" in r.headers["Set-Cookie"] and "samesite=lax" in r.headers["Set-Cookie"].lower())
-r = client.get("/admin")
-check("登录后 200", r.status_code == 200, r.status_code)
-html = r.get_data(as_text=True)
-check("能看到关键词", "庆余年" in html and "流浪地球" in html)
-check("能看到 IP", "10.0.0.1" in html and "10.0.0.2" in html)
+# (a) 登录后原来在 /admin 那张 HTML 表里读关键词/IP/总条数/页码，现在这些数都在
+#     /api/admin/view 的 JSON 里（rows.items / agg.count），页码那句写法在 Detail.tsx。
+v = client.get("/api/admin/view").get_json()
+check("登录后壳 200 且 view 回 authed=True", client.get("/admin").status_code == 200
+      and v.get("authed") is True, v.get("authed"))
+kws = {it.get("kw") for it in v["rows"]["items"]}
+check("能看到关键词", "庆余年" in kws and "流浪地球" in kws, sorted(kws))
+ips = {it.get("ip") for it in v["rows"]["items"]}
+check("能看到 IP", {"10.0.0.1", "10.0.0.2"} & ips == {"10.0.0.1", "10.0.0.2"}, sorted(ips))
 expect_total = stats_mod.list_queries({})["total"]
-shown = re.findall(r"共 (\d+) 条", html)
-check("页面显示的总条数与库里一致", str(expect_total) in shown, (expect_total, shown))
-check("有页码信息", "页 · 共" in html)
+check("view 给的总条数与库里一致", v["agg"]["count"] == expect_total
+      and v["rows"]["total"] == expect_total, (expect_total, v["agg"]["count"], v["rows"]["total"]))
+check("有页码信息（第 N / M 页 · 共 X 条 这句由 Detail.tsx 拼）",
+      "第 {rows.page} / {rows.pages} 页" in detail_ts and "共 {rows.total} 条" in detail_ts
+      and "页 · 共" not in v.get("csrf", ""), None)
 
-print("\n8) 后台页面的筛选与翻页真的接到了 SQL")
-r = client.get("/admin?ip=10.0.0.1")
-h = r.get_data(as_text=True)
-check("按 IP 过滤后只看得到这个 IP 的行", "10.0.0.2" not in h.split("明细")[-1])
-check("IP 填进输入框了", 'name="ip" value="10.0.0.1"' in h)
-r = client.get("/admin?day_from=" + today() + "&day_to=" + today())
-h = r.get_data(as_text=True)
-check("按日期范围过滤生效", "繁花" in h and "庆余年" not in h.split("明细")[-1])
-r = client.get("/admin?kw=" + "庆余年")
-check("按关键词过滤生效", "流浪地球" not in r.get_data(as_text=True).split("明细")[-1])
-r = client.get("/admin?per=2&page=2")
-h = r.get_data(as_text=True)
-check("翻页参数被接受", r.status_code == 200 and "第 2 /" in h, re.findall(r"第 \d+ / \d+ 页", h))
-check("翻页链接保住了筛选条件",
-      all(k in h for k in ("per=2", "page=")), re.findall(r'href="/admin\?[^"]*page=\d+[^"]*"', h)[:2])
-r = client.get("/admin?ip=" + "1=1) OR 1=1 --")
-check("页面上注入串不报错", r.status_code == 200)
+print("\n8) 后台的筛选与翻页真的接到了 SQL")
+# (a) 原来 GET /admin?... 看渲染出来的表；现在带同样的查询串打 /api/admin/view，看它 JSON 里的
+#     rows/agg/links —— 筛选与翻页走的仍是同一份 SQL（_admin_ctx 里那套）。
+v = client.get("/api/admin/view?ip=10.0.0.1").get_json()
+check("按 IP 过滤后只看得到这个 IP 的行",
+      v["rows"]["items"] and all(it["ip"] == "10.0.0.1" for it in v["rows"]["items"]),
+      sorted({it["ip"] for it in v["rows"]["items"]}))
+check("IP 回填进筛选条件（数据在 flt，输入框在 Filters.tsx 里按 flt 现值绑）",
+      v["flt"]["ip"] == "10.0.0.1" and "value={draft[k] ?? \"\"}" in filters_ts, v["flt"].get("ip"))
+v = client.get("/api/admin/view?day_from=" + today() + "&day_to=" + today()).get_json()
+today_kws = {it.get("kw") for it in v["rows"]["items"]}
+check("按日期范围过滤生效", "繁花" in today_kws and "庆余年" not in today_kws, sorted(today_kws))
+v = client.get("/api/admin/view?kw=" + "庆余年").get_json()
+check("按关键词过滤生效", all((it.get("kw") or "").find("庆余年") >= 0 for it in v["rows"]["items"])
+      and "流浪地球" not in {it.get("kw") for it in v["rows"]["items"]},
+      sorted({it.get("kw") for it in v["rows"]["items"]}))
+v = client.get("/api/admin/view?per=2&page=2").get_json()
+check("翻页参数被接受", v["rows"]["page"] == 2 and v["rows"]["per"] == 2,
+      (v["rows"]["page"], v["rows"]["per"]))
+check("翻页链接保住了筛选条件（next 由服务端拼，带着 per 与 page）",
+      v["links"]["next"] and "per=2" in v["links"]["next"] and "page=" in v["links"]["next"],
+      v["links"].get("next"))
+check("注入串当普通条件处理、不报错（view 仍 200）",
+      client.get("/api/admin/view?ip=" + "1=1) OR 1=1 --").status_code == 200, None)
 
 print("\n9) 埋点：三个入口各记一条")
 _real_search = app_mod.search
@@ -305,11 +340,13 @@ finally:
     app_mod.seo_mod.snapshot = _real_snapshot
 
 print("\n11) 退出登录")
-r = client.get("/admin")
-tok = re.search(r'name="csrf" value="([0-9a-f]+)"', r.get_data(as_text=True)).group(1)
+# (c) 判据不变，锚点换：csrf 从 view 拿；"再进 /admin 又要口令" 的门槛在 /api/admin/view 401
+#     （/admin 本身是公开壳，永远 200）。
+tok = client.get("/api/admin/view").get_json()["csrf"]
 r = client.post("/admin/logout", data={"csrf": tok}, follow_redirects=False)
 check("退出后 302", r.status_code == 302, r.status_code)
-check("退出后再进 /admin 又要口令了", client.get("/admin").status_code == 401)
+check("退出后再取后台数据又要口令了（门槛在 view 的 401，不在壳上）",
+      client.get("/api/admin/view").status_code == 401, client.get("/api/admin/view").status_code)
 
 print("\n12) robots 不进后台")
 rb = client.get("/robots.txt").get_data(as_text=True)
@@ -321,10 +358,12 @@ GEN = "zx9k3mp7q2a4"
 admin_mod.save({"password": GEN, "secret_key": cfg["secret_key"], "password_is_temp": True})
 check("标记为临时口令时 is_temp_password 为真", admin_mod.is_temp_password())
 c2 = app_mod.create_app().test_client()
-r = c2.get("/admin")
-check("没登录仍是 401", r.status_code == 401)
-check("登录页提示这是自动生成的口令", "首次启动自动生成" in r.get_data(as_text=True))
-tok2 = re.search(r'name="csrf" value="([0-9a-f]+)"', r.get_data(as_text=True)).group(1)
+r = c2.get("/api/admin/view")
+check("没登录取数接口仍是 401", r.status_code == 401, r.status_code)
+dtemp = r.get_json()
+check("未登录的 view 说这还是首次生成的随机口令，登录框据此催你改（文案在 Login.tsx）",
+      dtemp.get("temp") is True and "首次启动自动生成" in login_ts, None)
+tok2 = dtemp["csrf"]
 r = c2.post("/admin/login", data={"csrf": tok2, "password": GEN})
 check("用临时口令登录成功", r.status_code == 302, r.status_code)
 check("登录后先领着去改口令，而不是直接进统计页",
@@ -333,14 +372,19 @@ check("登录后先领着去改口令，而不是直接进统计页",
 r = c2.get("/admin")
 check("绕不开：硬访问 /admin 也会被引到改口令页",
       r.status_code == 302 and "/admin/password" in r.headers["Location"])
+# (a) 改口令页转 React：GET /admin/password 回的是壳（boot.route 指到口令页 + admin.js 上屏），
+#     三个口令字段、"保存即生效不用重启"那句、minlength 与下限一致，写法都在 Login.tsx 的 Password。
 r = c2.get("/admin/password")
 h = r.get_data(as_text=True)
-check("改口令页 200", r.status_code == 200, r.status_code)
-check("有当前口令与两次新口令输入",
-      all(n in h for n in ('name="current"', 'name="password"', 'name="password2"')))
-check("提示保存即生效不用重启", "不用重启服务" in h)
-check("minlength 和后端下限一致", f'minlength="{admin_mod.MIN_LEN}"' in h)
-tok3 = re.search(r'name="csrf" value="([0-9a-f]+)"', h).group(1)
+check("改口令页 200 且壳把入口领到口令页（boot.route=/admin/password + admin.js 上屏）",
+      r.status_code == 200 and "spa/admin.js" in h and "/admin/password" in h, (r.status_code,))
+check("有当前口令与两次新口令输入（提交走 postForm 的 current/password/password2）",
+      all(n in login_ts for n in ("current: cur", "password: a", "password2: b")), None)
+check("提示保存即生效不用重启", "不用重启服务" in login_ts, None)
+check("minlength 和后端下限一致（下限由服务端 boot.min_len 带下来，组件用它做 minLength）",
+      dtemp.get("min_len") == admin_mod.MIN_LEN and "minLength={min" in login_ts
+      and "minLen={boot.min_len" in adminapp_ts, dtemp.get("min_len"))
+tok3 = c2.get("/api/admin/view").get_json()["csrf"]
 
 r = c2.post("/admin/password", data={"csrf": tok3, "current": "bu-dui-de",
                                      "password": "xin-mi-ma-1", "password2": "xin-mi-ma-1"})
@@ -367,10 +411,12 @@ check("文件里落的是新口令", NEW in admin_mod.CONFIG.read_text(encoding=
 check("不再算临时口令", not admin_mod.is_temp_password())
 r = c2.get("/admin")
 check("这次能真正进统计页了", r.status_code == 200, r.status_code)
-# 提示是随跳转地址带过去的，要按浏览器实际会请求的那个地址来验
-r = c2.get("/admin?set=1")
-check("页面上有口令已更新的提示", "口令已更新" in r.get_data(as_text=True), r.status_code)
-check("统计页上有改口令入口", "改口令" in r.get_data(as_text=True))
+# (a) 提示与入口：口令已更新那句由服务端算好放进 view.notice（?set=1 触发），
+#     "改口令"那颗链接是后台标题行画的（AdminApp.tsx）。
+vset = c2.get("/api/admin/view?set=1").get_json()
+check("页面上有口令已更新的提示（在 view.notice 里，不再靠 HTML）",
+      "口令已更新" in (vset.get("notice") or ""), vset.get("notice"))
+check("统计页上有改口令入口（AdminApp.tsx 标题行那颗）", "改口令" in adminapp_ts, None)
 
 print("\n14) 临时口令判定与环境变量互锁")
 admin_mod.save({"password": "wo-xuan-de-mi-ma", "secret_key": cfg["secret_key"]})   # 没有标记
@@ -383,7 +429,12 @@ os.environ["ZHUIJU_ADMIN_PASSWORD"] = "from-env-mi-ma"
 check("环境变量指定口令时不再催你改", not admin_mod.is_temp_password())
 check("页面能知道口令被环境变量锁住", admin_mod.using_env_password())
 r = c2.get("/admin/password")
-check("被环境变量锁住时页面上说明清楚", "ZHUIJU_ADMIN_PASSWORD" in r.get_data(as_text=True))
+# (a) 口令页转 React：环境变量的说明那句由 Password 组件画（login_ts），壳本身只在 boot 里带
+#     env_lock 这个布尔——两者合起来才是"页面上说明清楚"。
+pb = json.loads(r.get_data(as_text=True).split('<script id="boot-data" type="application/json">')[1]
+                .split("</script>")[0])
+check("被环境变量锁住时页面上说明清楚（说明在 Login.tsx，壳的 boot 带着 env_lock）",
+      pb.get("env_lock") is True and "ZHUIJU_ADMIN_PASSWORD" in login_ts, pb.get("env_lock"))
 del os.environ["ZHUIJU_ADMIN_PASSWORD"]
 admin_mod.save({"password": NEW, "secret_key": cfg["secret_key"], "password_is_temp": False})
 
@@ -506,39 +557,46 @@ for ip, kw in (("223.5.5.5", "庆余年"), ("8.8.8.8", "流浪地球"), ("1.1.1.
     stats_mod.record(kw, ip, via="api", results=5, hits=20, sources_ok=10,
                      sources_total=10, ms=1000)
 c3 = app_mod.create_app().test_client()
-r = c3.get("/admin")
-tok3 = re.search(r'name="csrf" value="([0-9a-f]+)"', r.get_data(as_text=True)).group(1)
-r = c3.post("/admin/login", data={"csrf": tok3, "password": NEW})
-r = c3.get("/admin")
-dash = r.get_data(as_text=True)
-check("登录后 200", r.status_code == 200, r.status_code)
-check("有地图画布", 'class="worldmap"' in dash)
-svg = re.search(r'<svg class="worldmap" viewBox="0 0 360 180"[^>]*>(.*?)</svg>', dash, re.S)
-check("SVG 用 viewBox 0 0 360 180（投影一致才对得上）", bool(svg))
-circles = re.findall(r'<circle cx="([\d.\-]+)" cy="([\d.\-]+)" r="([\d.]+)"', dash or "")
-check("画出了 5 个公网点位（内网与本机不画）", len(circles) == 5, (len(circles), circles))
-if svg:
-    inside = all(0 <= float(cx) <= 360 and 0 <= float(cy) <= 180 for cx, cy, _ in circles)
-    check("所有点位都落在 viewBox 内", inside, circles)
-check("有归属地列", "<th>归属地</th>" in dash)
-check("明细里出现了具体归属地", "中国 北京市" in dash or "中国 浙江省杭州市" in dash
-      or "United States" in dash, re.findall(r"\?geo=([A-Z]{2})", dash)[:6])
-check("国家行可点筛选", len(re.findall(r'\?geo=[A-Z]{2}', dash)) >= 5,
-      re.findall(r'\?geo=([A-Z]{2})', dash))
-check("内网单独成一行而不是编造国家", "内网 / 保留地址" in dash)
-check("说明了内网不上图的原理", "没有地理归属" in dash)
-check("底图轮廓被描色的只有存在记录的国家",
-      'class="land-on"' in dash and dash.count('class="land-on"') == 1)
-r = c3.get("/admin?geo=CN")
-d2 = r.get_data(as_text=True)
-check("按国家筛选后只看得到该国的明细",
-      r.status_code == 200 and "223.5.5.5" in d2 and "8.8.8.8" not in d2.split("明细")[-1])
-r = c3.get("/admin?geo=--")
-d3 = r.get_data(as_text=True)
-check("筛内网能看到内网行", r.status_code == 200
-      and ("192.168.1.50" in d3 or "127.0.0.1" in d3))
-check("只看内网时地图上一个点都没有", len(re.findall(r"<circle", d3)) == 0,
-      len(re.findall(r"<circle", d3)))
+tok3 = c3.get("/api/admin/view").get_json()["csrf"]
+c3.post("/admin/login", data={"csrf": tok3, "password": NEW})
+ov = c3.get("/api/admin/view?tab=overview").get_json()
+# (a) 原来这几条从 /admin 渲染出的那张 <svg class="worldmap"> 数 <circle>。后台转 React 后
+#     地图由 Overview.tsx 的 GeoMap 画一棵 viewBox="0 0 360 180" 的静态 SVG，点位/坐标/描色国家
+#     全部来自服务端算好、放进 view 的 markers/map_active。数据钉 view，画法钉组件。
+check("登录后台壳 200 且 view 回 authed=True", c3.get("/admin").status_code == 200
+      and ov.get("authed") is True, ov.get("authed"))
+check("有地图画布（GeoMap 画的 SVG）", "<svg" in overview_ts and 'viewBox="0 0 360 180"' in overview_ts, None)
+check("SVG 用 viewBox 0 0 360 180（投影一致才对得上）", 'viewBox="0 0 360 180"' in overview_ts, None)
+markers = ov["markers"]
+check("画出了 5 个公网点位（内网与本机不画，marker 由服务端 _markers 从 by_geo 算）",
+      len(markers) == 5, [m["iso"] for m in markers])
+check("所有点位都落在 viewBox 内（x∈[0,360]、y∈[0,180]）",
+      all(0 <= m["x"] <= 360 and 0 <= m["y"] <= 180 for m in markers),
+      [(m["x"], m["y"]) for m in markers])
+check("有归属地列（明细表头里那一列，Detail.tsx）", '"归属地"' in detail_ts, None)
+check("明细里出现了具体归属地（数据在 rows.items 的 geo 上）",
+      any(("中国" in (it.get("geo") or "") or "United States" in (it.get("geo") or ""))
+          for it in ov["rows"]["items"]), [it.get("geo") for it in ov["rows"]["items"][:6]])
+check("国家行可点筛选（归属地表里两字国家码那行由 filterUrl({ geo: g.iso }) 变成一次筛选）",
+      "filterUrl({ geo: g.iso })" in overview_ts
+      and sum(1 for g in ov["agg"]["by_geo"] if g["iso"] and len(g["iso"]) == 2) >= 5,
+      [g["iso"] for g in ov["agg"]["by_geo"]])
+check("内网单独成一行而不是编造国家", "内网 / 保留地址" in overview_ts, None)
+# (b) 旧那句"没有地理归属"的解释散文只在已退役的 admin.html 里；React 没有对应文案。
+#     等价的那一半：内网/保留（空 iso）不进 marker（_markers 跳过空 iso），所以它只会成表里一行。
+check("内网不上图的等价保证：空 iso 不生成 marker（组件里没有内网点）",
+      all(m["iso"] for m in markers) and not any((it.get("iso") or "") == "" and it.get("x") is not None
+                                                 for it in markers), None)
+check("底图轮廓被描色的只有存在记录的国家（map_active 是一份合并路径，只描有描得上的国家）",
+      "map-land-on" in overview_ts and bool(ov["map_active"]) and ov["map_active"].strip(), None)
+d2 = c3.get("/api/admin/view?tab=overview&geo=CN").get_json()
+check("按国家筛选后只看得到该国的明细", d2["rows"]["items"]
+      and all((it.get("iso") or "") == "CN" for it in d2["rows"]["items"]),
+      sorted({it.get("iso") for it in d2["rows"]["items"]}))
+d3 = c3.get("/api/admin/view?tab=overview&geo=--").get_json()
+check("筛内网能看到内网行", any((it.get("iso") or "") == "" for it in d3["rows"]["items"]),
+      sorted({it.get("iso") or "-" for it in d3["rows"]["items"]}))
+check("只看内网时地图上一个点都没有", len(d3["markers"]) == 0, len(d3["markers"]))
 
 print("\n18) 老库升级：补列 + 建索引 + 回填，一步都不能静默失败")
 # 曾经的真实故障：idx_queries_iso 写在 SCHEMA 里，对已有库就是"给还不存在的列建索引"，
@@ -648,47 +706,58 @@ finally:
     stats_mod.DB, stats_mod._ready = _real_db3, _ready3
 
 print("\n19) 区块顺序与明细翻页控件")
-dash = c3.get("/admin?per=2&page=2&kw=" + "繁花").get_data(as_text=True)
-# id 里带连字符（top-kw / strm-zips…），所以匹配要允许 -，不然这些块会整块从清单里消失
-ids = [m for m in re.findall(r'<section class="asect" id="([\w-]+)"', dash)]
+# (a) 原来这一节整段读 /admin 那张 HTML（asect 顺序、jumpform、data-page、DOMParser 局部刷新、
+#     innerHTML+refold、getElementById('detail')）。后台转 React 后：块顺序由服务端 tabs 下发、
+#     翻页控件在 Detail.tsx、局部刷新那套手工 DOM 没了（换筛选/换页就是重新取一份 view）。
+#     每条按新载体重钉；纯手工 DOM 的（cpage/SECTIONS/DOMParser）按 (b) 换成它等价的那一半。
+ov19 = c3.get("/api/admin/view?per=2&page=2&kw=" + "繁花&tab=detail").get_json()
+tabs = ov19["tabs"]
+# id 里带连字符（top-kw / strm-zips…），这里直接比服务端下发的 tabs→blocks 顺序
+flat = [b[0] for t in tabs for b in t["blocks"]]
 check("标签分组按 ADMIN_TABS 排：总览那几块在前，明细、STRM（含两块子表）、设置在最后",
-      ids == ["days", "top-kw", "top-ip", "agents", "refs", "behavior", "detail",
-              "geo", "strm", "strm-zips", "strm-src", "settings"], ids)
-check("明细在归属地之前、设置排在最后（翻数据的人不该先撞见配置）",
-      ids.index("detail") < ids.index("geo") < ids.index("settings"), ids[-3:])
-pager = dash[dash.index('class="pager"'):dash.index("</div>", dash.index('class="pager"'))]
-check("翻页区有跳转表单", 'class="jumpform"' in pager)
-check("跳转框是 number 且带 min/max",
-      re.search(r'type="number" name="page" min="1" max="\d+"', pager) is not None,
-      re.findall(r'min="1" max="(\d+)"', pager))
-check("跳转表单带住了当前筛选", 'name="kw" value="繁花"' in pager,
-      re.findall(r'name="(\w+)" value="([^"]*)"', pager))
-check("翻页链接带 data-page（交给局部刷新）", pager.count("data-page") >= 1, pager.count("data-page"))
-check("翻页链接带住筛选条件",
-      all(("kw=" in u or "繁花" in u) for u in re.findall(r'href="([^"]+)"', pager)
-          if "page=" in u), re.findall(r'href="([^"]+)"', pager))
-check("页码输入框初值是当前页", re.search(r'name="page"[^>]*?value="(\d+)"', pager, re.S).group(1) == "2",
-      re.search(r'value="(\d+)"', pager).group(1))
-check("局部刷新脚本只在登录后出现", "DOMParser" in dash)
-fresh = app_mod.create_app().test_client().get("/admin").get_data(as_text=True)
-check("未登录页面里没有这套脚本", "DOMParser" not in fresh and "jumpform" not in fresh)
-check("翻页不滚页面：明细自己就是滚动框，原来停在哪儿就还停在哪儿",
-      "scrollIntoView" not in dash and "scrollToDetail" not in dash
-      and "window.scrollTo" not in dash)
-check("也就不需要给 #detail 留滚动避让了",
+      [t["id"] for t in tabs] == ["overview", "detail", "strm", "settings"]
+      and flat == ["stat", "days", "top-kw", "top-ip", "agents", "refs", "geo",
+                   "behavior", "detail", "strm", "strm-zips", "strm-src", "settings"], flat)
+# (b) 旧那句"明细在归属地之前"在整页布局下成立；分标签后 geo 归总览、detail 归明细，
+#     跨标签的先后变成"总览标签整体在明细之前、设置在最后一个标签"。等价的那一半照钉。
+check("归属地所在的总览排在明细标签之前、设置是最后一个标签（翻数据的人不该先撞见配置）",
+      flat.index("geo") < flat.index("detail") and tabs[-1]["id"] == "settings"
+      and flat[-1] == "settings", flat[-3:])
+check("翻页区有跳转控件（跳转框 + 那颗「跳」，都在 Detail.tsx）",
+      'aria-label="页码"' in detail_ts and ">跳" in detail_ts, None)
+check("跳转框是 number 且带 min/max（max 跟着真实页数走）",
+      'type="number"' in detail_ts and "min={1}" in detail_ts and "max={rows.pages}" in detail_ts, None)
+check("跳转与筛选都保住了当前条件（服务端把 per/页码拼好、组件的 goPage 也带着 per）",
+      ov19["flt"]["kw"] == "繁花" and ov19["flt"]["per"] == 2 and ov19["rows"]["page"] == 2,
+      {k: ov19["flt"].get(k) for k in ("kw", "per")})
+# (b) data-page/DOMParser 那套"原地刷新一块"的局部更新随整页 HTML 一起退役了：
+#     React 里点下一页就是走 links.next 重取整屏。等价的那一半是翻页链接仍带住筛选条件。
+check("翻页链接带住筛选条件（prev/next 由服务端拼，带着 kw 与 page）",
+      all(("kw=" in (u or "") or "繁花" in (u or "")) for u in (ov19["links"]["prev"], ov19["links"]["next"]) if u),
+      {k: ov19["links"].get(k) for k in ("prev", "next")})
+check("页码输入框初值是当前页（React 用 rows.page 直接 seed 那个 draft）",
+      'useState(String(rows.page))' in detail_ts and "value={jump}" in detail_ts, None)
+# (b) "局部刷新脚本只在登录后出现" 原来靠 DOMParser 只在 authed 分支渲染；SPA 里脚本始终随壳加载，
+#     真正挡人的是数据门槛（未登录 view 里没有 rows/agg）。钉这一条等价判据。
+check("后台入口脚本随壳加载，但门槛在数据：未登录 view 里根本没有 rows/agg，登录后才有",
+      "DOMParser" not in detail_ts
+      and client.get("/api/admin/view").get_json().get("rows") is None
+      and ov19.get("rows") is not None, None)
+check("翻页不滚页面：翻页走 onGo（pushState + 重取），明细组件里没有任何滚动定位",
+      "onGo(v.links!.prev)" in detail_ts and "onGo(v.links!.next)" in detail_ts
+      and "scrollIntoView" not in detail_ts and "window.scrollTo" not in detail_ts, None)
+check("也就不需要给 #detail 留滚动避让了（滚动避让改由 Block 上的 scroll-mt 给目录锚点用）",
       "#detail { scroll-margin-top" not in
-      (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8"))
-check("换页后重算框高；整块换 innerHTML 等于换个新滚动框，自然从第一行起",
-      "root.innerHTML = next.innerHTML" in dash and "refold();" in dash)
-# 两张表都要能原地翻页，而它们的页码参数不能抢同一个名字
+      (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
+      and "scroll-mt-14" in adminui_ts, None)
+# (b) "换页后整块换 innerHTML 从第一行起、再 refold()" 是手工刷新；React 里翻页换的是整份 rows
+#     快照、内联滚动框由 Fold 的 ResizeObserver/rAF 重新量。等价形态是组件里没有 innerHTML 赋值。
+check("换页后由 Fold 重新量内联滚动框，不再手工换 innerHTML",
+      "innerHTML" not in detail_ts and "new ResizeObserver" in adminui_ts, None)
 check("明细的翻页控件仍只有 page 一套（cpage 那套随独立面板一起撤了）",
-      'name="page"' in dash and "data-cpage" not in dash and 'name="cpage"' not in dash
-      and "args_cnext" not in dash,
-      re.findall(r'name="(c?\w*page)"|data-(cpage)', dash))
-check("只剩明细一个区块要原地翻页，脚本就写死它自己那一块",
-      "doc.getElementById(root.id)" in dash and "SECTIONS" not in dash
-      and "getElementById('detail')" in dash,
-      re.findall(r"getElementById\([^)]*\)", dash)[:4])
+      '"page"' in detail_ts and "cpage" not in detail_ts and "SECTIONS" not in detail_ts, None)
+check("只剩明细一个区块要原地翻页，React 里没有任何按 id 找块的遗留脚本",
+      "getElementById('detail')" not in detail_ts, re.findall(r"getElementById\([^)]*\)", detail_ts)[:4])
 
 print("\n20) 观看点击：接口收什么、明细合流以后长什么样")
 ct = lambda f={}: stats_mod.click_stats(f)["count"]        # noqa: E731

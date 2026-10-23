@@ -85,3 +85,11 @@ data/geo/
 # Windows 资源管理器噪声
 Thumbs.db
 desktop.ini
+
+# 前台（web/）是一次构建就交付的东西：
+#   node_modules/     仍然忽略 —— 几万个文件，谁提交谁后悔
+#   package-lock.json 这次**要提交**：界面是构建产物的一部分，锁文件不在，
+#                     换台机器 `npm install` 就会拿到不同版本的 HeroUI，产物跟着变
+node_modules/
+package-lock.json
+!web/package-lock.json

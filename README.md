@@ -48,6 +48,33 @@ Linux（含宝塔面板）不是这一套命令：解释器路径、`zhuiju.env`
 
 结果按匹配强度分层排序：完全同名 > 同系列版本（续集 / 特别版）> 近似名称 > 模糊匹配，同层再按"有几个源收录"排，所以《灌篮高手》不会被《灌篮高手的契约》这类蹭名短剧压下去。归一化后与关键词零重叠的结果（各源自身模糊匹配吐出来的噪声）会直接丢掉并在页面顶上标出条数——搜英文片名时尤其明显，`Oppenheimer` 从 13 条噪声收窄到 2 条相关。关键词至少 2 个字符，单字符会触发一轮无意义的并发抓取，直接拒掉。
 
+## 界面：React 19 + HeroUI v3，前后端分开
+
+前台不是模板渲染的界面了：`web/` 里是一份独立的 React 19 + HeroUI v3 + Tailwind v4 工程，
+构建产物提交在 `zhuiju/static/spa/`（`app.js` / `app.css`），Flask 只出 **JSON API** 和
+**一个 HTML 壳**（`templates/shell.html`）。跑站点仍旧 `python run.py`，那台机器**不需要 Node**；
+只有改界面才 `cd web && npm run build`（`.npmrc` 默认 npmmirror，不引任何 CDN）。
+
+壳里保留两样不能丢的东西：
+
+- **SEO**：`title` / `description` / `canonical` / `og:` / JSON-LD 都在服务端写好（有词 =
+  `ItemList`，无词 = `WebSite` + `SearchAction`），React 换词时同步同一套形状；
+  禁用 JS 的人与只取 HTML 的抓取器看到的是 `#nojs` 那块服务端渲染的结果列表加一个
+  `method=get` 的表单，`/?kw=…` 照样 302 到 `/s/<kw>` —— 两条路落同一个地址。
+- **门禁**：没通过真人验证时，同一个壳以 `boot.locked=true` 下发，`#nojs` 整块不渲染、
+  快照与榜单一个字段都不给，界面上只剩一块滑块；爬虫豁免走 unlocked 那条路，照旧拿到真内容。
+
+主题三态（跟随系统 / 亮色 / 暗色）用 HeroUI 的 `useTheme`，记在 `localStorage['heroui-theme']`，
+壳里一段内联脚本读同一个键提前把 `<html>` 定色，切换是渐变的（过渡只在那 380ms 里临时挂上），
+切完用 toast 报一声「已保存 · 暗色」。配色、圆角、字号、阴影全部引 HeroUI 的 CSS 令牌，
+`styles.css` 里只覆盖主色一处。按钮与输入一律药丸，所有数字走等宽，前台收在 1280px 阅读宽度，
+够宽时两栏（左结果、右资料栏粘性跟随）。
+
+**后台（`/admin`）是同一个 `web/` 工程里的第二个入口**（`src/admin.tsx` → `spa/admin.js`），
+数据走 `/api/admin/view`，样式与主题开关和前台共用同一套 HeroUI 令牌。
+为什么按标签取数、口令的边界、以及踩过的那几条坑写在
+[docs/frontend.md](docs/frontend.md)。
+
 ## 这一页留什么，其余拆到哪儿了
 
 这一页只留**要用它、要把它交付出去**必须看的内容：怎么跑起来、四个标签页都是干什么的、
@@ -60,7 +87,8 @@ Linux（含宝塔面板）不是这一套命令：解释器路径、`zhuiju.env`
 | --- | --- |
 | 猜你想搜为什么给这些、排序与分页、海报为什么走本站代理、改完怎么自检 | [docs/hot.md](docs/hot.md) |
 | 详情面板怎么点开、观看点击怎么落库、后台为什么默认只看最近一周、`[hidden]` 那个坑 | [docs/detail.md](docs/detail.md) |
-| 手机 / 平板怎么排、主题（亮/暗/跟随系统）、配色体检 | [docs/mobile-theme.md](docs/mobile-theme.md) |
+| 手机 / 平板怎么排、主题（亮/暗/跟随系统）、阅读宽度与两栏栅格、配色体检 | [docs/mobile-theme.md](docs/mobile-theme.md) |
+| 前端怎么搭（React 19 + HeroUI v3）、怎么改界面、SEO 壳与无 JS 出口、后台怎么共用同一套令牌 | [docs/frontend.md](docs/frontend.md) |
 | 数据自动更新（访问时触发）的判据、失败冷却、GitHub 数据为什么一律走国内镜像 | [docs/autoupdate.md](docs/autoupdate.md) |
 | 真人滑块验证：挡得住什么、挡不住什么，爬虫怎么豁免，cookie 里有什么 | [docs/human.md](docs/human.md) |
 | 后台统计每一项的口径：聚合、浏览器与来源识别、真人/脚本/说不清三档与行为判读、IP 归属地地图 | [docs/admin.md](docs/admin.md) |
@@ -161,8 +189,16 @@ zhuiju/
     settings.json   后台「设置」写的那几项（现在只有 refresh_hour：每天几点算新的一天）；不进版本库，删了就回默认值
     cache/hot.json  猜你想搜缓存   cache/mirror_used.json  这次上游数据实际走的哪个镜像
     cache/img/      海报的磁盘缓存（sha1 命名的图片 + index.json；7 天 / 200MB，删掉即清空）
-  templates/index.html, admin.html, admin_password.html, _theme.html
-  static/app.css, app.js, theme.js, slider.js   slider.js 是滑块那套组件（首页与验证页共用一份实现）
+  templates/shell.html  前台唯一的 HTML：SEO 元信息 + boot 数据 + React 挂载点 + 给爬虫/禁 JS 的那一份
+  templates/admin_shell.html    后台唯一的 HTML（/admin 与 /admin/password 共用这一个壳）
+  templates/admin.html, admin_password.html, _theme.html    只剩"禁用 JS 时提交登录/改口令"那一页兜底
+  static/spa/app.js, admin.js, app.css    构建产物（由 web/ 生成，提交进仓库，部署机不需要 Node）
+  static/app.css, theme.js      只服务上面那两份兜底页（同一套 HeroUI 令牌、同一个 heroui-theme 键）
+web/                        前后台共用的源码工程：React 19 + HeroUI v3 + Tailwind v4 + Vite
+  src/App.tsx               前台状态编排（关键词/页码/标签页/详情/门禁）
+  src/admin/AdminApp.tsx     后台：登录、四个标签页、侧边目录、STRM 轮询
+  src/api.ts, types.ts      JSON 接口客户端与字段契约（字段名跟 Python 侧一致，不改名）
+  src/components/Gate.tsx   真人滑块（前台弹层与未验证首屏共用一份实现）
 tools/                  重新采数据的维护脚本，日常使用不需要跑
   build_catalog.py      上游 resources.json -> 本地目录（requests 走 gh-proxy 镜像链，记下实际用的源）
   harvest_apis.py       从 15 个 TVBox 配置地址里抽取候选采集接口

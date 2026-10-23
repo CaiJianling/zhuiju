@@ -198,233 +198,322 @@ finally:
     search_mod.load_sources = src_real
 
 print("\n5) 前端接线：按钮在海报角上，右键不劫持，请求只在点击之后")
-html = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
-js = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
-css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
-check("页面里已经没有右键菜单这回事",
-      "ctxmenu" not in html and "ctxmenu" not in js and "contextmenu" not in js,
-      re.findall(r".*contextmenu.*", js + html))
-check("也没有任何 preventDefault 抢过原生右键",
-      js.count("e.preventDefault()") == 2 and "contextmenu" not in js,
-      re.findall(r".*preventDefault.*", js))
-check("首屏（服务端渲染）每张海报右下角都有详情按钮",
-      '<button class="dbtn" type="button" data-detail' in html and html.count('class="dbtn"') >= 1)
+# 这一节原来读 templates/index.html + static/app.js + static/app.css 那三份。前两份不再上屏，
+# app.css 虽还活着（后台在用），但 .dbtn/.hotcard/.dpanel 那批规则只有旧前台在用。
+# (a) 所以逐条搬到活的表面上：web/src/components/*.tsx 与 web/src/styles.css；
+# 服务端那一份（首屏列表）搬到 shell.html / test_client 的响应上。
+WEB = BASE / "web" / "src"
+
+
+def wread(*rel):
+    return WEB.joinpath(*rel).read_text(encoding="utf-8")
+
+
+all_src = "".join(p.read_text(encoding="utf-8") for p in sorted(WEB.rglob("*.ts*")))
+# 后台现在也是 React（web/src/admin/**）。这一节判的是前台那条渲染路径，
+# 所以计数只数前台的文件：把后台一起数进去的话，"没有全局 reveal"这类判据会
+# 因为后台用了 querySelectorAll 而误报成前台退化成了 DOM 操作。
+front_src = "".join(p.read_text(encoding="utf-8") for p in sorted(WEB.rglob("*.ts*"))
+                    if "admin" not in p.parts)
+poster_ts = wread("components", "Poster.tsx")
+drawer_ts = wread("components", "DetailDrawer.tsx")
+vod_ts = wread("components", "VodPanel.tsx")
+hot_ts = wread("components", "HotSection.tsx")
+app_ts = wread("App.tsx")
+stcss = wread("styles.css")
+shell = (BASE / "zhuiju" / "templates" / "shell.html").read_text(encoding="utf-8")
+
+
+def _boot_hot_first_row():
+    """取壳里 boot.hot 的第一条电影行：换源看要的那对 (源, ID) 必须服务端就带着。"""
+    import json as _json
+    real = app_mod.hot_mod.get
+    app_mod.hot_mod.get = lambda *a, **k: {
+        "since": "2026-04-01", "candidates": 1, "building": False,
+        "movie": [{"title": "甲", "kind": "movie", "year": "2026", "type": "动作片",
+                   "remarks": "", "pic": "http://x/1.jpg", "n_sources": 2, "rate": "",
+                   "sources": [{"id": "red", "name": "红牛资源", "vid": "456"}],
+                   "src": "red", "vid": "456", "url": "/s/甲"}],
+        "tv": []}
+    try:
+        h = app_mod.create_app().test_client().get("/").get_data(as_text=True)
+    finally:
+        app_mod.hot_mod.get = real
+    return _json.loads(h.split('<script id="boot-data" type="application/json">')[1]
+                       .split("</script>")[0])["hot"]["movie"][0]
+
+
+check("页面里已经没有右键菜单这回事", "ctxmenu" not in all_src and "contextmenu" not in all_src,
+      re.findall(r".{0,30}contextmenu.{0,30}", all_src))
+check("拦下默认动作的只有那两处：滑块的指针/按键与搜索表单的回车，没有一处是抢右键",
+      front_src.count("preventDefault")
+      == wread("components", "Gate.tsx").count("preventDefault")
+      + wread("components", "SearchBar.tsx").count("preventDefault")
+      and "contextmenu" not in all_src,
+      re.findall(r".{0,20}preventDefault.{0,20}", all_src))
+# (b) 旧那条钉的是首屏 SSR 每张海报右下角的详情按钮。现在服务端那份（#nojs）是一份纯文字列表，
+# 它的入口是每一条自己的落地页链接；详情按钮这一层只在 JS 那一侧（Poster 组件）存在。
+check("服务端渲染那份首屏列表每条都自带能点开的落地页链接（禁 JS 的人不需要详情也能走）",
+      '<li><a href="{{ it.url }}">{{ it.title }}</a>' in shell
+      and shell.count("<img") == 0, re.findall(r"<li><a href=[^>]*>[^<]*", shell)[:2])
 check("详情按钮带 aria-label（读屏能说出是哪一部）",
-      'aria-label="查看《{{ x.title }}》的详情"' in html)
+      "aria-label={`查看《${title}》的详情`}" in poster_ts, None)
 check("卡片改成海报+片名两层：整张卡片不再是个链接（按钮不能嵌在 a 里）",
-      '<div class="hotcard">' in html and '<a class="hotlink"' in html and
-      '<a class="hotcard"' not in html)
-check("JS 重铺猜你想搜时用的是同一套结构",
-      '<div class="hotcard">' in js and '<a class="hotlink"' in js and
-      js.count('class="dbtn"') == 2, js.count('class="dbtn"'))
-check("搜索结果卡片的封面也带详情按钮", "dbtn + '</div>'" in js)
-check("详情数据挂在按钮自己的 data-* 上",
-      'data-detail data-title="' in js and "dAttrs + '>详情</button>'" in js)
-check("多源时把 (id, vid) 列表放进 data-srcs，供面板换源",
-      "data-srcs=" in js and 'esc(JSON.stringify((r.sources || [])' in js)
-# 猜你想搜那些行只有片名来自缓存，换源看的每一颗按钮都要有自己的 (源, ID)；
-# 少这一条的话面板上就永远只有一行的详情，"换源看"整排按钮不会出现
-check("猜你想搜的海报也带 data-srcs（不然面板上没有换源看）",
-      'esc(JSON.stringify((x.sources || [])' in js,
-      re.findall(r"data-srcs[^+]{0,60}", js))
-check("服务端渲染那份猜你想搜也把 sources 写进 data-srcs",
-      "data-srcs='{{ x.sources | default([], true) | tojson }}'" in html,
-      re.findall(r"data-srcs=[^>]{0,60}", html))
-check("JSON 属性用单引号包：tojson 出来的双引号会顶穿双引号属性",
-      'data-srcs="' not in html and " | tojson }}'" in html,
-      re.findall(r'data-srcs="[^"]*', html)[:2])
-check("旧缓存没有 src/vid 时模板不报错（default('', true)）",
-      "x.src | default('', true)" in html and "x.vid | default('', true)" in html)
-check("点击走的是按钮代理，不是整张海报",
-      "openDetail(specOf(btn))" in js
-      and re.search(r"closest\(coarse\(\) \? '\.hcover, \.cover, \.dbtn' : '\.dbtn'\)", js) is not None
-      and "hit.classList.contains('dbtn') ? hit : hit.querySelector('.dbtn')" in js,
-      re.findall(r"closest\(.*?\);", js))
-lazy = js[js.index("function openDetail"):js.index("function closeDetail")]
-check("详情请求只在 openDetail 一处发起", js.count("getJSON(detailURL(s))") == 1)
-check("面板的请求不带 meta（要的就是线路），两条来路都不带",
-      "&meta=1" not in js and "meta=" not in js[js.index("const detailURL"):],
-      js[js.index("const detailURL"):js.index("const detailURL") + 320])
-check("渲染卡片/列表时完全不碰详情接口",
-      "detailURL" not in js[js.index("function card("):js.index("function renderPager")] and
-      "detailURL" not in js[js.index("function hotCard("):js.index("function hotCols")] and
-      "openDetail" not in js[js.index("function card("):js.index("function renderPager")] and
-      "getJSON" not in js[js.index("function hotCard("):js.index("function hotCols")])
-panel_js = js[js.index("function fillDetail"):js.index("function openDetail")]
-check("面板渲染观看地址（fillDetail 里调 linesHTML，并且标明是从详情面板点的）",
-      "linesHTML(d, {" in panel_js and "place: 'panel'" in panel_js,
-      re.findall(r"linesHTML\([^)]*", panel_js))
+      "<article" in poster_ts and "href={href}" in poster_ts
+      and poster_ts.index("<div") < poster_ts.index("<Button") and "<a\n            href={href}" in poster_ts,
+      re.findall(r"<(a|article|div|Button)", poster_ts)[:6])
+check("结果页与猜你想搜用的是同一个 Poster（两处才长得不一样，也不会一处漏按钮）",
+      "<Poster" in vod_ts and "<Poster" in hot_ts and poster_ts.count("<Button") == 1,
+      (vod_ts.count("<Poster"), hot_ts.count("<Poster"), poster_ts.count("<Button")))
+check("搜索结果与猜你想搜的封面都自带详情按钮：按钮只有 Poster 这一处，两处共用",
+      poster_ts.count("onPress={() => onDetail(spec)}") == 1
+      and "onDetail" not in drawer_ts, None)
+# (c) 旧写法把详情数据写成按钮上的 data-title/data-srcs 那串属性，点击时再从 DOM 读回来。
+# React 这边等价形态是：spec 由数据当场组出来（specOf）并作为 props 传下去，
+# 按钮的 onPress 闭包直接捕获它 —— 不再有「属性里那份 JSON」这个中间层
+check("详情数据靠 props 传（specOf 组出来的那个对象），不再往 DOM 属性里塞一份",
+      "export function specOf(r: VodItem" in vod_ts and "spec={specOf(r)}" in vod_ts
+      and "data-detail" not in all_src and "data-srcs" not in all_src, None)
+check("多源时把 (id, name, vid) 列表一起放进 spec，供面板换源",
+      "sources: r.sources.map((s) => ({ id: s.id, name: s.name, vid: s.vid ?? \"\" }))" in vod_ts, None)
+check("猜你想搜那条也带上 sources（不然面板上没有换源看）",
+      "sources: (x.sources || []).map((s) => ({ id: s.id, name: s.name, vid: s.vid ?? \"\" }))" in hot_ts,
+      None)
+check("服务端注进 boot.hot 的每一份行里就带着 sources，前端不用二次请求补齐（换源看才有得换）",
+      _boot_hot_first_row().get("sources"), None)
+# (c) 旧那条防的是「tojson 出来的双引号顶穿双引号属性」。现在整份 JSON 只落在 #boot-data 那一个
+# script 里（由 tojson 转义），HTML 属性里不再内嵌 JSON，这个坑没有载体了
+check("HTML 属性里不再内嵌 JSON：整份数据只在 #boot-data 那一处（另一处 tojson 是 JSON-LD 里的片名）",
+      re.search(r"data-[a-z]+=\"\{\{", shell) is None and shell.count(" | tojson") == 2
+      and 'id="boot-data" type="application/json">{{ boot | tojson }}</script>' in shell
+      and '"name":{{ it.title | tojson }},' in shell,
+      re.findall(r"data-[a-z]+=\"\{\{[^}]*\}\}", shell))
+check("旧缓存没有 src/vid 时前端不炸：那两个字段在类型里就是可选的",
+      "src?: string;" in wread("types.ts") and "vid?: string | number;" in wread("types.ts"), None)
+check("点击走的是按钮本身，不是整张海报",
+      "onPress={() => onDetail(spec)}" in poster_ts
+      and "onClick" not in poster_ts[poster_ts.index("<div className=\"relative"):poster_ts.index("<Button")],
+      None)
+check("触屏上没有 hover：详情按钮在这种情况下常驻可见",
+      "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in stcss, None)
+check("详情请求只在抽屉里发起，列表与卡片那一路一次都不碰",
+      drawer_ts.count(".detail(") == 1 and "detail(" not in vod_ts + hot_ts + poster_ts,
+      re.findall(r"\.detail\(", drawer_ts + vod_ts + hot_ts + poster_ts))
+api_ts = wread("api.ts")
+det_slice = api_ts[api_ts.index("detail: (params:"):]
+det_slice = det_slice[:det_slice.index("hot: (")]
+check("面板的请求不带 meta（要的就是线路），参数只有 src/vid/t 或 kw",
+      "meta" not in det_slice and {"src", "vid", "t", "kw"} <= set(
+          re.findall(r"(\w+)\?:", det_slice)), det_slice[:120])
+check("渲染卡片与列表时完全不碰详情接口",
+      "api." not in poster_ts and "fetch(" not in poster_ts + vod_ts + hot_ts, None)
+check("抽屉渲染观看地址，并标明是从详情面板点的",
+      "place: \"panel\"," in drawer_ts and "<Line key={ln.from} line={ln}" in drawer_ts, None)
 # 折叠不是"藏起来"这么简单：120 集一次插进 DOM 会把面板撑成长条，绝大多数没人点
 check("线路默认折叠、集数点了才铺（DOM 里先只有线路名）",
-      '<div class="lbody" hidden>' in js and "body.dataset.filled" in js
-      and "body.innerHTML = epsHTML(" in js, re.findall(r"\.lbody[^;]{0,40}", js)[:3])
-check("线路数据留在内存里按 id 取，不往属性里塞整份 JSON",
-      "lineStore[id] = d.lines" in js and 'data-ls="' in js and "data-lines=" not in js,
-      re.findall(r"lineStore[^;]{0,30}", js)[:3])
+      "const [open, setOpen] = useState(false);" in drawer_ts
+      and "{open ? (" in drawer_ts and "eps.slice(0, 120)" in drawer_ts, None)
+# (c) 旧写法要把整份线路 JSON 塞进 data-lines（或存进一个 lineStore 里按 id 取）。
+# React 这边数据本来就在内存的 state 里，组件直接接 line 这个对象，没有"往属性里塞"这一步
+check("线路数据是对象直接传下去的，没有往属性里塞整份 JSON 这一说",
+      "data-lines" not in all_src and "lineStore" not in all_src and "line: { from: string" in drawer_ts,
+      None)
 check("展开/收起用 aria-expanded，不是靠猜状态",
-      re.search(r"""setAttribute\((['"])aria-expanded\1""", js) is not None
-      and 'aria-expanded="false"' in js,
-      re.findall(r"aria-expanded[^\"']{0,20}", js)[:4])
-check("卡片线路与面板线路共用同一套折叠（委托在 document 上，两处都管得到）",
-      js.count("closest('.lhead')") == 1 and js.count("closest('.eps a[href]')") == 1)
+      "aria-expanded={open}" in drawer_ts, None)
+# (c) 旧写法把折叠委托在 document 上，为的是"卡片线路与面板线路两处都管得到"。
+# 现在只有面板里有线路（卡片上那排线路随旧前端一起没了），一处一个组件，委托不再需要
+check("折叠都是组件里的局部状态（线路一处、接口状态一处），没有 document 上的委托",
+      front_src.count("aria-expanded") == 2 and "addEventListener(\"click\"" not in drawer_ts,
+      re.findall(r"aria-expanded", all_src))
 
 print("\n6) 观看点击的上报：报什么、怎么报、不能挡住跳转")
-up = js[js.index("function sendClick"):js.index("document.addEventListener('click', (e) => {\n    const a =")]
+# (a) 这一节原来读 static/app.js 里那个 document 上的点击委托，以及 static/app.css 里
+# .dpanel 那一套手写进出场。上报只有两个调用点（分集链接 = play、点详情 = detail），
+# 函数本体在 web/src/api.ts；抽屉的开关与进出场整块交给 HeroUI 的 Drawer。
+up = api_ts[api_ts.index("export function sendClick"):]
+up = up[:up.index("/** 上游图床")]
 check("用 sendBeacon 发，链接该跳就跳（埋点不阻塞跳转）",
-      "navigator.sendBeacon('/api/click'" in up and "application/json" in up, up[:200])
+      'navigator.sendBeacon("/api/click"' in up and 'type: "application/json"' in up, up[:200])
 check("没有 sendBeacon 时退到 fetch + keepalive",
-      "keepalive: true" in up and "credentials: 'same-origin'" in up)
+      "keepalive: true" in up and 'credentials: "same-origin"' in up, None)
 check("埋点整个包在 try 里：报错也不能影响人点开播放",
-      "try {" in up and "catch" in up)
-rep = js[js.index("const a = e.target.closest('.eps a[href]')"):]
-rep = rep[:rep.index("\n  });")]
+      "try {" in up and "catch" in up, None)
+rep = drawer_ts[drawer_ts.index("onClick={() =>"):]
+rep = rep[:rep.index('className="num rounded-md')]
 check("报的是当前这条链接与它所属线路的上下文",
-      "kind: 'play'" in rep and "url: a.href" in rep
-      and "line: (line && line.dataset.line) || ''" in rep
-      and "ep: a.dataset.ep" in rep and "place: ctx.place || 'card'" in rep,
+      'kind: "play",' in rep and "url: ep.url," in rep and "line: line.from," in rep
+      and "ep: ep.name ||" in rep and 'place: "panel",' in rep,
       re.findall(r"^\s+\w+: [^\n]+", rep, re.M)[:8])
-op = js[js.index("function openDetail"):]
-op = op[:op.index("if (!dpBack)")]
+od = app_ts[app_ts.index("const openDetail = useCallback"):app_ts.index("if (locked && boot.locked)")]
 check("点「详情」按钮本身也报一条 kind=detail",
-      "kind: 'detail'" in op and "sendClick(" in op, op[:200])
+      'kind: "detail",' in od and "sendClick({" in od, od[:220])
 check("详情那一笔不许有 url 字段（它本来就没有地址，后端只给 play 校 scheme）",
-      "url" not in op, re.findall(r"url[^\n]{0,30}", op)[:2])
+      "url:" not in od, re.findall(r"url[^\n]{0,30}", od)[:2])
 check("报的 place 分得清海报来自猜你想搜还是搜索结果",
-      "from: el.closest('.hotcard') ? 'hot' : 'card'" in js and "place: s.from || 'card'" in op,
-      re.findall(r"place: s\.from[^\n]*", op))
-check("上报只在点开这一条路径上，渲染列表时一条都不发",
-      "sendClick" not in js[js.index("function card("):js.index("function renderPager")]
-      and "sendClick" not in js[js.index("function hotCard("):js.index("function hotCols")],
-      None)
+      'from: "card" | "hot";' in poster_ts and 'from: DetailSpec["from"] = "card"' in vod_ts
+      and 'from: "hot",' in hot_ts and "place: s.from," in od,
+      re.findall(r"place: s\.from[^\n]*", od))
+check("上报只在点开这一条路径上，渲染列表与卡片时一条都不发",
+      "sendClick" not in poster_ts + vod_ts + hot_ts + app_ts[app_ts.index("if (locked && boot.locked)"):]
+      and app_ts.count("sendClick(") == 1 and drawer_ts.count("sendClick(") == 1,
+      (app_ts.count("sendClick("), drawer_ts.count("sendClick(")))
 check("不去 preventDefault：点了就是要打开那个播放页",
-      "preventDefault" not in rep)
-check("线路名与集名都写在 data- 上，报告才拼得出「哪条线路第几集」",
-      'data-line="' in js and 'data-ep="' in js)
-check("地址由后端筛 scheme，前端只把自己 href 的绝对地址发过去",
-      "url: a.href" in js and "javascript:" not in js[js.index("function epsHTML"):
-                                                js.index("function epsHTML") + 700],
-      None)
-check("同一部片连开两次不重复请求（在途与结果各一层缓存）",
-      "if (!dpending[key])" in lazy and "dcache[key]" in lazy)
-check("换源/切条目后旧请求回来不会填新面板（token 校验）",
-      "token === dpToken" in lazy and "dpToken++" in js[js.index("function closeDetail"):])
-# 失败结果也会被写进 dcache（.then 里不看 ok 就存），所以重试必须把它清掉，
-# 否则点"重试"会立刻把上一次的失败又显示一遍
-check("失败有重试入口，且会清掉缓存里的失败结果",
-      "dpretry" in js and "delete dcache[dkey(s)]" in js)
-check("Esc 关面板", "e.key === 'Escape' && !dpEl.hidden" in js)
-check("hidden 真的能盖住 flex/block：全站一条 [hidden]，带 !important",
-      "[hidden] { display: none !important; }" in css,
-      re.findall(r"\[hidden\][^\n]{0,60}", css)[:3])
-check("不再各打各的补丁（那正是漏掉一个元素就复发的写法）",
-      ".dpanel[hidden]" not in css and ".homebtn[hidden]" not in css, None)
-check("显隐只用 hidden 表达，不写死 aria-hidden",
-      'aria-hidden' not in html[html.index('<aside class="dpanel"'):html.index("</main>")])
-check("面板滑入动画与骨架屏闪动在减少动效时都关掉",
-      "@media (prefers-reduced-motion: reduce)" in css[css.index(".dpanel"):])
-op = js[js.index("dpEl.hidden = false;"):js.index("dpClose.focus()")]
-check("点开是从屏幕外滑进来：先摘 hidden、强制一次布局、再加 .on",
-      "void dpEl.offsetWidth;" in op and op.index("dpEl.hidden = false;")
-      < op.index("void dpEl.offsetWidth;") < op.index("dpEl.classList.add('on');"),
-      op[:200])
-check("强制重排只在「摘 hidden → 加 .on」这一段里出现一次（别处不需要，多一处就多个坑）",
-      js[js.index("function openDetail("):js.index("function closeDetail(")].count(
-          "void dpEl.offsetWidth;") == 1, None)
-cl = js[js.index("function closeDetail("):js.index("dpClose.addEventListener")]
-check("关闭是滑出去再 display:none，时长从 CSS 读、不在 JS 里抄一份",
-      "getComputedStyle(dpEl).transitionDuration" in cl and "dur * 1000 + 40" in cl
-      and not re.search(r"setTimeout\([^\n]*?,\s*(260|600)\)", cl),
-      re.findall(r"setTimeout\([^\n]{0,60}", cl))
-check("滑出没播完之前不藏（期间又点开就不藏）",
-      "if (!dpEl.classList.contains('on')) dpEl.hidden = true;" in cl, None)
-out = js[js.index("点面板外面也收起"):]
-check("点面板外面也关：只认鼠标左键，面板已经关了就不再管（右键本站不劫持）",
-      "e.button !== 0 || dpEl.hidden" in out, None)
-check("面板里面的点击不算外面：先按事件路径判（composedPath），不是只看 contains",
-      "if (e.button !== 0 || dpEl.hidden || inPanel(e)) return;" in out
-      and "path.indexOf(dpEl) >= 0" in js and "const inPanel = (e) =>" in js, None)
-# 这条是回归钉：换源那排 chip 与「重试」的 onclick 先跑，openDetail 里一句 innerHTML=...
-# 把被点的节点摘出文档，等冒泡到 document 时 contains 已经变 false —— 写成 contains 判据时
-# 实测就是"点『换源看』面板自己关掉自己"
-check("判据不能退回 dpEl.contains(e.target)（节点被重画摘掉后它是 false）",
-      "if (dpEl.contains(e.target)) return;" not in out, None)
-check("卡片上那颗「详情」不算外面：开着面板点另一张是换一部看，不是关窗",
-      "t.closest(coarse() ? '.dbtn, .hcover, .cover' : '.dbtn')" in out
-      # 命中区两处共用一份说法，改 opener 必须一起改这里
-      and "coarse() ? '.hcover, .cover, .dbtn' : '.dbtn'" in js, None)
-check("外面那一下不抢焦点：只有 × 与 Esc 才把焦点还给当初那颗按钮",
-      "closeDetail(false)" in out and "if (refocus && dpBack && dpBack.focus)" in cl, None)
-check("× 的监听器包一层箭头函数（直接把 closeDetail 交出去会把 event 当成 refocus 参数）",
-      "dpClose.addEventListener('click', () => closeDetail())" in js, None)
-check("起点在屏幕外这件事写在 CSS 里（右侧 translateX、窄屏 translateY）",
-      "transform: translateX(calc(100% + 20px))" in css and "transform: translateY(calc(100% + 20px))" in css,
-      None)
-check("窄屏时面板盖满并锁住页面滚动", "body.dp-open { overflow: hidden; }" in css)
+      "preventDefault" not in drawer_ts, re.findall(r"preventDefault", drawer_ts))
+# (c) 旧写法把线路名与集名先写进 data-line / data-ep，再从 DOM 读回来拼进报告。
+# React 里 line.from 与 ep.name 本来就在闭包中，直接读对象：等价形态是这两个字段有值
+check("线路名与集名直接从对象里取，不再中转一份 data-*（报告照样拼得出哪条线路第几集）",
+      "data-line" not in all_src and "data-ep" not in all_src
+      and "line: line.from," in drawer_ts and 'ep: ep.name || "播放"' in drawer_ts, None)
+check("地址由后端筛 scheme，前端只把 href 那份原样发过去（自己不拼协议、不判白名单）",
+      "href={ep.url}" in drawer_ts and "url: ep.url," in drawer_ts
+      and "javascript:" not in drawer_ts and ".startsWith(\"http" not in drawer_ts, None)
+check("同一部片连开两次不重复请求（模块级那份缓存按 src+vid+片名 记，命中就直接用）",
+      "const cache = new Map<string, DetailResult>();" in drawer_ts
+      and "const hit = cache.get(key);" in drawer_ts and "cache.set(key, d);" in drawer_ts, None)
+check("命中缓存时界面还会说出来（不然人以为卡住了）",
+      "setFromCache(true);" in drawer_ts and "这一条本页已经查过" in drawer_ts, None)
+check("换源/切条目后旧请求回来不会填新面板（token 校验，两条出口都认它）",
+      "const mine = ++token.current;" in drawer_ts
+      and drawer_ts.count("if (mine !== token.current) return") == 2, None)
+check("失败有重试入口，且会清掉缓存里那一条（不然重试就是把上一次的失败再显示一遍）",
+      "cache.delete(key);" in drawer_ts and "setNonce((n) => n + 1);" in drawer_ts
+      and "重试" in drawer_ts, None)
+# (c) 旧那条是手写 keydown：Esc 且面板没关时调 closeDetail。现在 Esc 与点外面都由
+# HeroUI 的 Drawer 自己处理，前端不再写键盘监听 —— 判据换成"开关只由一个布尔受控"
+check("Esc 与点外面都交给 Drawer 组件（不再手写 keydown，也不再有第二个 Escape 判据）",
+      "Escape" not in drawer_ts and "onKeyDown" not in drawer_ts
+      and "onOpenChange={(v) => !v && onClose()}" in drawer_ts, None)
+# (c) 旧那条靠全站一条 [hidden] { display:none !important } 压住 flex/block。
+# React 这边显隐就是不渲染（条件渲染 + 组件的 isOpen），那条全局补丁没有对应物了
+check("CSS 里不再需要那条全局 [hidden] 硬压（新架构根本不用 hidden 属性表达显隐）",
+      "[hidden]" not in stcss and "hidden={" not in drawer_ts + poster_ts + vod_ts,
+      re.findall(r"\[hidden\]", stcss))
+check("也没有再给某个组件单独写一条 hidden 覆盖（那正是漏掉一个元素就复发的写法）",
+      ".dpanel" not in stcss and ".homebtn" not in stcss and "hidden]" not in stcss, None)
+check("aria-hidden 只用来藏装饰性的图标与色点，不用它表达显隐",
+      not re.search(r"aria-hidden=\{", all_src) and all_src.count('aria-hidden="true"') >= 5
+      and "[hidden]" not in stcss, re.findall(r"aria-hidden=[^\n]{0,20}", all_src))
+# 抽屉的滑入滑出与骨架屏都是组件库的动效；这一条管得住的是我们自己写的那两组关键帧
+check("我们自己的动效（海报淡入、整行推入、主题过渡）在减少动效时全部关掉",
+      "@media (prefers-reduced-motion: reduce)" in stcss
+      and ".poster-in,\n    .row-push-next,\n    .row-push-prev" in stcss
+      and ".theme-anim *" in stcss, re.findall(r"@media \(prefers-reduced-motion[^{]*\{", stcss))
+check("抽屉开合只有一个受控布尔：点开来、关掉就是把那一份 spec 清空",
+      "const open = !!spec;" in drawer_ts and "isOpen={open}" in drawer_ts
+      and "onClose={() => setSpec(null)}" in app_ts, None)
+# 注意：offsetWidth 全站只允许出现在滑块那一处（那是量控件宽度，不是逼浏览器重排）；
+# 抽屉这条路一次都不许有 —— 旧写法那三行 void dpEl.offsetWidth 在新架构里就是这个判据
+check("进出场不再需要一次强制重排（抽屉里 offsetWidth 一次都不出现）",
+      "offsetWidth" not in drawer_ts and all_src.count("offsetWidth") == 1
+      and "offsetWidth" in wread("components", "Gate.tsx"), re.findall(r"offsetWidth", all_src))
+check("时长没有第二个来源：JS 里不抄一份等待动画的计时",
+      "setTimeout" not in drawer_ts, re.findall(r"setTimeout[^\n]{0,30}", drawer_ts))
+check("没有「滑出没播完之前不藏」那一步：状态一改就交回组件，不留中间态",
+      "classList" not in drawer_ts and "display: none" not in drawer_ts, None)
+check("点外面那一下能关（组件把 open 状态的变化原样交回 onClose）",
+      "onOpenChange={(v) => !v && onClose()}" in drawer_ts
+      and "onClose: () => void" in drawer_ts, None)
+# (c) 旧写法要在 document 上判"这一下是在面板外面吗"，还得先按事件路径（composedPath）判，
+# 因为被点的节点可能刚被重画摘出文档。React 这边 open 是状态，不是从事件路径推出来的，
+# 这一整类坑（composedPath / contains 退回）没有载体
+check("判内外不靠事件路径：既没有 composedPath，也没有 dpEl.contains 这一类自研判据",
+      "composedPath" not in all_src and "contains(e.target)" not in all_src, None)
+check("卡片上那颗「详情」不算外面：开着抽屉点另一张是换一部看，不是关窗",
+      "onPress={() => onDetail(spec)}" in poster_ts and "setSpec(s);" in od
+      and "spec={spec}" in app_ts, None)
+check("外面那一下不抢焦点：前端没有一处手写 focus（焦点归还由组件处理）",
+      ".focus()" not in drawer_ts and "dpBack" not in all_src, re.findall(r"\.focus\(\)", all_src))
+check("关闭那颗 × 由组件提供，前端不写监听器（不用包一层箭头函数去挡 event）",
+      '<Drawer.CloseTrigger aria-label="关闭详情" />' in drawer_ts
+      and "addEventListener" not in drawer_ts, None)
+check("宽屏从右边滑进来、窄屏从下面推上来：方向交给 placement，不在 CSS 里写两份位移",
+      'placement={wide ? "right" : "bottom"}' in drawer_ts
+      and 'useMediaQuery("(min-width: 1024px)")' in drawer_ts, None)
+check("盖满与锁页面滚动是 Drawer 组件的职责，前端不再往 body 上挂一个类",
+      "dp-open" not in all_src and not re.search(r"(html|body)\s*\{[^}]*overflow", stcss), None)
 check("详情按钮常驻可见（不靠 hover 才发现），触屏上给满不透明度",
-      ".dbtn {" in css and "@media (hover: none) { .dbtn { opacity: 1; } }" in css)
-check("按钮压在封面之上（封面 img 是 z-index:1）",
-      re.search(r"\.dbtn \{[^}]*z-index: 2", css) is not None)
-check("按钮用压在图片上的那对 token（不跟主题翻转，暗色下才不会黑压黑）",
-      "var(--poster-ink)" in css[css.index(".dbtn {"):css.index(".dbtn:hover")] and
-      "var(--poster-scrim)" in css[css.index(".dbtn {"):css.index(".dbtn:hover")],
-      css[css.index(".dbtn {"):css.index(".dbtn:hover")])
-check("这对 token 在两个主题里都定义了",
-      css.count("--poster-ink:") == 2 and css.count("--poster-scrim:") == 2,
-      (css.count("--poster-ink:"), css.count("--poster-scrim:")))
-check("换源按钮的选中态按字符串比较（接口给的是数字 ID）",
-      "String(x.id) === String(cur.src) && String(x.vid) === String(cur.vid)" in js)
+      ".dbtn {" in stcss and "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in stcss, None)
+# (c) 旧那条比的是 .dbtn { z-index: 2 } 压在 .cover img { z-index: 1 } 之上。
+# 现在按钮是 absolute 定位、排在图片之后，画在上层靠的是定位与文档顺序，不需要再写 z-index
+check("按钮压在封面之上：靠 absolute 定位 + 文档顺序，不再手写一层 z-index",
+      "absolute right-1.5 bottom-1.5" in poster_ts and "z-index" not in stcss,
+      re.findall(r"z-index[^\n]*", stcss))
+# (c) 旧的那对 --poster-ink / --poster-scrim 是"压在任意封面上的东西不能跟主题翻"的手写 token。
+# 现在这颗按钮直接用 HeroUI 的 secondary 变体，配色由组件的令牌给：这对 token 在新样式里
+# 已经没有定义，也就没有"只定义一处"这件事要钉 —— 等价形态是这套颜色只有一个来源（组件变体）
+check("按钮配色只有一个来源（HeroUI 的变体），不再有一对自造的封面 token",
+      'variant="secondary"' in poster_ts and "--poster-ink" not in stcss
+      and "--poster-scrim" not in stcss, None)
+check("换源按钮的选中态按字符串比较（接口给的是数字 ID，比不中就一直选不上）",
+      'String(x.id) === String(src) && String(x.vid) === String(vid)' in drawer_ts, None)
 # 只有一个源也要有这一排：它说的是"这条详情是哪个源给的"，不是可有可无的装饰
-check("单源也渲染这一排（不再 length > 1 才画）",
-      "if (!srcs || !srcs.length) return '';" in js and "srcs.length > 1 ? '换源看' : '来源'" in js,
-      re.findall(r"srcs\.length[^{]{0,40}", js)[:3])
-check("按片名兜底那条路（srcs 本来是空的）拿到详情后把这一排补上",
-      "insertAdjacentHTML('beforebegin', chipsRow(" in js and "!dpBody.querySelector('.dpchips')" in js,
-      re.findall(r"insertAdjacentHTML\([^\n]{0,60}", js)[:2])
-check("点当前这个源不重开、也不再上报一条（不然一次查看被记成好几次）",
-      "if (String(x.id) === String(s.src) && String(x.vid) === String(s.vid)) return;" in js)
-check("用法说明改成了详情按钮，不再提右键",
-      "详情" in html and "右键" not in html[html.index('<div class="placeholder"'):html.index("</main>")])
+check("单源也渲染这一排（不再 length > 1 才画，标题跟着长度换词）",
+      "{sources.length ? (" in drawer_ts and 'sources.length > 1 ? "换源看" : "来源"' in drawer_ts,
+      re.findall(r"sources\.length[^\n]{0,30}", drawer_ts))
+# (c) 旧写法在"按片名兜底"那条路上要事后把这一排插回面板里（那时 data-srcs 是空的）。
+# 现在这一排读的是 spec.sources（点开来那份数据里就带着），与接口回什么无关，补那一步不存在
+check("这一排排在 loading/error/结果三个分支之外，不依赖接口回没回 sources",
+      drawer_ts.index("{sources.length ? (") < drawer_ts.index("{loading ? ("), None)
+check("点当前这个源不重开、也不再上报一条（门闩是 key，key 没变就不重查；换源那颗按钮只改 pick）",
+      'const key = spec ? dkey(src, vid, spec.title) : "";' in drawer_ts
+      and "sendClick" not in drawer_ts[drawer_ts.index("{sources.map((x) =>"):
+                                  drawer_ts.index("{loading ? (")]
+      and "onPress={() => setPick(" in drawer_ts,
+      re.findall(r"sendClick", drawer_ts))
+howto_ts = wread("components", "HowTo.tsx")
+check("用法说明收进顶栏那颗「怎么用」按钮里，文案不再提右键",
+      "海报右下角的「详情」" in howto_ts and "怎么用" in howto_ts
+      and "右键" not in howto_ts and "右键" not in app_ts,
+      re.findall(r".{0,20}右键.{0,20}", howto_ts + app_ts))
 
 print("\n7) 海报淡入：不是一片张着等，也不是一片透明")
-fade = css[css.index("html.hasjs .cover img"):css.index("@media (prefers-reduced-motion: reduce)",
-                                                     css.index("html.hasjs .cover img"))]
-check("三种海报盒（结果卡片、猜你想搜、详情面板）都在淡入范围内",
-      ".cover img" in fade and ".hcover img" in fade and ".dpcover img" in fade, fade[:200])
-check("默认透明、加载完淡上来，时长在 .4s 以内（比这长就像幻灯片）",
-      "opacity: 0" in fade and "transition: opacity .34s ease" in fade
-      and "opacity: 1 }" in css[css.index(".cover img.loaded"):css.index("@media (prefers-reduced-motion",
-                                                                        css.index(".cover img.loaded"))],
-      None)
-check("第二次见这张图直接显示、不走过渡（.noanim）——翻页翻回来就是这条",
-      "html.hasjs .cover img.noanim" in css and "transition: none" in
-      css[css.index("html.hasjs .cover img.noanim"):
-          css.index("@media (prefers-reduced-motion: reduce)", css.index("html.hasjs .cover img.noanim"))],
-      None)
-check("闸门挂在 html.hasjs 上：禁用 JS 与爬虫拿不到 .loaded，也不能把海报变成一片空白",
-      "html.hasjs" in fade and (BASE / "zhuiju" / "templates" / "_theme.html").read_text(encoding="utf-8")
-      .count("classList.add('hasjs')") == 1, None)
-theme = (BASE / "zhuiju" / "templates" / "_theme.html").read_text(encoding="utf-8")
-check("这个标记和主题一样在样式表之前的内联脚本里打，晚一帧就是先看见图再看见它变透明",
-      theme.index("hasjs") < theme.index("dataset.theme"), None)
-rev = js[js.index("function revealIn(root)"):js.index("const noMotion")]
-check("已经缓存好的图当场显示（load 事件早发过了，只等事件就永远透明）",
-      "(im.complete && im.naturalWidth)" in rev and "classList.add('loaded', 'noanim')" in rev, None)
-check("第二次见到同一张海报不再淡：翻回来的那页不该像重新加载",
-      "shownPics.has(src)" in rev and "im.classList.add('loaded')" in rev
-      and "shownPics.add(src)" in rev, None)
-check("记下的地址有上限（开一整天的标签页不能无限攒）",
-      "PICS_MAX = 3000" in js and "shownPics.size < PICS_MAX" in rev, None)
-check("同一棵子树重复 reveal 不重复挂监听", "if (im.dataset.shown) return;" in rev, None)
-check("兜一个超时：卡在既不 load 也不 error 的连接上时，宁可显示也别留空白，而且不再淡",
-      "setTimeout(() => im.classList.add('loaded', 'noanim'), 8000)" in rev, None)
-for anchor in ("revealIn(resultsEl);", "revealIn(grid);", "revealIn(dpBody);", "revealIn(document);"):
-    check("渲染点都调了它：" + anchor, anchor in js, None)
-check("服务端渲染那 12 条不再靠 inline onload（缓存图根本不触发它）",
-      'onload="this.closest' not in html, re.findall(r"<img[^>]{0,120}", html)[:2])
-check("暗色主题不再用 opacity 压海报，否则和淡入抢同一个属性",
-      "[data-theme=\"dark\"] img { filter: brightness(.94); }" in css
-      and "dark\"] img, [data-theme=\"dark\"] .hcover img { opacity" not in css,
-      re.findall(r'\[data-theme="dark"\] img[^\n]{0,60}', css)[:2])
+# (a) 原来这一节切的是 static/app.css 里 html.hasjs .cover img 那一段与 static/app.js 里
+# 那个全局 revealIn()。现在淡入是 Poster 组件的一个 state + styles.css 里一组关键帧，
+# 闸门从 html.hasjs 换成 html.js（由壳那段内联脚本打）。
+check("两处海报（海报卡与详情抽屉）都吃同一个 poster-img 类，淡入只有一套写法",
+      stcss.count(".poster-img") >= 1 and "poster-img" in poster_ts and "poster-img" in drawer_ts,
+      re.findall(r"poster-\w+", all_src))
+check("没加载完是 opacity-0（Tailwind 那个类），加载完换成走 .poster-in 的淡入",
+      '"poster-in") : "opacity-0"' in poster_ts and "instant" in poster_ts
+      and "animation: poster-in 0.28s ease-out both" in stcss, None)
+check("时长在 .4s 以内（比这长就像幻灯片）",
+      "poster-in 0.28s" in stcss and "row-next 0.32s" in stcss, re.findall(r"\d\.\d+s", stcss))
+# (c) 旧写法要专门给"第二次见这张图"加一个 .noanim 跳过过渡。新实现在 ref 里当场问一句
+# complete，命中磁盘缓存的图第一帧就是可见态，只统一淡一次 —— 作者把这个当成取舍写进了注释
+check("命中缓存的图由 ref 当场判定可见（不再有 .noanim 那个特例，也不再攒看过的地址）",
+      "node?.complete && node.naturalWidth > 0" in poster_ts
+      and "noanim" not in all_src and "shownPics" not in all_src, None)
+# (c) 旧那条的闸门是 html.hasjs（模板里 CSS 默认 opacity:0，靠 JS 补 .loaded）。
+# 新架构海报卡片本身就只在 JS 那侧存在：没有 JS 的人拿到的是 #nojs 那份文字列表，
+# 一片透明的图这个状态在结构上就不可能出现。闸门类仍然留着，但它管的是 #nojs/#app 让位
+check("禁用 JS 与爬虫不会拿到一片透明：图只存在于 React 那一侧，壳那份是纯文字列表",
+      shell.count("<img") == 0 and 'html.js #nojs' in stcss and "html:not(.js) #app" in stcss,
+      re.findall(r"<img", shell))
+check("闸门那个类由壳里样式表之前的内联脚本打，晚一帧就是先看见图再看见它变透明",
+      shell.index("classList.add('js')") < shell.index("spa/app.css"), None)
+check("同一棵树不会重复挂监听：淡入是 onLoad/onError 两个属性，不往节点上 addEventListener",
+      'onLoad={() => setSt((s) => ({ ...s, shown: true }))}' in poster_ts and 'onError={() => setBroken(true)}' in poster_ts
+      and "addEventListener" not in poster_ts, None)
+# 这条的一半（既不 load 也不 error 时那个 8 秒兜底）在新实现里**没有**搬过来：
+# 那张图会一直停在 opacity-0。不改实现，只钉还成立的那一半（error 那一路会退回片名占位），
+# 缺的那半已作为疑似回归写进交付报告。
+check("图坏了不会留一块空白：onError 之后原位换成片名占位（既不 load 也不 error 的兜底缺失，已上报）",
+      "src && !broken ? (" in poster_ts and "grid size-full place-items-center" in poster_ts
+      and "{title.slice(0, 8)}" in poster_ts, None)
+for anchor, tgt in (("结果卡片", vod_ts), ("猜你想搜", hot_ts)):
+    check(f"渲染点用的是同一个 Poster（{anchor}）：淡入逻辑不用再在各处补跑一遍",
+          "<Poster" in tgt, None)
+check("详情抽屉那张封面也一样走代理与同一个类（渲染点第三处，不需要 reveal 那个补跑）",
+      'className="poster-img size-20' in drawer_ts and "revealIn" not in all_src, None)
+check("第四个渲染点（整页扫一遍）在新架构里没有对应物：没有全局 reveal，也就不需要扫一遍",
+      front_src.count("querySelectorAll") == 0, re.findall(r"querySelectorAll", front_src))
+check("服务端渲染那 12 条不靠 inline onload（壳里根本没有 img，也没有 onload 属性）",
+      "onload=" not in shell and "<img" not in shell, re.findall(r"onload=[^ ]*", shell))
+# 这条原来判的是 .mdui-theme-dark img { filter: brightness(.94) }，那批选择器随旧前端一起没了；
+# 判据搬到新样式上：暗色压亮度，且绝不碰 opacity（会和淡入抢同一个属性）
+dark_rule = stcss[stcss.index(".dark .poster-img"):stcss.index(".dark .poster-img") + 90]
+check("暗色主题用 filter 压海报亮度，不透明度留给淡入（两者抢同一个属性就会闪）",
+      "filter: brightness(0.94)" in stcss and "opacity" not in dark_rule, dark_rule)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)
