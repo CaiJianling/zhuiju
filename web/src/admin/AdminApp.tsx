@@ -21,7 +21,9 @@ interface Boot {
 }
 
 /** 侧边目录：只列当前标签页里那几块（归属由 ADMIN_TABS 一处定义，服务端带来）。
- *  高亮哪一块靠"最后一个顶边越过判据线的块"，和老模板那段 scrollspy 同一个算法。 */
+ *  高亮哪一块靠"最后一个顶边越过判据线的块"，和老模板那段 scrollspy 同一个算法。
+ *  这一栏在 xl 以上才出现：左边已经让掉了 176px 给菜单，再挤一条 200px 的话，
+ *  十二列的明细表就只剩横向滚动条可看了。 */
 function Toc({ v }: { v: AdminView }) {
   const tab = v.tabs.find((t) => t.id === v.tab) || v.tabs[0];
   const [active, setActive] = useState(tab.blocks[0]?.[0] || "");
@@ -45,7 +47,7 @@ function Toc({ v }: { v: AdminView }) {
   }, [tab]);
 
   return (
-    <nav className="sticky top-20 hidden h-fit rounded-2xl bg-surface p-3 text-surface-foreground shadow-surface ring-1 ring-border lg:block">
+    <nav aria-label="本节目录" className="sticky top-20 hidden h-fit rounded-2xl bg-surface p-3 text-surface-foreground shadow-surface ring-1 ring-border xl:block">
       <p className="mb-2 text-[11px] font-semibold text-foreground">{tab.label}</p>
       <ul className="space-y-1">
         {tab.blocks.map(([id, name]) => (
@@ -63,6 +65,38 @@ function Toc({ v }: { v: AdminView }) {
           </li>
         ))}
       </ul>
+    </nav>
+  );
+}
+
+/** 左侧菜单：四个分区竖着排（照 HeroUI 文档站那样，左边选屏、右边看目录）。
+ *  窄屏退化成顶部一条横滑 —— 菜单必须一直看得见，藏进汉堡里等于让人不知道后台分几块。 */
+function Menu({ v, onGo }: { v: AdminView; onGo: (u: string, r?: boolean) => void }) {
+  return (
+    <nav
+      aria-label="后台分区"
+      className="scroll-thin -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 lg:sticky lg:top-20 lg:h-fit lg:w-[176px] lg:shrink-0 lg:flex-col lg:items-stretch lg:overflow-visible lg:px-0 lg:pb-0"
+    >
+      {v.tabs.map((t) => {
+        const on = t.id === v.tab;
+        return (
+          <a
+            key={t.id}
+            href={t.href}
+            aria-current={on ? "page" : undefined}
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+              e.preventDefault();
+              onGo(t.href);
+            }}
+            className={`shrink-0 truncate rounded-full px-3 py-2 text-left text-xs transition lg:py-1.5 ${
+              on ? "bg-accent/12 font-medium text-accent" : "text-muted hover:bg-default hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </a>
+        );
+      })}
     </nav>
   );
 }
@@ -154,17 +188,18 @@ export default function AdminApp({ boot }: { boot: Boot }) {
           </h1>
           <span className="flex-1" />
           <ThemeToggle />
-          <Link href="/admin" onGo={(u, r) => onGo(u, r)} className="text-[11px]">改口令</Link>
+          {/* 改口令是 /admin/password 那一屏，不是 /admin —— 写成后者等于点自己：
+              useGo 看路径没变，只把同一条 URL 重新取一遍，现象就是"这颗按钮按了没反应" */}
+          <Link href="/admin/password" onGo={(u, r) => onGo(u, r)} className="text-[11px]">改口令</Link>
           <a href="/" className="text-[11px] text-muted hover:text-foreground">回前台</a>
           <Button size="sm" variant="ghost" className="rounded-full" isPending={busy} onPress={() => void logout()}>
             退出登录
           </Button>
         </div>
         {pending ? (
-          <div role="status" aria-label="正在读后台数据">
-            <div className="bar-run" aria-hidden="true" />
-            <p className="num px-4 text-[10px] text-muted sm:px-6">正在读…（Emby STRM 那一屏要几秒，它在近一年的采集库里聚合）</p>
-          </div>
+          /* 只留那根条：文字说明是多余的，"在取新的"这件事进度条自己会说
+              （STRM 那一屏要几秒，没有这根条看着就是卡死） */
+          <div className="bar-run" role="status" aria-label="正在读后台数据" aria-hidden="false" />
         ) : null}
       </header>
 
@@ -177,25 +212,18 @@ export default function AdminApp({ boot }: { boot: Boot }) {
           </p>
         ) : null}
 
-        <div className="mt-4 flex flex-wrap gap-1.5">
-          {view.tabs.map((t) => (
-            <Button key={t.id} size="sm" variant={tab === t.id ? "primary" : "tertiary"} className="rounded-full"
-                    onPress={() => onGo(t.href)}>
-              {t.label}
-            </Button>
-          ))}
-        </div>
-
-        <div className="mt-4">
-          <FilterBar v={view} onGo={onGo} />
-        </div>
-
-        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_200px]">
-          <div className="min-w-0">
-            {tab === "overview" ? <Overview v={view} onGo={onGo} /> : null}
-            {tab === "detail" ? <DetailTab v={view} onGo={onGo} /> : null}
-            {tab === "strm" ? <StrmTab v={view} /> : null}
-            {tab === "settings" ? <Settings v={view} /> : null}
+        {/* 三栏：左菜单（选屏）· 中正文（筛选 + 这一块）· 右目录（跳到某一节）。
+            窄屏时这三栏就是竖着的三段，菜单退成横滑条。 */}
+        <div className="mt-6 grid gap-6 lg:grid-cols-[176px_minmax(0,1fr)] xl:grid-cols-[176px_minmax(0,1fr)_200px]">
+          <Menu v={view} onGo={onGo} />
+          <div className="min-w-0 space-y-4">
+            <FilterBar v={view} onGo={onGo} />
+            <div className="space-y-8 pt-2">
+              {tab === "overview" ? <Overview v={view} onGo={onGo} /> : null}
+              {tab === "detail" ? <DetailTab v={view} onGo={onGo} /> : null}
+              {tab === "strm" ? <StrmTab v={view} /> : null}
+              {tab === "settings" ? <Settings v={view} /> : null}
+            </div>
           </div>
           <Toc v={view} />
         </div>

@@ -34,7 +34,7 @@ npm run build          # 产出 ../zhuiju/static/spa/app.js 与 app.css
 这样壳里能直接 `?v={{ asset_v }}` 复用原来那枚「按 `static/` 一级子项 mtime 取最大值」的
 版本号，不必再引一份 manifest 去读哈希名。
 
-体积：`app.js` 541 KB / gzip 168 KB，`app.css` 448 KB / gzip 43 KB。大头是
+体积：`app.js` 128 KB / gzip 40 KB，`app.css` 458 KB / gzip 44 KB，`admin.js` 173 KB。大头是
 React 19 + React Aria（HeroUI v3 的可访问性是它给的）。局域网/本机加载这点量无所谓，
 但它意味着**一件不能踩的事：不要把它扔到公网 CDN** —— 站点常年跑在没有外网出口的机器上。
 
@@ -71,7 +71,7 @@ React 19 + React Aria（HeroUI v3 的可访问性是它给的）。局域网/本
   会固定亮色 —— 那时本来也没有界面，划算。
 - 切换是渐变的，但过渡只在切换那 ~380ms 里临时挂 `.theme-anim` 再摘掉；
   写成常驻的 `* { transition }` 会把 hover 拖慢、长列表掉帧。
-  `prefers-reduced-motion: reduce` 下不渐变、海报淡入与整行推入也一起关掉。
+  `prefers-reduced-motion: reduce` 下不渐变，海报淡入与「猜你想搜」的平滑滚动也一起关掉。
 - 反馈：切完用 HeroUI 的 `toast` 报一声「已保存 · 暗色」；写不进 localStorage（无痕）
   就直说「这台浏览器不给存，这次生效、关掉就忘」。
 - 覆盖点只有两处，都在 `web/src/styles.css`：
@@ -83,8 +83,17 @@ React 19 + React Aria（HeroUI v3 的可访问性是它给的）。局域网/本
   （**顺序反了不报错，只是样式会歪**），没有 `tailwind.config.js`，也没有 Provider 要包。
 
 版式约定：按钮/输入一律 `rounded-full` 药丸；数据字段（命中数、耗时、条数、页码）
-一律 `.num`（等宽 + `tabular-nums`）；前台收在 `max-w-[1280px]`，后台保持宽表；
-搜索那一屏 ≥1280px 时两栏（左结果、右资料栏粘性跟随），窄屏资料栏排到结果上面。
+一律 `.num`（等宽 + `tabular-nums`）；**前台与后台统一收在 `max-w-[1680px]`**，边距随屏给
+（`px-4 sm:px-6`），超宽屏不再各用一档。
+搜索那一屏 ≥1280px（`xl`）时两栏（左结果、右资料栏粘性跟随），窄屏 `<aside>` 拆成两块：
+接口状态排到结果上面，服务端快照排到最后。
+
+那份「《X》的检索结果」是**服务端为该关键词存的快照**（搜索引擎与禁用 JS 时看到的都是它），
+所以只在 `kw === boot.kw` 时出现；换词后整块不再渲染。快照在窄屏默认折叠，展开后固定 6 行、框内滚动：
+高度量第 7 条 `li` 的 `offsetTop`，不写死像素（行高会随折行变化），再加上
+`offsetHeight - clientHeight` 补偿滚动条占掉的宽度与高度。首次测量必须**同步**跑 ——
+rAF 在后台标签里可能压根不回调，限高就会静默失效；宽度变化由 `ResizeObserver`、内容变化由
+`MutationObserver` 重算（同一个 `useClamp` 也供后台表格用）。
 
 ## 后台：同一个工程里的第二个入口
 

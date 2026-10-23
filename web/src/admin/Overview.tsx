@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchMap } from "./api";
-import { Block, Card, Fold, Link, Num, Table, Txt, dash, filterUrl } from "./ui";
+import { Block, Card, Cell, Link, Num, Row, Table, Txt, dash, filterUrl } from "./ui";
 import type { AdminView } from "./types";
 
 type Go = (u: string, replace?: boolean) => void;
@@ -56,27 +56,23 @@ function ByDay({ v, onGo }: { v: AdminView; onGo: Go }) {
         {!days.length ? (
           <p className="text-xs text-muted">还没有查询记录。去首页搜一部剧，这里就会有数据。</p>
         ) : (
-          <Fold rows={R5}>
-            <Table head={["日期", "次数", "独立 IP", "零结果", ""]}>
-              <tbody>
-                {days.map((d) => (
-                  <tr key={d.day} className="border-b border-separator/70 last:border-0">
-                    <Txt>
-                      <Link href={filterUrl({ day_from: d.day, day_to: d.day, day: "" }, "detail")} onGo={onGo}>
-                        {d.day}
-                      </Link>
-                    </Txt>
-                    <Num zero={!d.n}>{d.n}</Num>
-                    <Num>{d.ips}</Num>
-                    <Num zero={d.empty > 0}>{d.empty}</Num>
-                    <td className="w-32 px-2">
-                      <span className="block h-1.5 rounded-full bg-accent/70" style={{ width: `${(d.n / max) * 100}%` }} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Fold>
+          <Table rows={R5} head={["日期", "次数", "独立 IP", "零结果", "占比"]}>
+            {days.map((d) => (
+              <Row key={d.day}>
+                <Txt>
+                  <Link href={filterUrl({ day_from: d.day, day_to: d.day, day: "" }, "detail")} onGo={onGo}>
+                    {d.day}
+                  </Link>
+                </Txt>
+                <Num zero={!d.n}>{d.n}</Num>
+                <Num>{d.ips}</Num>
+                <Num zero={d.empty > 0}>{d.empty}</Num>
+                <Cell className="w-32">
+                  <span className="block h-1.5 rounded-full bg-accent/70" style={{ width: `${(d.n / max) * 100}%` }} />
+                </Cell>
+              </Row>
+            ))}
+          </Table>
         )}
       </Card>
     </Block>
@@ -89,22 +85,18 @@ function TopKw({ v, onGo }: { v: AdminView; onGo: Go }) {
     <Block id="top-kw" title="热门关键词">
       <Card>
         {!rows.length ? <p className="text-xs text-muted">无</p> : (
-          <Fold rows={R5}>
-            <Table head={["关键词", "次数", "IP", "平均结果"]}>
-              <tbody>
-                {rows.map((k) => (
-                  <tr key={k.kw} className="border-b border-separator/70 last:border-0">
-                    <Txt>
-                      <Link href={filterUrl({ kw: k.kw }, "detail")} onGo={onGo}>{k.kw}</Link>
-                    </Txt>
-                    <Num>{k.n}</Num>
-                    <Num>{k.ips}</Num>
-                    <Num>{(k.avg_results ?? 0).toFixed(1)}</Num>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Fold>
+          <Table rows={R5} head={["关键词", "次数", "IP", "平均结果"]}>
+            {rows.map((k) => (
+              <Row key={k.kw}>
+                <Txt>
+                  <Link href={filterUrl({ kw: k.kw }, "detail")} onGo={onGo}>{k.kw}</Link>
+                </Txt>
+                <Num>{k.n}</Num>
+                <Num>{k.ips}</Num>
+                <Num>{(k.avg_results ?? 0).toFixed(1)}</Num>
+              </Row>
+            ))}
+          </Table>
         )}
       </Card>
     </Block>
@@ -117,22 +109,18 @@ function TopIp({ v, onGo }: { v: AdminView; onGo: Go }) {
     <Block id="top-ip" title="活跃 IP">
       <Card>
         {!rows.length ? <p className="text-xs text-muted">无</p> : (
-          <Fold rows={R5}>
-            <Table head={["IP", "次数", "关键词", "首 / 末次"]}>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.ip} className="border-b border-separator/70 last:border-0">
-                    <Txt mono>
-                      <Link href={filterUrl({ ip: r.ip }, "detail")} onGo={onGo}>{r.ip}</Link>
-                    </Txt>
-                    <Num>{r.n}</Num>
-                    <Num>{r.kws}</Num>
-                    <Txt dim mono>{`${r.first_day} ~ ${r.last_day}`}</Txt>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Fold>
+          <Table rows={R5} head={["IP", "次数", "关键词", "首 / 末次"]}>
+            {rows.map((r) => (
+              <Row key={r.ip}>
+                <Txt mono>
+                  <Link href={filterUrl({ ip: r.ip }, "detail")} onGo={onGo}>{r.ip}</Link>
+                </Txt>
+                <Num>{r.n}</Num>
+                <Num>{r.kws}</Num>
+                <Txt dim mono>{`${r.first_day} ~ ${r.last_day}`}</Txt>
+              </Row>
+            ))}
+          </Table>
         )}
       </Card>
     </Block>
@@ -145,26 +133,22 @@ function Agents({ v, onGo }: { v: AdminView; onGo: Go }) {
     <Block id="agents" title="浏览器 / 设备">
       <Card>
         {!rows.length ? <p className="text-xs text-muted">无</p> : (
-          <Fold rows={R5}>
-            <Table head={["浏览器", "系统", "设备", "次数", "IP"]}>
-              <tbody>
-                {rows.map((b) => (
-                  <tr key={`${b.browser}-${b.os}-${b.device}`} className="border-b border-separator/70 last:border-0">
-                    <Txt>
-                      <Link href={filterUrl({ browser: b.browser }, "detail")} onGo={onGo}>{b.browser}</Link>
-                      {b.bots ? <span className="ml-1 text-[10px] text-muted">含程序 {b.bots}</span> : null}
-                    </Txt>
-                    <Txt dim>{dash(b.os)}</Txt>
-                    <Txt>
-                      {b.device ? <Link href={filterUrl({ device: b.device }, "detail")} onGo={onGo}>{b.device}</Link> : "—"}
-                    </Txt>
-                    <Num>{b.n}</Num>
-                    <Num>{b.ips}</Num>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Fold>
+          <Table rows={R5} head={["浏览器", "系统", "设备", "次数", "IP"]}>
+            {rows.map((b) => (
+              <Row key={`${b.browser}-${b.os}-${b.device}`}>
+                <Txt>
+                  <Link href={filterUrl({ browser: b.browser }, "detail")} onGo={onGo}>{b.browser}</Link>
+                  {b.bots ? <span className="ml-1 text-[10px] text-muted">含程序 {b.bots}</span> : null}
+                </Txt>
+                <Txt dim>{dash(b.os)}</Txt>
+                <Txt>
+                  {b.device ? <Link href={filterUrl({ device: b.device }, "detail")} onGo={onGo}>{b.device}</Link> : "—"}
+                </Txt>
+                <Num>{b.n}</Num>
+                <Num>{b.ips}</Num>
+              </Row>
+            ))}
+          </Table>
         )}
       </Card>
     </Block>
@@ -173,26 +157,33 @@ function Agents({ v, onGo }: { v: AdminView; onGo: Go }) {
 
 function Refs({ v }: { v: AdminView }) {
   const rows = v.agg!.by_ref_src || [];
+  const dist = (v.agg!.by_ref || []).map((r) => `${v.labels.ref_kind[r.kind] || r.kind} ${r.n}`).join("、");
   return (
     <Block id="refs" title="来源页">
       <Card>
         {!rows.length ? <p className="text-xs text-muted">无</p> : (
-          <Fold rows={R5}>
-            <Table head={["来源", "类型", "次数", "IP", "最近"]}>
-              <tbody>
-                {rows.map((f) => (
-                  <tr key={`${f.kind}-${f.label}`} className="border-b border-separator/70 last:border-0">
-                    <Txt title={f.label}>{f.label}</Txt>
-                    <Txt dim>{v.labels.ref_kind[f.kind] || f.kind}</Txt>
-                    <Num>{f.n}</Num>
-                    <Num>{f.ips}</Num>
-                    <Txt dim mono>{f.last_day}</Txt>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Fold>
+          <Table rows={R5} head={["来源", "类型", "次数", "IP", "最近"]}>
+            {rows.map((f) => (
+              <Row key={`${f.kind}-${f.label}`}>
+                <Txt title={f.label}>{f.label}</Txt>
+                <Txt dim>{v.labels.ref_kind[f.kind] || f.kind}</Txt>
+                <Num>{f.n}</Num>
+                <Num>{f.ips}</Num>
+                <Txt dim mono>{f.last_day}</Txt>
+              </Row>
+            ))}
+          </Table>
         )}
+        {/* 这一栏最容易被读成"我知道对方从哪一页来"，实际上能给多少全由浏览器的
+            Referrer-Policy 决定：拿不到就归进「直接访问」，不编。 */}
+        <p className="mt-2 text-[11px] leading-relaxed text-muted">
+          来源取自 Referer 头，能给多少由浏览器的 Referrer-Policy 决定，不是我们能控制的：
+          <b className="text-foreground">站内跳转</b>给完整地址，所以上一页是哪一部剧（<code>/s/×</code>）看得见；
+          <b className="text-foreground">跨站跳转</b>只给到域名，路径被浏览器抹掉，拿不到就不编；
+          https 跳 http 干脆不发，直接输网址、书签、新标签页打开也都不发 ——
+          这些一律归成「直接访问 / 无来源」，互相分不开。
+          {dist ? `（当前分布：${dist}）` : ""}
+        </p>
       </Card>
     </Block>
   );
@@ -263,30 +254,26 @@ function GeoMap({ v, onGo }: { v: AdminView; onGo: Go }) {
         ) : null}
       </Card>
       <Card>
-        <Fold rows={R5}>
-          <Table head={["国家 / 地区", "次数", "IP", "关键词", "最近"]}>
-            <tbody>
-              {(v.agg!.by_geo || []).map((g) => (
-                <tr key={`${g.iso}-${g.country}`} className="border-b border-separator/70 last:border-0">
-                  <Txt>
-                    {g.iso && g.iso.length === 2 ? (
-                      <>
-                        <Link href={filterUrl({ geo: g.iso })} onGo={onGo}>{g.country || g.iso}</Link>
-                        <span className="ml-1 text-[10px] text-muted">{g.iso}</span>
-                      </>
-                    ) : (
-                      <Link href={filterUrl({ geo: "--" })} onGo={onGo}>内网 / 保留地址</Link>
-                    )}
-                  </Txt>
-                  <Num>{g.n}</Num>
-                  <Num>{g.ips}</Num>
-                  <Num>{g.kws}</Num>
-                  <Txt dim mono>{g.last_day}</Txt>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Fold>
+        <Table rows={R5} head={["国家 / 地区", "次数", "IP", "关键词", "最近"]}>
+          {(v.agg!.by_geo || []).map((g) => (
+            <Row key={`${g.iso}-${g.country}`}>
+              <Txt>
+                {g.iso && g.iso.length === 2 ? (
+                  <>
+                    <Link href={filterUrl({ geo: g.iso })} onGo={onGo}>{g.country || g.iso}</Link>
+                    <span className="ml-1 text-[10px] text-muted">{g.iso}</span>
+                  </>
+                ) : (
+                  <Link href={filterUrl({ geo: "--" })} onGo={onGo}>内网 / 保留地址</Link>
+                )}
+              </Txt>
+              <Num>{g.n}</Num>
+              <Num>{g.ips}</Num>
+              <Num>{g.kws}</Num>
+              <Txt dim mono>{g.last_day}</Txt>
+            </Row>
+          ))}
+        </Table>
       </Card>
     </Block>
   );

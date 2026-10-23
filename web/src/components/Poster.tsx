@@ -1,5 +1,5 @@
-import { useCallback, useState } from "react";
-import { Button, Skeleton } from "@heroui/react";
+import { useCallback, useRef, useState } from "react";
+import { Button, Skeleton, Spinner } from "@heroui/react";
 import { posterOf } from "../api";
 import { Flag, Meta } from "./ui";
 
@@ -26,7 +26,9 @@ interface Props {
   flags?: (string | number | undefined | false)[];
   href?: string;
   spec: DetailSpec;
-  onDetail: (spec: DetailSpec) => void;
+  /** 点海报开详情。from = 那张海报的方框本体：展开时要拿它当"从哪儿长出来"的那个元素
+   *  （View Transitions 的共享元素）。浏览器不支持时 from 用不上，抽屉照常滑进来。 */
+  onDetail: (spec: DetailSpec, from?: HTMLElement | null) => void;
 }
 
 /** 一张海报图片本体（父元素负责定位与形状）。列表卡与详情抽屉共用这一份，
@@ -52,7 +54,16 @@ export function PosterImage({ pic, title }: { pic?: string; title: string }) {
   }
   return (
     <>
-      {st.shown ? null : <Skeleton className="absolute inset-0" aria-label="海报加载中" />}
+      {st.shown ? null : (
+        // 空黑块会被读成"这部片没有海报"，所以骨架 + 一颗转着的 Spinner：
+        // 骨架说"这里有东西要来"，Spinner 说"还在取"，两者一起才不会被读成"坏了"。
+        // 整一屏就是三十几颗，所以它是装饰性的（aria-hidden）：海报本体 alt 也是空的，
+        // 给每张卡挂一个 role=status 等于给读屏软件塞三十个实时区。
+        <span className="absolute inset-0 grid place-items-center" aria-hidden="true">
+          <Skeleton className="absolute inset-0" />
+          <Spinner size="sm" className="relative text-accent" />
+        </span>
+      )}
       <img
         ref={attach}
         src={src}
@@ -73,9 +84,14 @@ export function PosterImage({ pic, title }: { pic?: string; title: string }) {
  *  整张卡片不能做成 <a>：那样「详情」按钮就嵌在链接里（无效 HTML），点按钮会顺带跳走。
  *  所以图片区是纯 div，片名那两行才是链接，按钮浮在海报右下角。 */
 export function Poster({ title, pic, meta, flags, href, spec, onDetail }: Props) {
+  // 这个方框就是展开详情时"长出来"的那个元素：名字（view-transition-name）不写死在 CSS 上，
+  // 由 App 在点开的那一刻临时挂上去 —— 一屏三十几张卡同时挂同一个名字的话，
+  // 浏览器会判成重名、整个过渡直接不做（详情面板里那一份才是新状态里的持有者）
+  const cover = useRef<HTMLDivElement>(null);
+  const open = () => onDetail(spec, cover.current);
   return (
     <article className="group flex flex-col">
-      <div className="relative aspect-2/3 overflow-hidden rounded-xl bg-default ring-1 ring-border transition group-hover:ring-accent/45">
+      <div ref={cover} className="cover-box relative aspect-2/3 overflow-hidden rounded-xl bg-default ring-1 ring-border transition group-hover:ring-accent/45">
         <PosterImage pic={pic} title={title} />
         {/* 整张海报都是点击区：只有右下角那颗小按钮的话，触屏上点海报什么也不会发生。
             这一层是个透明按钮（不是 div 加 onClick —— 键盘要能走到它），
@@ -84,13 +100,13 @@ export function Poster({ title, pic, meta, flags, href, spec, onDetail }: Props)
           type="button"
           className="cover-hit absolute inset-0"
           aria-label={`《${title}》：看详情与观看地址`}
-          onClick={() => onDetail(spec)}
+          onClick={open}
         />
         <Button
           size="sm"
           variant="secondary"
-          className="dbtn absolute right-1.5 bottom-1.5 z-10 rounded-full"
-          onPress={() => onDetail(spec)}
+          className="dbtn absolute right-1.5 bottom-1.5 z-10 min-h-8 min-w-10 rounded-full"
+          onPress={open}
           aria-label={`查看《${title}》的详情`}
         >
           详情

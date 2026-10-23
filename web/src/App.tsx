@@ -4,7 +4,8 @@ import { api, isGate, sendClick } from "./api";
 import { useAuthTick, useGateLocked } from "./auth";
 import { boot } from "./boot";
 import { useRefresh } from "./hooks/useRefresh";
-import type { CatalogResult, CloudResult, DeeplinksResult, HotRow, SearchResult } from "./types";
+import { appendPage, stackFrom, type Stack } from "./stack";
+import type { CatalogResult, CloudResult, DeeplinksResult, HotRow } from "./types";
 import { DetailDrawer } from "./components/DetailDrawer";
 import { GateModal, LockedView } from "./components/Gate";
 import { HotSection, hotNote } from "./components/HotSection";
@@ -12,11 +13,19 @@ import { HowTo } from "./components/HowTo";
 import { DeepPanel, CloudPanel, DirPanel } from "./components/OtherPanels";
 import type { DetailSpec } from "./components/Poster";
 import { SearchBar } from "./components/SearchBar";
-import { SourcesPanel, VodPanel } from "./components/VodPanel";
+import { SnapshotCard, SourcesPanel, VodPanel } from "./components/VodPanel";
 import { StatusLine } from "./components/StatusLine";
 import { ThemeToggle } from "./components/ThemeToggle";
 
 type Tab = "vod" | "cloud" | "deep" | "dir";
+
+/** 展开详情要不要用 View Transitions：
+ *  没有 startViewTransition 的浏览器（老 Firefox）就没有缩放动画，抽屉照常滑进来；
+ *  偏好减少动效的人也不给他放大缩小 —— 这两条都在这里一次判掉，别散在各点击点。 */
+const vtOn =
+  typeof document !== "undefined" &&
+  "startViewTransition" in document &&
+  !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 const landingUrl = (kw: string, page: number) =>
   `/s/${encodeURIComponent(kw)}${page > 1 ? `?page=${page}` : ""}`;
@@ -37,7 +46,7 @@ function setHead(sel: string, attr: string, val: string) {
   if (el) el.setAttribute(attr, val);
 }
 
-function syncSeo(kw: string, d: SearchResult | null) {
+function syncSeo(kw: string, d: { items: { title: string }[]; sourcesOk: number } | null) {
   if (!kw) {
     document.title = boot.title;
     setHead('meta[name="description"]', "content", boot.description);
@@ -48,10 +57,10 @@ function syncSeo(kw: string, d: SearchResult | null) {
     return;
   }
   const one = location.origin + landingUrl(kw, 1);
-  const items = d?.results || [];
+  const items = d?.items || [];
   const title = `《${kw}》影视资源怎么找 - 追剧资源搜索`;
   const desc =
-    `《${kw}》相关影视资源 ${items.length} 部，来自 ${(d?.sources_ok || 0)} 个采集接口，` +
+    `《${kw}》相关影视资源 ${items.length} 部，来自 ${(d?.sourcesOk || 0)} 个采集接口，` +
     "含网盘、磁力与资源站直达入口。";
   document.title = title;
   setHead('link[rel="canonical"]', "href", one);
@@ -82,12 +91,18 @@ export default function App() {
   const [kw, setKw] = useState(boot.kw);
   const [page, setPage] = useState(boot.page || 1);
   const [tab, setTab] = useState<Tab>("vod");
-  const [search, setSearch] = useState<{ data: SearchResult | null; loading: boolean; error: string; ms: number }>({
-    data: null,
+  // 结果不再一页换一页，而是**往后叠**：stack 就是已经叠好的那一叠 + 各页合起来的数
+  const [stack, setStack] = useState<Stack | null>(null);
+  const [load, setLoad] = useState<{ loading: boolean; appending: boolean; error: string }>({
     loading: !!boot.kw,
+    appending: false,
     error: "",
-    ms: 0,
   });
+  // 追加由 IntersectionObserver 触发，它可能连着回调好几次（哨兵一直露在视野里），
+  // 而 setLoad 是异步的 —— 所以闸门用 ref，不用 state
+  const appendingRef = useRef(false);
+  // 重新起一叠时要掐掉还在飞的追加请求，否则旧那一叠的第 N+1 页会并到新叠上
+  const appendAc = useRef<AbortController | null>(null);
   const [deep, setDeep] = useState<DeeplinksResult | null>(null);
   const [cat, setCat] = useState<CatalogResult | null>(null);
   const [category, setCategory] = useState("");
@@ -98,6 +113,9 @@ export default function App() {
   // 于是刚发出的 /api/cloud 被自己的 cleanup abort 掉（第一版就是这么翻车的）
   const cloudDone = useRef<string | null>(null);
   const [spec, setSpec] = useState<DetailSpec | null>(null);
+  // 展开时那个共享元素（海报方框本体）与"该把焦点还给谁"，只在一次开合之间有效
+  const vtHero = useRef<HTMLElement | null>(null);
+  const vtBack = useRef<HTMLElement | null>(null);
   const rf = useRefresh(boot.refresh);
 
   /* 关键词与页码是唯一的真相：URL、标题、取数全都跟着它们走。
@@ -130,7 +148,8 @@ export default function App() {
 
   const goHome = useCallback(() => {
     commit("", 1, true);
-    setSearch({ data: null, loading: false, error: "", ms: 0 });
+    setStack(null);
+    setLoad({ loading: false, appending: false, error: "" });
     setCloud(null);
     setCloudState("idle");
     setCloudError("");
@@ -148,22 +167,65 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  useEffect(() => syncSeo(kw, search.data), [kw, search.data]);
+  useEffect(
+    () => syncSeo(kw, stack ? { items: stack.items, sourcesOk: stack.sources_ok } : null),
+    [kw, stack],
+  );
 
+  /* 换词、换 URL 上那一页、验证通过重查 —— 这三种都是"重新起一叠"，
+     所以先把上一叠连同还在飞的追加请求一起丢掉。往后追加走 loadMore，不动这里。 */
   useEffect(() => {
-    if (!kw) return;
+    if (!kw) {
+      setStack(null);
+      setLoad({ loading: false, appending: false, error: "" });
+      return;
+    }
+    appendAc.current?.abort();
+    appendingRef.current = false;
     const ac = new AbortController();
     const t0 = performance.now();
-    setSearch((s) => ({ ...s, loading: true, error: "" }));
+    // 换词/换起始页时先把上一叠收掉：否则加载的这几秒里，屏幕上还是上一个词的结果。
+    // 同一个词重查（比如刚过完验证）则留着旧内容，边上那条说"正在重取这一叠"。
+    setStack((cur) => (cur && cur.kw === kw && cur.from === page ? cur : null));
+    setLoad((s) => ({ ...s, loading: true, error: "" }));
     api
       .search(kw, page, ac.signal)
-      .then((d) => setSearch({ data: d, loading: false, error: "", ms: Math.round(performance.now() - t0) }))
+      .then((d) => {
+        setStack(stackFrom(d, Math.round(performance.now() - t0)));
+        setLoad((s) => ({ ...s, loading: false, error: "" }));
+      })
       .catch((e) => {
         if ((e as Error).name === "AbortError") return;
-        setSearch((s) => ({ ...s, loading: false, error: isGate(e) ? "等你验证完自动重查。" : (e as Error).message }));
+        setLoad((s) => ({ ...s, loading: false, error: isGate(e) ? "等你验证完自动重查。" : (e as Error).message }));
       });
     return () => ac.abort();
   }, [kw, page, tick]);
+
+  /** 滚到结果末尾时把下一页并进来。同一部片在第二页再出现一次不会多一张卡（stack.appendPage）。 */
+  const loadMore = useCallback(() => {
+    const cur = stack;
+    if (!cur || !cur.hasMore || load.loading || appendingRef.current) return;
+    appendingRef.current = true;
+    setLoad((s) => ({ ...s, appending: true }));
+    const ac = new AbortController();
+    appendAc.current = ac;
+    const t0 = performance.now();
+    api
+      .search(cur.kw, cur.pages + 1, ac.signal)
+      .then((d) =>
+        setStack((prev) => (prev && prev.kw === cur.kw ? appendPage(prev, d, Math.round(performance.now() - t0)) : prev)),
+      )
+      .catch((e) => {
+        if ((e as Error).name === "AbortError") return;
+        // 追加失败不毁掉已经看见的那一叠：说一声，就停在这儿
+        toast.warning(isGate(e) ? "等你验证完自动接着取。" : `第 ${cur.pages + 1} 页没并进来：${(e as Error).message}`);
+      })
+      .finally(() => {
+        appendingRef.current = false;
+        appendAc.current = null;
+        setLoad((s) => ({ ...s, appending: false }));
+      });
+  }, [stack, load.loading]);
 
   // 直达清单只要换了词就取一次：它不联网抓结果，只是一份带关键词的链接表，很便宜
   useEffect(() => {
@@ -215,8 +277,14 @@ export default function App() {
     return () => ac.abort();
   }, [tab, category, kw, tick]);
 
+  /* 详情不是从右边滑进来的一块面板，而是**从那张海报长出来**：点开时给海报方框挂一个
+     view-transition-name，同一拍里把面板挂上（面板里那张海报在 CSS 上带着同一个名字），
+     浏览器就把旧的那张矩形缩放到新的那个位置 —— 人眼跟着的是同一张图在动，不是两块内容在换。
+     名字只在这两拍之间挂着，平时不挂：同屏有两个元素挂着同一个名字时，
+     浏览器判定重名、整个过渡直接不做（现象就是"点了没动画"）。
+     不支持 startViewTransition 的浏览器（老 Firefox）走原来那条路：抽屉照常滑进来。 */
   const openDetail = useCallback(
-    (s: DetailSpec) => {
+    (s: DetailSpec, from?: HTMLElement | null) => {
       sendClick({
         kind: "detail",
         kw,
@@ -225,10 +293,51 @@ export default function App() {
         vid: String(s.vid ?? ""),
         place: s.from,
       });
-      setSpec(s);
+      if (vtHero.current && vtHero.current !== from) vtHero.current.style.viewTransitionName = "";
+      vtBack.current = document.activeElement as HTMLElement | null;
+      const hero = vtOn && from?.isConnected ? from : null;
+      if (!hero) {
+        setSpec(s);
+        return;
+      }
+      vtHero.current = hero;
+      hero.style.viewTransitionName = "cover-active";
+      document.startViewTransition!(() => {
+        setSpec(s);
+        // 新状态里这个名字只能由面板里那张海报持有，海报卡片要立刻摘掉，否则重名
+        hero.style.viewTransitionName = "";
+      });
     },
     [kw],
   );
+
+  /** 缩回原海报。焦点也一起还回去：键盘/读屏的人点开的是哪颗按钮，回来就该停在那儿。 */
+  const closeDetail = useCallback(() => {
+    const hero = vtHero.current;
+    vtHero.current = null;
+    const back = vtBack.current;
+    vtBack.current = null;
+    const focusBack = () => {
+      try {
+        back?.focus();
+      } catch {
+        /* 那张卡已经被换掉了：没什么可还的 */
+      }
+    };
+    if (!hero || !hero.isConnected) {
+      setSpec(null);
+      focusBack();
+      return;
+    }
+    document.startViewTransition!(() => {
+      setSpec(null);
+      hero.style.viewTransitionName = "cover-active";
+    }).finished.finally(() => {
+      // 等 finished 而不是立刻摘：新状态的快照还没拿完，摘了就变成"面板淡出"而不是缩回去
+      hero.style.viewTransitionName = "";
+      focusBack();
+    });
+  }, []);
 
   if (locked && boot.locked) {
     return (
@@ -250,7 +359,7 @@ export default function App() {
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <header className="sticky top-0 z-30 border-b border-separator bg-surface/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 sm:px-6">
+        <div className="mx-auto flex h-14 max-w-[1680px] items-center gap-3 px-4 sm:px-6">
           <h1 className="flex items-baseline gap-2 text-sm font-semibold tracking-wide">
             追剧资源搜索
             <span className="rounded-full bg-default px-1.5 py-0.5 text-[10px] font-normal text-muted">本地版</span>
@@ -269,7 +378,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1440px] px-4 pb-20 sm:px-6">
+      <main className="mx-auto max-w-[1680px] px-4 pb-20 sm:px-6">
         <div className="pt-6">
           <SearchBar initial={boot.kw} onSearch={goSearch} onHome={goHome} />
           {rf ? <StatusLine b={rf} /> : null}
@@ -303,40 +412,29 @@ export default function App() {
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <VodPanel
                   kw={kw}
-                  data={search.data}
-                  loading={search.loading}
-                  error={search.error}
-                  ms={search.ms}
-                  page={page}
+                  stack={stack}
+                  loading={load.loading}
+                  appending={load.appending}
+                  error={load.error}
                   sourcesTotal={boot.sources.length}
-                  onPage={(p) => commit(kw, p, false)}
+                  onLoadMore={loadMore}
                   onDetail={openDetail}
                 />
-                <aside className="order-first space-y-4 self-start xl:order-none xl:sticky xl:top-20">
-                  {showSsr ? (
-                    <section className="rounded-2xl bg-surface p-4 shadow-surface ring-1 ring-border">
-                      <h2 className="text-[13px] font-semibold">《{kw}》的检索结果</h2>
-                      <p className="mt-1.5 text-[11px] leading-relaxed text-muted">{boot.description}</p>
-                      <ul className="mt-3 space-y-1.5">
-                        {boot.snapshot.items!.map((it, i) => (
-                          <li key={`${it.title}-${i}`} className="text-xs leading-snug">
-                            <a className="text-foreground hover:text-accent" href={it.url}>
-                              {it.title}
-                            </a>
-                            <span className="num block text-[11px] text-muted">
-                              {[it.year, it.type, it.remarks].filter(Boolean).join(" · ")}
-                              {it.n_sources ? ` · ${it.n_sources} 个源` : ""}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
+                <aside className="max-xl:contents xl:sticky xl:top-20 xl:order-none xl:self-start xl:space-y-4">
+                  {/* 窄屏时这一栏是 display:contents：两块各自成为栅格项，才能一块排到结果上面、
+                      一块排到最底下 —— 整个 aside 一起排序的话，两块只能都在同一侧。 */}
+                  {stack ? (
+                    <div className="order-first">
+                      <SourcesPanel
+                        rows={stack.status}
+                        sum={`${stack.sources_ok}/${stack.sources_total} 可用`}
+                      />
+                    </div>
                   ) : null}
-                  {search.data ? (
-                    <SourcesPanel
-                      rows={search.data.status}
-                      sum={`${search.data.sources_ok}/${search.data.sources_total} 可用`}
-                    />
+                  {showSsr ? (
+                    <div>
+                      <SnapshotCard kw={kw} snapshot={boot.snapshot} description={boot.description} />
+                    </div>
                   ) : null}
                 </aside>
               </div>
@@ -386,7 +484,7 @@ export default function App() {
       </main>
 
       <footer className="border-t border-separator py-6">
-        <div className="mx-auto max-w-[1440px] px-4 text-[11px] leading-relaxed text-muted sm:px-6">
+        <div className="mx-auto max-w-[1680px] px-4 text-[11px] leading-relaxed text-muted sm:px-6">
           <p>本工具只做第三方公开接口的聚合查询，不存储、不转发任何影视内容；结果链接指向外部站点，请注意甄别广告、跳转与个人信息安全。</p>
           <p className="mt-1 text-muted/70">
             仅供个人技术学习与找片参考，请支持正版。 · 本地运行，数据不出这台电脑 ·{" "}
@@ -397,7 +495,7 @@ export default function App() {
         </div>
       </footer>
 
-      <DetailDrawer spec={spec} onClose={() => setSpec(null)} />
+      <DetailDrawer spec={spec} onClose={closeDetail} />
       <GateModal open={locked && !boot.locked} onok={() => {}} />
       <Toast.Provider placement="bottom" />
     </div>

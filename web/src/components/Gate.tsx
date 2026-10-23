@@ -197,7 +197,7 @@ export function Slip({ onok }: { onok: () => void }) {
               void submit();
             }
           }}
-          className="absolute top-1/2 left-0 -mt-5 grid size-10 cursor-grab place-items-center rounded-full bg-surface text-muted shadow-surface ring-1 ring-border will-change-transform active:cursor-grabbing disabled:cursor-default"
+          className="absolute top-1/2 left-0 -mt-5 grid size-10 cursor-grab touch-none select-none place-items-center rounded-full bg-surface text-muted shadow-surface ring-1 ring-border will-change-transform active:cursor-grabbing disabled:cursor-default"
         >
           <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M9 6l4 6-4 6M15 6l4 6-4 6" />

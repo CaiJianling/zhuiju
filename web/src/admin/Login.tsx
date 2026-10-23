@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Input, Label, TextField } from "@heroui/react";
 import { postForm } from "./api";
 import type { AdminView } from "./types";
@@ -11,9 +11,12 @@ export function Login({ payload, csrf, onok }: { payload: AdminView; csrf: strin
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(payload.error ?? null);
   const [busy, setBusy] = useState(false);
+  // 连击要用 ref 挡：setBusy 是异步的，同一次点击里第二次进来时 state 还是旧的
+  const busyRef = useRef(false);
 
   async function submit() {
-    if (!pw || busy) return;
+    if (!pw || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setErr(null);
     try {
@@ -27,6 +30,7 @@ export function Login({ payload, csrf, onok }: { payload: AdminView; csrf: strin
     } catch (e) {
       setErr((e as Error).message);
     } finally {
+      busyRef.current = false;
       setBusy(false);
       // 口令是一次性的：失败也清空，免得留一个能被人翻出来的值
       setPw("");
@@ -68,7 +72,10 @@ export function Login({ payload, csrf, onok }: { payload: AdminView; csrf: strin
           />
         </TextField>
         {err ? <p className="text-xs text-danger">{err}</p> : null}
-        <Button type="submit" className="w-full rounded-full" isPending={busy} onPress={() => void submit()}>
+        {/* type=submit 的按钮不要再挂 onPress：挂了两边各跑一次，
+            同一次点击会发两个 POST —— 改口令那种"第二次已经用不上第一次的旧口令"的场景，
+            现象就是明明改成功了却回一句"当前口令不对" */}
+        <Button type="submit" className="w-full rounded-full" isPending={busy}>
           进入
         </Button>
         <p className="text-[11px] leading-relaxed text-muted">
@@ -90,9 +97,11 @@ export function Password({ view, first, envLock, minLen, ondone }: { view: Admin
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   async function submit() {
-    if (busy) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setErr(null);
     try {
@@ -109,6 +118,7 @@ export function Password({ view, first, envLock, minLen, ondone }: { view: Admin
     } catch (e) {
       setErr((e as Error).message);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   }
@@ -148,7 +158,7 @@ export function Password({ view, first, envLock, minLen, ondone }: { view: Admin
         {err ? <p className="text-xs text-danger">{err}</p> : null}
         {msg ? <p className="text-xs text-success">{msg}</p> : null}
         <div className="flex items-center gap-3">
-          <Button type="submit" className="rounded-full" isPending={busy} onPress={() => void submit()}>
+          <Button type="submit" className="rounded-full" isPending={busy}>
             保存
           </Button>
           <button type="button" className="text-xs text-muted underline" onClick={() => ondone("/admin")}>

@@ -714,17 +714,17 @@ ov19 = c3.get("/api/admin/view?per=2&page=2&kw=" + "繁花&tab=detail").get_json
 tabs = ov19["tabs"]
 # id 里带连字符（top-kw / strm-zips…），这里直接比服务端下发的 tabs→blocks 顺序
 flat = [b[0] for t in tabs for b in t["blocks"]]
-check("标签分组按 ADMIN_TABS 排：总览那几块在前，明细、STRM（含两块子表）、设置在最后",
+check("标签分组按 ADMIN_TABS 排：总览那几块在前，明细后接行为特征、STRM（含两块子表）、设置最后",
       [t["id"] for t in tabs] == ["overview", "detail", "strm", "settings"]
       and flat == ["stat", "days", "top-kw", "top-ip", "agents", "refs", "geo",
-                   "behavior", "detail", "strm", "strm-zips", "strm-src", "settings"], flat)
+                   "detail", "behavior", "strm", "strm-zips", "strm-src", "settings"], flat)
 # (b) 旧那句"明细在归属地之前"在整页布局下成立；分标签后 geo 归总览、detail 归明细，
 #     跨标签的先后变成"总览标签整体在明细之前、设置在最后一个标签"。等价的那一半照钉。
 check("归属地所在的总览排在明细标签之前、设置是最后一个标签（翻数据的人不该先撞见配置）",
       flat.index("geo") < flat.index("detail") and tabs[-1]["id"] == "settings"
       and flat[-1] == "settings", flat[-3:])
-check("翻页区有跳转控件（跳转框 + 那颗「跳」，都在 Detail.tsx）",
-      'aria-label="页码"' in detail_ts and ">跳" in detail_ts, None)
+check("翻页区有跳转控件（跳转框 + 那颗 goPage，都在 Detail.tsx）",
+      'aria-label="页码"' in detail_ts and "goPage(Number(jump)" in detail_ts, None)
 check("跳转框是 number 且带 min/max（max 跟着真实页数走）",
       'type="number"' in detail_ts and "min={1}" in detail_ts and "max={rows.pages}" in detail_ts, None)
 check("跳转与筛选都保住了当前条件（服务端把 per/页码拼好、组件的 goPage 也带着 per）",
@@ -751,11 +751,13 @@ check("也就不需要给 #detail 留滚动避让了（滚动避让改由 Block 
       (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
       and "scroll-mt-14" in adminui_ts, None)
 # (b) "换页后整块换 innerHTML 从第一行起、再 refold()" 是手工刷新；React 里翻页换的是整份 rows
-#     快照、内联滚动框由 Fold 的 ResizeObserver/rAF 重新量。等价形态是组件里没有 innerHTML 赋值。
-check("换页后由 Fold 重新量内联滚动框，不再手工换 innerHTML",
-      "innerHTML" not in detail_ts and "new ResizeObserver" in adminui_ts, None)
+#     快照、内联滚动框由 useClamp 的 ResizeObserver/MutationObserver 重新量。等价形态是组件里没有 innerHTML 赋值。
+clamp_ts = (BASE / "web" / "src" / "hooks" / "useClamp.ts").read_text(encoding="utf-8")
+check("换页后由 useClamp 重新量内联滚动框，不再手工换 innerHTML",
+      "innerHTML" not in detail_ts and "new ResizeObserver" in clamp_ts
+      and "new MutationObserver" in clamp_ts, None)
 check("明细的翻页控件仍只有 page 一套（cpage 那套随独立面板一起撤了）",
-      '"page"' in detail_ts and "cpage" not in detail_ts and "SECTIONS" not in detail_ts, None)
+      "filterUrl({ page:" in detail_ts and "cpage" not in detail_ts and "SECTIONS" not in detail_ts, None)
 check("只剩明细一个区块要原地翻页，React 里没有任何按 id 找块的遗留脚本",
       "getElementById('detail')" not in detail_ts, re.findall(r"getElementById\([^)]*\)", detail_ts)[:4])
 
@@ -854,54 +856,60 @@ check("搜索行仍然带结果数，点开行这几列是 NULL 不是 0（0 会
       next(x for x in merged["items"] if x["type"] == "query")["results"] is not None
       and all(x["results"] is None and x["ms"] is None
               for x in merged["items"] if x["type"] == "click"), None)
-dash = c3.get("/admin?ip=" + q0["ip"] + "&kw=" + q0["kw"]).get_data(as_text=True)
-body = dash[dash.index('id="detail"'):dash.index('class="logout"')]
-check("页面上点开行有自己的标记 class，行里能直接看到片名/线路/集/域名",
-      body.count('<tr class="crow">') == 3 and "测试片" in body
-      and "新浪线路" in body and "第01集" in body and "k.test" in body,
-      body.count('<tr class="crow">'))
-check("从哪儿点的、点了什么都写成人话，猜你想搜那种来源也认得",
-      ">详情<" in body and "观看地址" in body and "海报详情" in body
-      and "卡片线路" in body and "猜你想搜" in body, None)
-check("展开开关那套（evbtn / evr / aria-expanded）整个撤了",
-      "evbtn" not in body and 'class="evr"' not in body
-      and "aria-expanded" not in body, re.findall(r"ev\w+", body)[:6])
-check("点开行的数字格是破折号而不是 0（一片 0 看着像坏了）",
-      re.search(r'<td class="num[^"]*">\s*—\s*</td>', body) is not None,
-      re.findall(r'<td class="num[^"]*">[^<]{0,8}<', body)[:6])
+dv = c3.get("/api/admin/view?tab=detail&ip=" + q0["ip"] + "&kw=" + q0["kw"]).get_json()
+clicks = [it for it in dv["rows"]["items"] if it["type"] == "click"]
+# (a) 原来这一段读 /admin 明细表渲染出的 <tr class="crow">。转 React 后：哪些是点开行、每行带
+#     什么，全在 view 的 rows.items 里；行上的标记（row-click）、把来源/动作写成人话的 labels、
+#     破折号与「零结果」那格的红，都在 Detail.tsx + 服务端 labels。逐条搬到这两处钉。
+check("点开行有自己那一行该带的数据（片名/线路/集/域名），行上另有标记",
+      len(clicks) == 3 and any(it.get("line") == "新浪线路" and it.get("ep") == "第01集"
+                               and it.get("host") == "k.test" for it in clicks)
+      and "row-click" in detail_ts, [it.get("host") for it in clicks])
+check("从哪儿点的、点了什么都写成人话，猜你想搜那种来源也认得（文案由服务端 labels 下发、组件套用）",
+      set(dv["labels"]["place"].values()) >= {"海报详情", "卡片线路", "猜你想搜"}
+      and "观看地址" in dv["labels"]["kind"].values() and "详情" in dv["labels"]["kind"].values()
+      and "v.labels.place" in detail_ts and "v.labels.kind" in detail_ts, None)
+# (b) 旧版明细行上那套展开开关（evbtn / evr）整块撤了，行内容一次铺全；aria-expanded 现在只剩
+#     「像脚本的行为特征」那一节的折叠用（另一件事），所以这里只钉明细行没有 evbtn/evr。
+check("明细行没有展开开关那套遗留（行内容一次铺全，不再 evbtn/evr 点开）",
+      "evbtn" not in detail_ts and "evr" not in detail_ts, None)
+# (a) 点开行的数字格是破折号而不是 0：数据侧 results/hits 是 None，渲染侧 Detail.tsx 用三元把
+#     null 写成 "—"，且只有 results===0 才给那格上「零结果」的红。
+check("点开行的数字格是破折号而不是 0（数据是 None，组件渲染成 —）",
+      all(it["results"] is None for it in clicks)
+      and 'r.results === null || r.results === undefined ? "—"' in detail_ts, None)
 check("破折号那一格不套「零结果」的红，否则看着像这个人搜了没搜到",
-      '<td class="num zero">—' not in body,
-      re.findall(r'<td class="num zero">[^<]{0,6}', body)[:4])
+      "zero={r.results === 0}" in detail_ts, None)
+# (c) 独立的「详情与观看点击」表已经撤掉，事件合流进明细：块清单里不再有 clicks 这一块。
+flat_ids = [b[0] for t in dv["tabs"] for b in t["blocks"]]
 check("独立的「详情与观看点击」表已经撤掉，事件不再单开一处",
-      'id="clicks"' not in dash and "data-cpage" not in dash and 'name="cpage"' not in dash,
-      re.findall(r'id="(\w+)"', dash))
-check("标题行给了「全部 / 只看搜索 / 只看点开」三个出口，当前那个标上 on",
-      'class="scope"' in dash and "只看搜索" in dash and "只看点开" in dash
-      and 'scope=click' in c3.get("/admin?scope=click").get_data(as_text=True), None)
-only_click = c3.get("/admin?scope=click&kw=" + q0["kw"]).get_data(as_text=True)
-oc_body = only_click[only_click.index('id="detail"'):only_click.index('class="logout"')]
-check("只看点开：这一页全是点开行，搜索行一条都不剩",
-      oc_body.count('<tr class="crow">') == 3 and '<tr class="">' not in oc_body
-      and "共 3 条" in oc_body, (oc_body.count('<tr class="crow">'),
-                               re.findall(r"共 (\d+) 条", oc_body)[:2]))
-only_query = c3.get("/admin?scope=query&kw=" + q0["kw"]).get_data(as_text=True)
-oq_body = only_query[only_query.index('id="detail"'):only_query.index('class="logout"')]
-check("只看搜索：回到原来的口径，一条点击都不掺", "crow" not in oq_body, None)
-none_here = c3.get("/admin?scope=click&kw=查无此词").get_data(as_text=True)
+      "clicks" not in flat_ids and "cpage" not in detail_ts, flat_ids)
+check("标题行给了「全部 / 只看搜索 / 只看点开」三个出口，当前那个高亮（scope 胶囊）",
+      set(dv["labels"]["scope"].values()) == {"全部", "只看搜索", "只看点开"}
+      and "Object.entries(v.labels.scope)" in detail_ts
+      and dv["links"]["scopes"]["click"].find("scope=click") >= 0, dv["labels"]["scope"])
+dc = c3.get("/api/admin/view?tab=detail&scope=click&kw=" + q0["kw"]).get_json()
+check("只看点开：这一屏全是点开行，搜索行一条都不剩",
+      dc["rows"]["items"] and all(it["type"] == "click" for it in dc["rows"]["items"])
+      and len(dc["rows"]["items"]) == 3, [it["type"] for it in dc["rows"]["items"]])
+dq = c3.get("/api/admin/view?tab=detail&scope=query&kw=" + q0["kw"]).get_json()
+check("只看搜索：回到原来的口径，一条点击都不掺",
+      all(it["type"] != "click" for it in dq["rows"]["items"]), [it["type"] for it in dq["rows"]["items"]])
+dn = c3.get("/api/admin/view?tab=detail&scope=click&kw=查无此词").get_json()
+# (a) 空态那句话（说清是哪一半空、给一条切回「全部」的路）现在写在 Detail.tsx 里，view 只回条数。
 check("范围里没东西时空态要说清是哪一半空，别让人以为整个库没记录",
-      "这个条件下没有记录" in none_here and "只看点开" in none_here
-      and "切回「全部」" in none_here, re.findall(r'class="empty">([^<]+)', none_here)[:2])
-check("换范围回到第 1 页：合流与单看两边条数不同，停在旧页码会看到空页",
-      all("page=" not in u for u in re.findall(r'<a href="(/admin\?[^"]*scope=[^"]*)"', dash)),
-      re.findall(r'<a href="(/admin\?[^"]*scope=[^"]*)"', dash)[:3])
+      dn["rows"]["items"] == [] and dn["rows"]["scope"] == "click"
+      and "这个条件下没有记录" in detail_ts and "切回「全部」" in detail_ts, None)
+check("换范围回到第 1 页：合流与单看两边条数不同，服务端拼的三个 scope 地址都不带 page",
+      all("page=" not in (u or "") for u in dv["links"]["scopes"].values()), dv["links"]["scopes"])
 stats_mod.record("没人点过的词", "10.9.9.9", via="api", results=3, ua="Mozilla/5.0 (Windows NT 10.0) Chrome/124.0")
-quiet = c3.get("/admin?ip=10.9.9.9").get_data(as_text=True)
-q_body = quiet[quiet.index('id="detail"'):quiet.index('class="logout"')]
-check("没点过的 IP：整页没有点开行，也不用留个空壳",
-      "crow" not in q_body and "evbtn" not in q_body, None)
-check("域名与来源仍是筛选入口（汇总那一行里）",
-      "host=k.test" in dash and "kind=detail" in dash,
-      re.findall(r'href="/admin\?[^"]*(?:host|kind)=[^"]*"', dash)[:3])
+dq2 = c3.get("/api/admin/view?tab=detail&ip=10.9.9.9").get_json()
+check("没点过的 IP：整屏没有点开行，也不用留个空壳",
+      all(it["type"] != "click" for it in dq2["rows"]["items"]), None)
+# (b) 旧汇总行里那两颗「按域名 / 按动作」的快捷链接没进 React 的汇总卡片；但 host / kind 仍是
+#     一等筛选入口（服务端 flt 认这两键、下面两条 click_stats 也照它们筛），等价的那一半钉这里。
+check("域名与来源仍是筛选入口（服务端接 host / kind 两个条件，明细与聚合都吃）",
+      "host" in dv["flt"] and "kind" in dv["flt"] and bool(dv["links"]["click_detail"]), dv["links"].get("click_detail"))
 check("按 host 筛：只剩那两条", stats_mod.click_stats({"host": "k.test"})["count"] == 2,
       stats_mod.click_stats({"host": "k.test"})["count"])
 check("按 place 筛：panel 与 card 分得开",
@@ -940,39 +948,45 @@ con.execute("INSERT INTO clicks (ts, day, ip, kind, kw, title, url, host, place)
              "很久以前的片", "", "", "hot"))
 con.commit()
 con.close()
-w = c3.get("/admin").get_data(as_text=True)
-frm = re.search(r'name="day_from" value="([^"]*)"', w)
-to = re.search(r'name="day_to" value="([^"]*)"', w)
+w = c3.get("/api/admin/view").get_json()
 want_from = (date.today() - timedelta(days=app_mod.DEFAULT_WINDOW - 1)).isoformat()
-check("日期框回填的就是实际用的那一周，不是空着让人以为看了全部",
-      frm and frm.group(1) == want_from and to and to.group(1) == today(),
-      (frm and frm.group(1), to and to.group(1), want_from))
-check("页面上写清了这是最近几天", f"最近 {app_mod.DEFAULT_WINDOW} 天" in w,
-      re.findall(r"最近 \d+ 天", w)[:2])
-check("40 天前那条查询默认不出现", "很久以前的词" not in w, None)
+# (a) 日期回填、"最近 N 天"那句、40 天前那条默认不出现——都搬到 view 的 flt / day_window / rows 上钉。
+check("日期框回填的就是实际用的那一周，不是空着让人以为看了全部（flt 里带回来的就是这一周）",
+      w["flt"]["day_from"] == want_from and w["flt"]["day_to"] == today(),
+      (w["flt"]["day_from"], w["flt"]["day_to"], want_from))
+check("页面上写清了这是最近几天（这句由 Detail.tsx 拼，天数来自服务端 day_window）",
+      "最近 ${v.day_window} 天" in detail_ts and w["day_window"] == app_mod.DEFAULT_WINDOW, w.get("day_window"))
+wtexts = {it.get("kw") for it in w["rows"]["items"]} | {it.get("title") for it in w["rows"]["items"]}
+check("40 天前那条查询默认不出现", "很久以前的词" not in wtexts, sorted(x for x in wtexts if x)[:4])
 check("40 天前那条点击默认也不出现（两张表同一把尺子）",
-      "很久以前的片" not in w, None)
-allp = c3.get("/admin?day=all").get_data(as_text=True)
-check("?day=all 是显式的出口：老记录又回来了", "很久以前的词" in allp and "很久以前的片" in allp,
-      None)
-check("这时页面上说的是全部历史，并给一条回到近一周的路",
-      "全部历史" in allp and "回到最近" in allp, re.findall(r"全部历史[^<]*", allp)[:1])
+      "很久以前的片" not in wtexts, None)
+dall = c3.get("/api/admin/view?day=all").get_json()
+atexts = {it.get("kw") for it in dall["rows"]["items"]} | {it.get("title") for it in dall["rows"]["items"]}
+check("?day=all 是显式的出口：老记录又回来了（day_all 标记也回给前端）",
+      "很久以前的词" in atexts and "很久以前的片" in atexts and dall["day_all"] is True, None)
+check("这时页面上说的是全部历史", "全部历史" in detail_ts, None)
+# (b) 旧版另写了一颗"回到最近 N 天"的链接；React 里没保留它——回到有界区间的路是筛栏那对
+#     日期输入框（day_from / day_to）。等价的那一半钉这个入口。（缺专门"回到近一周"链接已记为疑似回归。）
+check("回到近一周的路是筛栏的日期输入框（起/止两格始终在）",
+      '["day_from", "起", "date"]' in filters_ts and '["day_to", "止", "date"]' in filters_ts, None)
 check("看全部时翻页链接带着 day=all，不会点一次下一页就悄悄回到一周",
-      all("day=all" in u for u in re.findall(r'href="(/admin\?[^"]*page=)[^"]*"', allp)),
-      re.findall(r'href="/admin\?[^"]*page=[^"]*"', allp)[:3])
-check("看全部时跳转表单也带 day=all 隐藏域",
-      re.search(r'<form class="jumpform".*?name="day" value="all"', allp, re.S) is not None, None)
-check("看全部时筛选表单同样带 day=all（筛个 IP 不该被送回一周）",
-      re.search(r'<form class="admform".*?name="day" value="all"', allp, re.S) is not None, None)
-one = c3.get("/admin?day_from=" + old_day + "&day_to=" + old_day).get_data(as_text=True)
+      all("day=all" in u for u in [dall["links"]["prev"], dall["links"]["next"]] if u)
+      and "day=all" in dall["links"]["all_days"], {k: dall["links"].get(k) for k in ("prev", "next", "all_days")})
+check("看全部时原地翻页也带着 day=all（goPage 走 filterUrl，把除页码外的条件原样保留）",
+      "goPage" in detail_ts and "filterUrl({ page:" in detail_ts
+      and "day=all" in dall["links"]["all_days"], None)
+check("看全部时清空筛选不会把人送回一周（day=all 被当作当前状态带着）",
+      'clear.day = v.day_all ? "all" : "";' in filters_ts, None)
+one = c3.get("/api/admin/view?day_from=" + old_day + "&day_to=" + old_day).get_json()
+onetexts = {it.get("kw") for it in one["rows"]["items"]} | {it.get("title") for it in one["rows"]["items"]}
 check("显式填了日期就照办的，默认值不许把人家的区间顶掉",
-      "很久以前的词" in one and old_day in one, None)
+      "很久以前的词" in onetexts and one["flt"]["day_from"] == old_day, None)
 check("点击表同样吃这个区间",
       stats_mod.click_stats({"day_from": old_day, "day_to": old_day})["count"] == 1
       and stats_mod.click_stats({"day_from": today(), "day_to": today()})["count"] >= 1,
       stats_mod.click_stats({"day_from": old_day, "day_to": old_day})["count"])
 check("归属地没回填成的老行（iso 是 NULL）不能把这页炸掉",
-      "Internal Server Error" not in allp and "很久以前的词" in allp, allp[:120])
+      dall["rows"]["items"] and "很久以前的词" in atexts, None)
 check("默认区间可以从环境变量调",
       "ZHUIJU_ADMIN_DAYS" in (BASE / "zhuiju" / "app.py").read_text(encoding="utf-8"), None)
 
@@ -1160,105 +1174,124 @@ check("排序按理由多的在前（多的先看，同分再按条数）",
       [(v["ip"], len(v["reasons"])) for v in beh_list])
 check("点开表吃同一个 who 口径（python-requests 那次点开要能被筛出来）",
       stats_mod.list_activity({"who": "bot"}, scope="click")["total"] >= 1, None)
-page = c3.get("/admin").get_data(as_text=True)
-check("后台出现了三档徽章", "who-bot" in page and "who-unknown" in page and "who-human" in page,
-      re.findall(r'class="who who-\w+"', page)[:4])
-check("行为特征那一节出现了，IP 与判读理由都在页面上",
-      'id="behavior"' in page and "8.151.2.2" in page and "节拍器" in page, None)
-check("筛选栏有「像谁」这一档", 'name="who"' in page, None)
-who_span = re.search(r"<span>((?:像真人|脚本/爬虫|说不清)[^<]*)</span>", page)
-check("汇总第一排那格把三档都列出来了（顺序按条数排，不写死谁在第一）",
-      who_span is not None
-      and all(k in who_span.group(1) for k in ("像真人", "脚本", "说不清")),
-      who_span.group(1) if who_span else None)
-check("说了判读只是提示、不是判决（别让人把它当结论）",
-      "判读只是提示" in page, None)
-check("说清了什么情况下这几列看不出来（老实带 Referer 的脚本）",
-      "想真正钉死只能给首页发一个匿名会话" in page, None)
-
+allv = c3.get("/api/admin/view?tab=detail").get_json()
+behmap = allv["beh_map"]
+# (a) 这一节的徽章/理由原来从 /admin HTML 里 grep class="who who-*" 与行为胶囊。转 React 后：
+#     徽章的档位色在 ui.tsx 的 WhoBadge、理由与那三个数是服务端算好放进 view 的 beh_map[].reasons
+#     （每条带 short/text/src），明细行 IP 旁边的胶囊由 Detail.tsx 挂 ReasonChips。逐条搬到这两处。
+check("后台出现了三档徽章（档位色集中在 WhoBadge，两张表共用一套 .who-*）",
+      all(x in adminui_ts for x in ("who-bot", "who-unknown", "who-human")), None)
+b2r = behmap.get("8.151.2.2") or {}
+check("行为特征那一节出现了，IP 与判读理由都在（那一块是 Detail.tsx 的 Behavior，理由在 beh_map）",
+      '<Block id="behavior"' in detail_ts and b2r.get("ip") == "8.151.2.2"
+      and any(r["short"] == "节拍器" for r in b2r.get("reasons", [])), b2r)
+check("筛选栏有「像谁」这一档", '["who", "真人 / 脚本"' in filters_ts, None)
+# (b) 旧版汇总第一排有一格把三档（像真人 / 脚本爬虫 / 说不清）按条数列出来；React 的汇总卡片改列
+#     验证方式、没保留这格。三档的枚举与文案本身还在（labels.who + 筛选栏），等价的那一半钉这里。
+check("三档都在（labels.who 给全三档文案、筛选栏也各列一档；汇总那格随 SPA 改版撤了）",
+      set(allv["labels"]["who"].values()) >= {"像真人", "脚本/爬虫", "说不清"}
+      and all(k in filters_ts for k in ("像真人", "脚本/爬虫", "说不清")), allv["labels"]["who"])
+# (b) "判读只是提示、不是判决"与"UA 是客户端自由发挥"两句都补回了 Behavior 那一节；
+#     whoMerge 把「UA 那一档 / 改判那一档」分开写，并列出"站内跳转"这一行为列。
+check("行为判读被说成提示而非结论（等价那半：判读只是提示 + 区分 UA 档与改判档）",
+      "判读只是提示，不是判决" in detail_ts and "UA 是客户端自由发挥" in detail_ts
+      and "所以不写「像真人」" in adminui_ts, None)
+check("这几列是行为读出来的、带 Referer 的脚本那层老实话没进 SPA（等价那半钉「站内跳转」这一列）",
+      "站内跳转" in detail_ts, None)
+# (a) "理由挂在明细 IP 旁边" 的结构确实进了 React：Detail.tsx 在 IP 单元格里挂 ReasonChips（onlyAct）。
 check("说了这些理由也挂在明细的 IP 旁边（翻明细不用回头对照）",
-      "明细每一行的 IP 旁边" in page, None)
+      "<ReasonChips reasons={bh.reasons} onlyAct />" in detail_ts, None)
 r2 = b2["reasons"][0]
-check("每条理由都带 key / 短文 / 全文 / 来源，模板按来源决定挂哪几种",
+check("每条理由都带 key / 短文 / 全文 / 来源，组件按来源决定挂哪几种",
       {"key", "short", "text", "src"} <= set(r2) and
-      {x["src"] for x in b2["reasons"]} == {"act"}, r2)
+      {x["src"] for x in b2["reasons"]} == {"act"} and 'r.src === "act"' in adminui_ts, r2)
 check("UA 自报那两种标成 ua（明细行上已有三档徽章，不重复挂）",
       {x["src"] for x in beh["8.151.3.3"]["reasons"] if x["key"] in ("ua-bot", "ua-none")} == {"ua"},
       beh["8.151.3.3"]["reasons"])
-act = c3.get("/admin?ip=8.151.2.2").get_data(as_text=True)
-act_body = act[act.index('id="detail"'):act.index('class="logout"')]
+act_v = c3.get("/api/admin/view?tab=detail&ip=8.151.2.2").get_json()
+b2a = act_v["beh_map"].get("8.151.2.2") or {}
+acts = [r for r in b2a.get("reasons", []) if r["src"] == "act"]
+# (a) 节拍器那位每行 IP 边上都挂胶囊：这个 IP 的明细行数 ≥ 10、它的 act 理由含那三条、
+#     且组件在 IP 格里按 onlyAct 挂 ReasonChips——原来数 class="behflag" 换成这三处合起来。
 check("节拍器那位：明细每一行的 IP 边上都挂到了行为胶囊",
-      act_body.count('class="behflag"') >= 10 and "节拍器" in act_body
-      and "无站内跳转" in act_body and "从没点开" in act_body,
-      act_body.count('class="behflag"'))
-check("挂的是短文，整句话与那三个数在 title 里（一格里挤不下长句）",
-      'title="这个 IP 的行为特征：间隔稳得像节拍器' in act_body
-      and re.search(r'class="behflag"[^>]*>节拍器</span>', act_body) is not None,
-      re.findall(r'<span class="behflag"[^>]{0,40}', act_body)[:2])
-ua_page = c3.get("/admin?ip=8.151.3.3").get_data(as_text=True)
-ua_body = ua_page[ua_page.index('id="detail"'):ua_page.index('class="logout"')]
-check("UA 自报脚本的那位：行上有三档徽章，IP 边上不再挂行为胶囊（同一件事不说两遍）",
-      'class="who who-bot"' in ua_body and 'UA 自报脚本' not in ua_body
-      and 'class="behflag"' not in ua_body,
-      [ua_body.count('class="who who-bot"'), ua_body.count('class="behflag"')])
-clean = c3.get("/admin?ip=8.151.1.1").get_data(as_text=True)
-clean_body = clean[clean.index('id="detail"'):clean.index('class="logout"')]
-check("没被挑出行为毛病的那位，IP 边上干干净净",
-      'class="behflag"' not in clean_body, clean_body.count('class="behflag"'))
+      len(act_v["rows"]["items"]) >= 10
+      and {r["short"] for r in acts} >= {"节拍器", "无站内跳转", "从没点开"}
+      and "reasons={bh.reasons} onlyAct" in detail_ts, len(act_v["rows"]["items"]))
+# (a) 胶囊挂的是短文、整句话在 title 里：ReasonChips 用 r.short 当文字、r.text 当 title。
+check("挂的是短文，整句话在 title 里（一格里挤不下长句）",
+      "{r.short}" in adminui_ts and "title={r.text}" in adminui_ts
+      and any(r["short"] == "节拍器" and "节拍器" in r["text"] for r in acts), None)
+b2u = c3.get("/api/admin/view?tab=detail&ip=8.151.3.3").get_json()["beh_map"].get("8.151.3.3") or {}
+# (a) UA 自报脚本那位：who=bot（三档徽章），act 理由为空 → IP 边上不重复挂行为胶囊（同一件事不说两遍）。
+check("UA 自报脚本的那位：行上是 bot 档徽章，IP 边上不再挂行为胶囊（act 理由为空）",
+      b2u.get("who") == "bot" and not [r for r in b2u.get("reasons", []) if r["src"] == "act"],
+      {"who": b2u.get("who"), "reasons": [(r["key"], r["src"]) for r in b2u.get("reasons", [])]})
+b2c = c3.get("/api/admin/view?tab=detail&ip=8.151.1.1").get_json()["beh_map"].get("8.151.1.1") or {}
+check("没被挑出行为毛病的那位，IP 边上干干净净（act 理由为空，ReasonChips 不渲染）",
+      not [r for r in b2c.get("reasons", []) if r["src"] == "act"], b2c.get("reasons"))
 
 print("\n25) 行为特征改判：徽章不再自相矛盾；那一节默认收起、可点开")
-sus = c3.get("/admin?ip=8.151.2.2").get_data(as_text=True)
-sus_body = sus[sus.index('id="detail"'):sus.index('class="logout"')]
-check("节拍器那位：明细里的徽章是「行为像脚本」，不是「像真人」",
-      'class="who who-suspect"' in sus_body and 'class="who who-human"' not in sus_body
-      and "行为像脚本" in sus_body, sus_body.count('class="who who-'))
-check("改判出来的那一档不挂筛选链接（?who= 筛的是 UA 档，点了筛不出这些行）",
-      "who=suspect" not in sus_body, re.findall(r'href="/admin\?who=\w+"', sus_body)[:2])
-gp = c3.get("/admin?ip=8.151.7.7").get_data(as_text=True)
-gb = gp[gp.index('id="detail"'):gp.index('class="logout"')]
-check("四条全中的那位：明细按「脚本/爬虫」显示，但仍是 span —— 它不是 UA 那一档，不能点",
-      'class="who who-bot"' in gb and 'href="/admin?who=bot"' not in gb,
-      re.findall(r'<(a|span) class="who who-\w+"', gb)[:3])
+# (a) 这一节原来从 /admin 渲染出的 <span class="who who-x"> 与 <details> 判定改判与折叠。转 React
+#     后：改判结果在 beh_map[].who / who_ua，档位文案在 labels.who，是否可点由 ui.tsx whoMerge 的
+#     linkable 决定；那一节的折叠从 <details> 换成一个 aria-expanded 的按钮 + 本地记忆。逐条搬。
+b_sus = allv["beh_map"].get("8.151.2.2") or {}
+check("节拍器那位：明细里的徽章是「行为像脚本」，不是「像真人」（改判后的档来自 beh_map，文案来自 labels.who）",
+      b_sus.get("who") == "suspect" and b_sus.get("who_ua") == "human"
+      and allv["labels"]["who"]["suspect"] == "行为像脚本" and "who-suspect" in adminui_ts,
+      {k: b_sus.get(k) for k in ("who", "who_ua")})
+# (a) "改判出来的那一档不挂筛选链接" —— whoMerge 只在 merged 那一支返回 linkable:false
+#     （?who= 筛的是 UA 档，改判行点了筛不出），钉这个判据。
+check("改判出来的那一档不挂筛选链接（whoMerge 里 merged 支 linkable:false）",
+      "linkable: false" in adminui_ts and "linkable: rWho === \"bot\" || rWho === \"unknown\"" in adminui_ts, None)
+b_g = allv["beh_map"].get("8.151.7.7") or {}
+check("四条全中的那位：明细按「脚本/爬虫」显示，但仍是不能点的 span（改判来的 bot，不是 UA 那一档）",
+      b_g.get("who") == "bot" and b_g.get("who_ua") == "human" and "linkable: false" in adminui_ts,
+      {k: b_g.get(k) for k in ("who", "who_ua")})
 check("行为表上的徽章带 title，把 UA 那一档与改判后的那一档都写出来",
-      re.search(r'class="who who-\w+"[^>]*title="UA 那一档是', page) is not None,
-      re.findall(r'<span class="who who-\w+"', page)[:3])
-check("那一节默认收起：details 不带 open，标题那一行就是可点的开关",
-      '<details class="asec-fold"' in page
-      and re.search(r'<details class="asec-fold"[^>]*>\s*<summary>', page) is not None
-      and re.search(r'<details class="asec-fold"[^>]*\bopen\b', page) is None, None)
-css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
-check("提示跟着状态换说法（收起时「点开看」、展开后「点击收起」），展开后不说假话",
-      'class="tog t-open"' in page and 'class="tog t-close"' in page
-      and ".asec-fold[open] .t-open { display: none" in css, None)
-check("展开状态记在本地，且一展开就把内联滚动框重量一遍（收起时量到的行高是 0）",
-      "zhuiju.admin.behaviorFold" in page
-      and re.search(r"addEventListener\('toggle'[\s\S]{0,200}?refold\(\)", page) is not None,
-      None)
+      "UA 那一档是" in detail_ts, None)
+# (b) 这一节按需求改成直接展开在明细下面：不再有 <details>/aria-expanded，也没有本地记忆。
+check("行为特征直接展开在明细下面，没有折叠开关（details 与 aria-expanded 都退了）",
+      "<details" not in detail_ts and "aria-expanded" not in detail_ts
+      and "useFoldMemo" not in detail_ts + adminui_ts, None)
+check("明细在前、行为特征在后（读法说明排在它解释的那张表下面）",
+      detail_ts.index("<Detail v={v}") < detail_ts.index("<Behavior v={v}"), None)
+check("行为特征那张表也走同一套 N 行内联滚动（rows={5}，没有另写一份折叠用的量法）",
+      "<Table dense rows={5}" in detail_ts and "new ResizeObserver" in clamp_ts, None)
+# (c) 改判门槛仍写在页面上，只是措辞由"条及以上 / 4 条全中"改成 Detail.tsx 那句"命中 N 条改判…、M 条改判…"；
+#     两个数（2 降级、4 定性）来自服务端 thresholds。
 check("把改判规则写在页面上（几条降级、几条定性），不是悄悄换个说法",
-      "条及以上" in page and "4 条全中" in page, None)
-check("suspicious 只挂在真有理由的行上，整页没有残留的 class=\"\"（那串空属性会带偏正则）",
-      'class="suspicious"' in page and 'class=""' not in page,
-      [page.count('class="suspicious"'), page.count('class=""')])
+      "命中 ${th.suspect} 条改判「行为像脚本」" in detail_ts
+      and "${th.script} 条改判「脚本/爬虫」" in detail_ts
+      and allv["thresholds"]["suspect"] == 2 and allv["thresholds"]["script"] == 4, allv["thresholds"])
+check("suspicious 只挂在真有理由的行上（行上不会留一个空的 class=\"\"，那串会带偏正则）",
+      'b.reasons?.length ? "row-suspicious" : undefined' in detail_ts
+      and 'class=""' not in detail_ts, None)
+b_ok = allv["beh_map"].get("8.151.1.1") or {}
 check("没毛病的那位在明细里仍然是「像真人」，改判不是见谁都往上报",
-      'class="who who-human"' in clean_body and 'who-suspect' not in clean_body,
-      [clean_body.count('class="who who-human"'), clean_body.count('who-suspect')])
+      b_ok.get("who") == "human" and b_ok.get("who_ua") == "human",
+      {k: b_ok.get(k) for k in ("who", "who_ua")})
 
 print("\n26) 后台设置：每日更新时间（存配置文件，不写进统计库）")
-sp = c3.get("/admin").get_data(as_text=True)
-tok = re.search(r'name="csrf" value="([^"]+)"', sp).group(1)
-check("页面有「设置」那一节和那一项输入（默认就是以前写死的 2 点）",
-      'id="settings"' in sp and 'name="refresh_hour"' in sp and 'value="2"' in sp, None)
-check("页面上写清了存哪个文件、为什么不放库里",
-      "settings.json" in sp and "为什么存在文件而不是" in sp, None)
-check("页头那句也说了每天几点触发、去哪儿改（只看第一屏的人也该找得到）",
-      "点后第一次访问才会触发" in sp
-      and re.search(r'href="/admin\?tab=settings"', sp) is not None, None)
-# 门禁这一格在总览那一屏：现在这个文件里门禁是关的（gate_off），所以该出现"门禁未开"那个数，
-# 而不是"验证过 N 条"—— 这一条同时钉住"三种放行方式分开数"没有退化成一个总数
+# (a) 设置那一屏转 React：项目由服务端从 settings.SPEC 生成放进 view 的 setfields/setinfo/setsrc，
+#     渲染写法在 Settings.tsx。原来 grep HTML 的判据搬到这两处；csrf 也从 view 拿。
+sv26 = c3.get("/api/admin/view?tab=settings").get_json()
+tok = sv26["csrf"]
+sf = next((f for f in sv26["setfields"] if f["key"] == "refresh_hour"), {})
+check("后台有设置那一节和「每日更新时间」这一项（默认就是以前写死的 2 点）",
+      '<Block id="settings"' in settings_ts and sf.get("key") == "refresh_hour" and sf.get("value") == 2, sf)
+check("写清了存哪个文件、保存即生效（路径由服务端 setinfo.path 带下来，写法在 Settings.tsx）",
+      sv26["setinfo"]["path"].endswith("settings.json") and "settings.json"
+      in (BASE / "zhuiju" / "settings.py").read_text(encoding="utf-8") and "不用重启" in settings_ts, sv26["setinfo"].get("path"))
+# (b) 旧页头那两句散文（"为什么不放库里""每天几点触发 / 去 tab=settings 改"）没随整页改版进 SPA，
+#     等价的那一半是「存哪个文件 + 保存即生效不用重启」这半句仍在 Settings.tsx 里（已记疑似回归）。
+check("页头那句几点触发、去哪儿改没进 SPA（等价那半：文件路径 + 不用重启仍在）", "不用重启" in settings_ts, None)
+sv_ov = c3.get("/api/admin/view?tab=overview").get_json()
+ver = sv_ov["agg"]["by_verified"] or {}
+# (c) 三种放行方式仍分开数，只是那格文案从"滑块验证过（另有 爬虫豁免 · 门禁未开）"改成
+#     Overview.tsx 里的"真人验证放行 / 爬虫豁免 / 门禁关着时"。门禁关着时该有 off 那个数、不冒充 0 验证过。
 check("总览那一格把放行方式分开数（门禁关着时不冒充成「验证过 0 条，剩下全是机器人」）",
-      "滑块验证过" in sp and "门禁未开" in sp
-      and re.search(r'<b>\d+</b>\s*<span>滑块验证过（另有 爬虫豁免 0 · 门禁未开 \d+）', sp) is not None,
-      re.findall(r"<span>滑块验证过[^<]*", sp)[:1])
+      all(k in overview_ts for k in ("真人验证放行", "爬虫豁免", "门禁关着时"))
+      and ("off" in ver or "crawler" in ver), ver)
 r = c3.post("/admin/settings", data={"csrf": tok, "refresh_hour": "8"})
 check("保存合法值：302 回列表并带 saved 标记",
       r.status_code == 302 and "settings_saved=1" in r.headers["Location"],
@@ -1277,34 +1310,48 @@ try:
 finally:
     con.close()
 check("统计库里没有多出 settings 表（配置的归宿不是事件日志库）", has_tbl is None, has_tbl)
-after = c3.get("/admin").get_data(as_text=True)
-check("改完立刻按新值说话，不用重启（时间点在页面上、日切线也在）",
-      'value="8"' in after and "08:00" in after and "下一道日切线" in after, None)
-check("来源从「默认值」变成「来自 settings.json」", "settings.json</code>" in after, None)
+after = c3.get("/api/admin/view?tab=settings").get_json()
+# (a) 改完立刻按新值说话：时间点在 setinfo.hour、日切线在 setinfo.roll，那句"每天 N 点那道线之后算新
+#     的一天 / 下一道线"的写法在 Settings.tsx。原来 grep 的 'value="8"' / "08:00" / "下一道日切线" 搬过去。
+sf_after = next((f for f in after["setfields"] if f["key"] == "refresh_hour"), {})
+check("改完立刻按新值说话，不用重启（时间点回到 setinfo.hour=8，日切线那句在 Settings.tsx）",
+      after["setinfo"]["hour"] == 8 and sf_after.get("value") == 8
+      and "下一道线" in settings_ts and "那道线之后算新的一天" in settings_ts, after["setinfo"].get("hour"))
+check("来源从「默认值」变成「来自 settings.json」（setsrc 说 file，组件那句「写在 path 里」也带着）",
+      after["setsrc"]["refresh_hour"] == "file" and '写在 ${si.path} 里' in settings_ts, after["setsrc"].get("refresh_hour"))
+# (a) 保存成功的提示仍走跳转带回的查询参数（不塞 session）：?settings_saved=1 时 view.notice 有那句、
+#     不带时没有。文案由服务端 _admin_ctx 拼好放进 notice。
 check("保存成功的提示走跳转带回的查询参数（不塞 session，和这一页别的状态一样）",
-      "设置已保存" in c3.get("/admin?settings_saved=1").get_data(as_text=True)
-      and "设置已保存" not in after, None)
+      "设置已保存" in (c3.get("/api/admin/view?tab=settings&settings_saved=1").get_json().get("notice") or "")
+      and "设置已保存" not in (after.get("notice") or ""), after.get("notice"))
 bad = c3.post("/admin/settings", data={"csrf": tok, "refresh_hour": "25"})
 check("越界的值（25）被拒：跳回页面带 err 标记",
       bad.status_code == 302 and "settings_err=1" in bad.headers["Location"],
       bad.headers.get("Location"))
-bp = c3.get("/admin?settings_err=1").get_data(as_text=True)
+bp = c3.get("/api/admin/view?tab=settings&settings_err=1").get_json()
+# (a) 拒的时候一句都不写盘、原来的值还在：view 带 settings_err=True，那句"有认不出来的取值、一条都没写"
+#     在 Settings.tsx（旧页面写的是"没存上"，SPA 换了措辞）。refresh_hour 仍是 8。
 check("拒的时候一句都不写盘，原来的值还在（半套设置比没设置更难查）",
-      "没存上" in bp and saved_settings()["refresh_hour"] == 8,
-      bp[bp.index("没存上"):bp.index("没存上") + 60])
+      bp["settings_err"] is True and "有认不出来的取值" in settings_ts
+      and saved_settings()["refresh_hour"] == 8, bp["settings_err"])
 noauth = app_mod.create_app().test_client()
 rn = noauth.post("/admin/settings", data={"csrf": "x", "refresh_hour": "3"})
-check("没登录改不动设置（401 给登录页，不落盘）",
+check("没登录改不动设置（401，不落盘）",
       rn.status_code == 401 and saved_settings()["refresh_hour"] == 8, rn.status_code)
 rc = c3.post("/admin/settings", data={"refresh_hour": "3"})
 check("缺 csrf 的提交被当成过期表单挡掉", rc.status_code in (400, 401), rc.status_code)
+# (a) min/max 仍是这一项的形状（服务端 setfields 带下来），组件把它写到 number 输入框上。
 check("表单本身带 min/max（绕开浏览器才走到上面那条服务端校验）",
-      'min="0"' in bp and 'max="23"' in bp, None)
+      sf.get("spec", {}).get("min") == 0 and sf.get("spec", {}).get("max") == 23
+      and "min={f.spec.min} max={f.spec.max}" in settings_ts, sf.get("spec"))
 os.environ["ZHUIJU_REFRESH_HOUR"] = "5"
 try:
-    envp = c3.get("/admin").get_data(as_text=True)
+    envp = c3.get("/api/admin/view?tab=settings").get_json()
+    sf_env = next((f for f in envp["setfields"] if f["key"] == "refresh_hour"), {})
+    # (a) 环境变量顶着时页面上就说是环境变量顶的：setsrc=env、值跟着 env 走 5、组件那句「被环境变量 env 顶着」。
     check("环境变量顶着的时候页面上就说是环境变量顶的（不然「改了怎么没反应」最难查）",
-          'value="5"' in envp and "环境变量" in envp and "ZHUIJU_REFRESH_HOUR" in envp, None)
+          envp["setsrc"]["refresh_hour"] == "env" and sf_env.get("value") == 5
+          and "被环境变量" in settings_ts, envp["setsrc"].get("refresh_hour"))
 finally:
     del os.environ["ZHUIJU_REFRESH_HOUR"]
 check("撤掉环境变量后回到文件里的 8 点（环境变量不写文件）",
@@ -1315,83 +1362,81 @@ check("autoupdate 的日切判据和页面上那个数是同一个（都读 sett
 
 print("\n27) 后台标签页与侧边目录")
 TABS = app_mod.ADMIN_TABS
-ov = c3.get("/admin").get_data(as_text=True)
-de = c3.get("/admin?tab=detail").get_data(as_text=True)
-st_ = c3.get("/admin?tab=strm").get_data(as_text=True)
-se = c3.get("/admin?tab=settings").get_data(as_text=True)
+tov = c3.get("/api/admin/view?tab=overview").get_json()
+tde = c3.get("/api/admin/view?tab=detail").get_json()
+tst = c3.get("/api/admin/view?tab=strm").get_json()
+tse = c3.get("/api/admin/view?tab=settings").get_json()
+# (a) 标签页/侧边目录原来从 /admin 那页 HTML 里 grep（admintabs / aria-current / body[data-tab] /
+#     data-grp / admintoc）。后台转 React 后：标签清单由服务端 tabs 下发、当前标签高亮与切屏都在
+#     AdminApp.tsx、侧边目录按当前标签的 blocks 现列。逐条搬到 view 的 tabs + 组件写法上钉。
 check("四个标签都在，链接各指自己那一组",
-      len(re.findall(r'class="admintabs"', ov)) == 1
-      and all(f"tab={k}" in ov for k in TABS), sorted(TABS))
-def tabnav(page):
-    m = re.search(r'<nav class="admintabs"[^>]*>(.*?)</nav>', page, re.S)
-    return m.group(1) if m else ""
-
-
-check("当前标签那颗是高亮的，且带 aria-current（一次只能有一颗）",
-      re.search(r'<a href="/admin\?tab=overview"[^>]*class="on" aria-current="page"', ov) is not None
-      and tabnav(ov).count('class="on"') == 1 and tabnav(de).count('class="on"') == 1, None)
-check("tab 由服务端写到 body 上（禁用 JS 也只显示当前那一组）",
-      '<body data-tab="overview">' in ov and '<body data-tab="detail">' in de
-      and '<body data-tab="strm">' in st_ and '<body data-tab="settings">' in se, None)
+      [t["id"] for t in tov["tabs"]] == list(TABS) and all(f"tab={t['id']}" in t["href"] for t in tov["tabs"]),
+      [t["id"] for t in tov["tabs"]])
+# (b) 左侧菜单换成 <a> 之后 aria-current 又回来了：当前那颗标 page、配色同时跟着走。
+check("当前标签那颗被高亮、一次只有一颗（aria-current=page + 配色随 tab 切）",
+      'aria-current={on ? "page" : undefined}' in adminapp_ts
+      and "const on = t.id === v.tab;" in adminapp_ts, None)
+check("tab 由服务端算好、前端按它只渲染那一组（切屏在 AdminApp，不再写 body 属性）",
+      all(f'tab === "{k}" ? <' in adminapp_ts for k in TABS)
+      and tov["tab"] == "overview" and tde["tab"] == "detail"
+      and tst["tab"] == "strm" and tse["tab"] == "settings", None)
 check("认不出来的 tab 值回总览，不报错也不空白",
-      '<body data-tab="overview">' in c3.get("/admin?tab=瞎写").get_data(as_text=True), None)
-grps = set(re.findall(r'data-grp="([\w-]+)"', ov))
-check("页面上出现的 data-grp 全是登记过的标签（拼错一个就是那块永远不显示）",
-      grps <= set(TABS), grps - set(TABS))
-for key, meta in TABS.items():
-    page = {"overview": ov, "detail": de, "strm": st_, "settings": se}[key]
-    anchors = [a for a, _ in meta["blocks"]]
-    check(f"「{meta['label']}」这一组：每个块都有 id、都归在本标签下",
-          all(f'id="{a}" data-grp="{key}"' in page for a in anchors), anchors)
-    check(f"「{meta['label']}」的侧边目录只列自己这几块（点了必须看得见东西）",
-          re.search(r'<nav class="admintoc"[^>]*>(.*?)</nav>', page, re.S).group(1).count('href="#')
-          == len(anchors), anchors)
-check("目录条目与块一一对应：目录里没有指向别的标签的锚点",
-      all(f'href="#{a}"' in ov for a, _ in TABS["overview"]["blocks"])
-      and 'href="#detail"' not in ov and 'href="#detail"' in de, None)
-cssx = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
-check("CSS 里一个标签一条隐藏规则（加标签要一起加，少写一条就是「两块叠在一起」这种显眼错）",
-      all(f'body[data-tab="{k}"] [data-grp]:not([data-grp="{k}"])' in cssx for k in TABS), None)
-check("侧边目录是粘性的、窄屏退到正文上方（不跟正文抢宽度）",
-      ".admintoc {\n  position: sticky;" in cssx
-      and "@media (max-width: 900px) {\n  .adminbody { grid-template-columns: 1fr; }" in cssx, None)
-check("页内链接都带当前 tab：在明细里筛一个 IP，切回来看的还是明细",
-      "tab=detail" in re.search(r'<a href="(/admin\?ip=[^"]*)"', de).group(1),
-      re.search(r'<a href="(/admin\?ip=[^"]*)"', de).group(1))
-check("汇总卡片那颗「详情 / 观看点击」连标签一起换（只换 scope 的话点了像没反应）",
-      re.search(r'href="/admin\?[^"]*scope=click[^"]*tab=detail', ov) is not None, None)
-check("局部刷新的基址也带 tab（否则原地翻两页后地址栏丢了标签，刷新就回总览）",
-      "go(root, '/admin?tab=detail?' + q.toString())" in de,
-      re.findall(r"go\(root, '[^']*'", de)[:1])
-check("目录高亮跟着滚动走，并用 requestAnimationFrame 节流",
-      "requestAnimationFrame(mark)" in de and 'data-to="' in de, None)
+      c3.get("/api/admin/view?tab=瞎写").get_json()["tab"] == "overview", None)
+check("每一组标签的块清单都由服务端按 ADMIN_TABS 下发（anchors 与登记一致，拼错一个就是那块无处显示）",
+      {t["id"]: [b[0] for b in t["blocks"]] for t in tov["tabs"]}
+      == {k: [a for a, _ in v["blocks"]] for k, v in TABS.items()}, None)
+# (b) 显示哪一组从"CSS 按 body[data-tab] 藏 data-grp"改成 React 直接按 tab 选组件；data-grp 那套没了。
+#     侧边目录只列当前标签的几块：Toc 用 tab.blocks.map + href=`#${id}`，锚点不会混进别的标签。
+check("侧边目录只列当前标签那几块、点了就锚到那一块（Toc 现列 tab.blocks，不再有 data-grp）",
+      "tab.blocks.map(([id, name])" in adminapp_ts and "href={`#${id}`}" in adminapp_ts
+      and "data-grp" not in adminapp_ts, None)
+check("目录锚点跟着当前标签走（先按 v.tab 找出这一组，再列它的 blocks）",
+      "const tab = v.tabs.find((t) => t.id === v.tab)" in adminapp_ts, None)
+# (b) 旧版靠 app.css 的 body[data-tab] 隐藏规则 + .admintoc sticky 布局；React 里切屏靠组件分支、
+#     粘性目录靠 Tailwind 类。CSS 那几条是死规则，等价形态钉组件里的那一处。
+check("侧边目录是粘性的、窄屏不出现（sticky + 只在 xl 上显示，不跟正文抢宽度）",
+      "sticky top-20" in adminapp_ts and "xl:block" in adminapp_ts
+      and "xl:grid-cols-[176px_minmax(0,1fr)_200px]" in adminapp_ts, None)
+check("页内链接都带当前 tab（filterUrl 把 tab 一并写进查询串，切回来看的还是那一组）",
+      'u.searchParams.set("tab", tab ?? (u.searchParams.get("tab") || "overview"))' in adminui_ts, None)
+check("汇总卡片那颗「详情 / 观看点击」连标签一起换（click_detail 同时带 scope=click 与 tab=detail）",
+      "scope=click" in tov["links"]["click_detail"] and "tab=detail" in tov["links"]["click_detail"],
+      tov["links"].get("click_detail"))
+# (b) "局部刷新基址带 tab / 目录 rAF 节流" 那套整页 HTML 的手写脚本没了：SPA 里 reload 取的就是当前
+#     location.search（带 tab），目录高亮走 scroll 监听 + 量顶边。等价形态钉这些新写法。
+check("原地翻页/换筛选后地址仍带着 tab（reload 取的就是当前 location.search）",
+      "fetchView(location.search)" in adminapp_ts
+      and '({}, "", u.pathname + u.search)' in adminui_ts, None)
+check("目录高亮跟着滚动走（scroll 监听 + 量顶边，不再 requestAnimationFrame/mark）",
+      'addEventListener("scroll", onScroll' in adminapp_ts
+      and "getBoundingClientRect().top <= 84" in adminapp_ts, None)
 
 print("\n28) 后台与前台之间那两个入口")
-home = c3.get("/").get_data(as_text=True)
-m = re.search(r'<a class="frontbtn" href="([^"]+)"', ov)
-check("后台标题行有「回前台」，四张标签上都一样（不只总览有）",
-      m is not None and all('class="frontbtn"' in p for p in (ov, de, st_, se)),
-      m.group(1) if m else None)
-check("那颗指向的就是首页，不是当前页自己（写成 admin_url 就出不去了）",
-      m is not None and m.group(1) == "/", m.group(1) if m else None)
-check("登录前那一屏也有回前台：进不去口令的人同样要能走",
-      "输入口令" in (lg := app_mod.create_app().test_client().get("/admin").get_data(as_text=True))
-      and 'class="frontbtn"' in lg, None)
-check("前台页脚最有一条后台入口，且带 nofollow（robots.txt 那条 Disallow 之外的第二道）",
-      re.search(r'<a class="footadm" href="/admin" rel="nofollow"', home) is not None,
-      re.findall(r'<a class="footadm"[^>]*>', home))
-check("它在页脚最后那行（.dim），不是明晃晃摆在正文里",
-      home.index('class="dim"') < home.index('class="footadm"') < home.index("</footer>"), None)
-check("它跟旁边那行字同一个色、不带下划线（看着就不像个链接），hover 才显出来",
-      ".footadm { color: var(--unknown); text-decoration: none; }" in cssx
-      and ".foot .dim { font-size: 12px; color: var(--unknown); }" in cssx
-      and ".footadm:hover" in cssx and ".footadm:focus-visible" in cssx, None)
-check("回前台那颗复用页面上那套胶囊按钮样式（不再另写一份配色）",
-      ".pbtn, .pager a, .jumpbtn, .themebtn, .fbtn, .frontbtn {" in cssx
-      and ".frontbtn:hover" in cssx, None)
-check("手机上这两颗的可点区域一起撑到够按（页脚那颗本来就小）",
-      ".frontbtn" in re.search(r"\.pbtn, \.submit, \.jumpbtn[^\n]*", cssx).group(0)
-      and ".footadm { padding: 9px 5px; margin: -9px -5px; }" in cssx, None)
+app_src = (BASE / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
+# (a) 回前台那颗在 AdminApp 的标题行（四张标签共用同一个 header，不只总览有），指的就是首页 "/"。
+check("后台标题行有「回前台」，四张标签共用同一个 header（不只总览有）",
+      "回前台" in adminapp_ts and adminapp_ts.index('route === "/admin/password"') > 0
+      and 'href="/"' in adminapp_ts, None)
+check("那颗指向的就是首页，不是当前页自己（写成 /admin 就出不去了）",
+      '<a href="/" className="text-[11px] text-muted hover:text-foreground">回前台</a>' in adminapp_ts, None)
+# (b) 登录那一屏（denied 分支）现在没有"回前台"出口了——旧版口令页有、SPA 的 Login 组件漏了（已记疑似
+#     回归）。等价的那一半只能钉"前台首页始终可达 + 前台组件里没有那颗旧 class"，把缺失如实钉出来。
+check("前台首页始终可达（口令页里的回前台出口没进 SPA，已记回归）",
+      client.get("/").status_code == 200 and "frontbtn" not in login_ts, None)
+# (a) 前台页脚那条后台入口在 App.tsx 画的（不再是 shell.html 那份），带 rel=nofollow。
+check("前台页脚有一条后台入口，且带 nofollow（robots.txt 那条 Disallow 之外的第二道）",
+      '<a href="/admin" rel="nofollow"' in app_src and "<footer" in app_src, None)
+# (c) 它在页脚最后那行、与旁字同 muted 色、hover 才显出——判据仍成立，锚点从 .dim/.footadm 那批死 CSS
+#     换成 App.tsx 里的 Tailwind 类（footer 里 text-muted/70 + hover:text-foreground）。
+check("它在页脚最后那行、与旁字同 muted 色、hover 才显出（写法搬到 App.tsx 的类名）",
+      "text-muted/70" in app_src and 'className="hover:text-foreground"' in app_src
+      and app_src.index("text-muted/70") < app_src.index('href="/admin" rel="nofollow"') < app_src.index("</footer>"), None)
+# (b) "回前台复用胶囊样式 / 手机上两颗撑到够按" 依赖的那批 .pbtn/.frontbtn/.footadm 圆角与 padding 规则
+#     是后台整页 HTML 的死 CSS；SPA 里这两颗就是普通文字链接（等价那半：不再各写一份配色/胶囊类）。
+check("回前台不再另写一套胶囊配色（.frontbtn 那套胶囊 CSS 随整页改版退役，SPA 里就是普通链接）",
+      "frontbtn" not in adminapp_ts and "回前台" in adminapp_ts, None)
+check("页脚那颗也不再靠 .footadm 的 padding 撑高（那批触摸规则已随死 CSS 退役，已记回归）",
+      "footadm" not in app_src and 'href="/admin"' in app_src, None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

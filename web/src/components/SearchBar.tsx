@@ -54,7 +54,7 @@ export function SearchBar({
             <SearchField.SearchIcon className="size-4 shrink-0 text-muted" />
             <SearchField.Input
               placeholder="例如：庆余年 / 流浪地球 / 繁花 / 灌篮高手"
-              className="h-full min-w-0 flex-1 bg-transparent px-2 text-[15px] outline-none placeholder:text-field-placeholder"
+              className="h-full min-w-0 flex-1 bg-transparent px-2 text-base outline-none placeholder:text-field-placeholder"
             />
             <SearchField.ClearButton className="shrink-0" aria-label="清空关键词" />
           </SearchField.Group>

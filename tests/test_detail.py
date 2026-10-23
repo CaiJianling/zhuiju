@@ -266,7 +266,8 @@ check("结果页与猜你想搜用的是同一个 Poster（两处才长得不一
       "<Poster" in vod_ts and "<Poster" in hot_ts and poster_ts.count("<Button") == 1,
       (vod_ts.count("<Poster"), hot_ts.count("<Poster"), poster_ts.count("<Button")))
 check("搜索结果与猜你想搜的封面都自带详情按钮：按钮只有 Poster 这一处，两处共用",
-      poster_ts.count("onPress={() => onDetail(spec)}") == 1
+      "const open = () => onDetail(spec, cover.current);" in poster_ts
+      and poster_ts.count("onPress={open}") == 1
       and "onDetail" not in drawer_ts, None)
 # (c) 旧写法把详情数据写成按钮上的 data-title/data-srcs 那串属性，点击时再从 DOM 读回来。
 # React 这边等价形态是：spec 由数据当场组出来（specOf）并作为 props 传下去，
@@ -290,10 +291,15 @@ check("HTML 属性里不再内嵌 JSON：整份数据只在 #boot-data 那一处
       re.findall(r"data-[a-z]+=\"\{\{[^}]*\}\}", shell))
 check("旧缓存没有 src/vid 时前端不炸：那两个字段在类型里就是可选的",
       "src?: string;" in wread("types.ts") and "vid?: string | number;" in wread("types.ts"), None)
-check("点击走的是按钮本身，不是整张海报",
-      "onPress={() => onDetail(spec)}" in poster_ts
-      and "onClick" not in poster_ts[poster_ts.index("<div className=\"relative"):poster_ts.index("<Button")],
-      None)
+# (c) 这一条原来判的是「只有右下角那颗按钮可点，海报本身不是点击区」。现在按需求整张封面都能
+# 开面板，但点击层仍然得是一个 <button>（div 加 onClick 键盘走不到），而且卡片不能整个套进 <a>
+# —— 那样「详情」这颗就嵌在链接里（无效 HTML），点按钮会顺带跳去搜索页。
+check("整张海报都是点击区：那一层是透明 <button>（键盘走得到），垫在「详情」那颗下面",
+      'className="cover-hit absolute inset-0"' in poster_ts
+      and "onClick={open}" in poster_ts
+      and poster_ts.index("cover-hit") < poster_ts.index('className="dbtn')
+      and 'z-10 min-h-8 min-w-10 rounded-full"' in poster_ts
+      and re.search(r"<div[^>]*onClick=", poster_ts) is None, None)
 check("触屏上没有 hover：详情按钮在这种情况下常驻可见",
       "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in stcss, None)
 check("详情请求只在抽屉里发起，列表与卡片那一路一次都不碰",
@@ -321,9 +327,10 @@ check("线路数据是对象直接传下去的，没有往属性里塞整份 JSO
 check("展开/收起用 aria-expanded，不是靠猜状态",
       "aria-expanded={open}" in drawer_ts, None)
 # (c) 旧写法把折叠委托在 document 上，为的是"卡片线路与面板线路两处都管得到"。
-# 现在只有面板里有线路（卡片上那排线路随旧前端一起没了），一处一个组件，委托不再需要
-check("折叠都是组件里的局部状态（线路一处、接口状态一处），没有 document 上的委托",
-      front_src.count("aria-expanded") == 2 and "addEventListener(\"click\"" not in drawer_ts,
+# 现在折叠三处：抽屉里的线路、右栏的接口状态、右栏的检索快照 —— 每处一个组件、一个局部 state，
+# 委托不再需要（也多不得：窄屏那两处要各自记住自己开没开）
+check("折叠都是组件里的局部状态（线路一处、接口状态一处、检索快照一处），没有 document 上的委托",
+      front_src.count("aria-expanded") == 3 and "addEventListener(\"click\"" not in drawer_ts,
       re.findall(r"aria-expanded", all_src))
 
 print("\n6) 观看点击的上报：报什么、怎么报、不能挡住跳转")
@@ -400,7 +407,7 @@ check("我们自己的动效（海报淡入、整行推入、主题过渡）在�
       and ".theme-anim *" in stcss, re.findall(r"@media \(prefers-reduced-motion[^{]*\{", stcss))
 check("抽屉开合只有一个受控布尔：点开来、关掉就是把那一份 spec 清空",
       "const open = !!spec;" in drawer_ts and "isOpen={open}" in drawer_ts
-      and "onClose={() => setSpec(null)}" in app_ts, None)
+      and "onClose={closeDetail}" in app_ts and "setSpec(null);" in app_ts, None)
 # 注意：offsetWidth 全站只允许出现在滑块那一处（那是量控件宽度，不是逼浏览器重排）；
 # 抽屉这条路一次都不许有 —— 旧写法那三行 void dpEl.offsetWidth 在新架构里就是这个判据
 check("进出场不再需要一次强制重排（抽屉里 offsetWidth 一次都不出现）",
@@ -419,7 +426,7 @@ check("点外面那一下能关（组件把 open 状态的变化原样交回 onC
 check("判内外不靠事件路径：既没有 composedPath，也没有 dpEl.contains 这一类自研判据",
       "composedPath" not in all_src and "contains(e.target)" not in all_src, None)
 check("卡片上那颗「详情」不算外面：开着抽屉点另一张是换一部看，不是关窗",
-      "onPress={() => onDetail(spec)}" in poster_ts and "setSpec(s);" in od
+      "onPress={open}" in poster_ts and "setSpec(s);" in od
       and "spec={spec}" in app_ts, None)
 check("外面那一下不抢焦点：前端没有一处手写 focus（焦点归还由组件处理）",
       ".focus()" not in drawer_ts and "dpBack" not in all_src, re.findall(r"\.focus\(\)", all_src))
@@ -434,9 +441,13 @@ check("盖满与锁页面滚动是 Drawer 组件的职责，前端不再往 body
 check("详情按钮常驻可见（不靠 hover 才发现），触屏上给满不透明度",
       ".dbtn {" in stcss and "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in stcss, None)
 # (c) 旧那条比的是 .dbtn { z-index: 2 } 压在 .cover img { z-index: 1 } 之上。
-# 现在按钮是 absolute 定位、排在图片之后，画在上层靠的是定位与文档顺序，不需要再写 z-index
-check("按钮压在封面之上：靠 absolute 定位 + 文档顺序，不再手写一层 z-index",
-      "absolute right-1.5 bottom-1.5" in poster_ts and "z-index" not in stcss,
+# 现在按钮是 absolute 定位、排在图片之后，画在上层靠的是定位与文档顺序，不需要再写 z-index。
+# styles.css 里唯一那个 z-index 属于 View Transition 的 cover-active 快照层（另一件事），
+# 按钮与封面这两条规则里仍然一个都不许有。
+check("按钮压在封面之上：靠 absolute 定位 + 文档顺序，封面与按钮自己不再手写 z-index",
+      "absolute right-1.5 bottom-1.5" in poster_ts
+      and not re.search(r"\.dbtn\s*\{[^}]*z-index", stcss)
+      and not re.search(r"\.cover-box[^{]*\{[^}]*z-index", stcss),
       re.findall(r"z-index[^\n]*", stcss))
 # (c) 旧的那对 --poster-ink / --poster-scrim 是"压在任意封面上的东西不能跟主题翻"的手写 token。
 # 现在这颗按钮直接用 HeroUI 的 secondary 变体，配色由组件的令牌给：这对 token 在新样式里
@@ -470,8 +481,10 @@ print("\n7) 海报淡入：不是一片张着等，也不是一片透明")
 # (a) 原来这一节切的是 static/app.css 里 html.hasjs .cover img 那一段与 static/app.js 里
 # 那个全局 revealIn()。现在淡入是 Poster 组件的一个 state + styles.css 里一组关键帧，
 # 闸门从 html.hasjs 换成 html.js（由壳那段内联脚本打）。
-check("两处海报（海报卡与详情抽屉）都吃同一个 poster-img 类，淡入只有一套写法",
-      stcss.count(".poster-img") >= 1 and "poster-img" in poster_ts and "poster-img" in drawer_ts,
+check("两处海报（海报卡与详情抽屉）共用同一个 PosterImage：poster-img 这个类前台只写一处",
+      stcss.count(".poster-img") >= 1 and front_src.count("poster-img") == 1
+      and "<PosterImage pic={pic} title={title} />" in poster_ts
+      and "<PosterImage pic={spec.pic} title={spec.title} />" in drawer_ts,
       re.findall(r"poster-\w+", all_src))
 check("没加载完是 opacity-0（Tailwind 那个类），加载完换成走 .poster-in 的淡入",
       '"poster-in") : "opacity-0"' in poster_ts and "instant" in poster_ts
@@ -498,15 +511,17 @@ check("同一棵树不会重复挂监听：淡入是 onLoad/onError 两个属性
 # 那张图会一直停在 opacity-0。不改实现，只钉还成立的那一半（error 那一路会退回片名占位），
 # 缺的那半已作为疑似回归写进交付报告。
 check("图坏了不会留一块空白：onError 之后原位换成片名占位（既不 load 也不 error 的兜底缺失，已上报）",
-      "src && !broken ? (" in poster_ts and "grid size-full place-items-center" in poster_ts
+      "if (!src || broken)" in poster_ts and "grid size-full place-items-center" in poster_ts
       and "{title.slice(0, 8)}" in poster_ts, None)
 for anchor, tgt in (("结果卡片", vod_ts), ("猜你想搜", hot_ts)):
     check(f"渲染点用的是同一个 Poster（{anchor}）：淡入逻辑不用再在各处补跑一遍",
           "<Poster" in tgt, None)
-check("详情抽屉那张封面也一样走代理与同一个类（渲染点第三处，不需要 reveal 那个补跑）",
-      'className="poster-img size-20' in drawer_ts and "revealIn" not in all_src, None)
-check("第四个渲染点（整页扫一遍）在新架构里没有对应物：没有全局 reveal，也就不需要扫一遍",
-      front_src.count("querySelectorAll") == 0, re.findall(r"querySelectorAll", front_src))
+check("详情抽屉那张封面也走同一个 PosterImage：代理与淡入因此只有一份，抽屉里不自己拼 src",
+      "<PosterImage pic={spec.pic} title={spec.title} />" in drawer_ts
+      and "posterOf" not in drawer_ts and "revealIn" not in all_src, None)
+check("没有全局 reveal 扫一遍：前台唯一那次 querySelectorAll 是量「6 行」的行高用的",
+      "revealIn" not in all_src and front_src.count("querySelectorAll") == 1
+      and 'el.querySelectorAll("li")' in vod_ts, re.findall(r"querySelectorAll", front_src))
 check("服务端渲染那 12 条不靠 inline onload（壳里根本没有 img，也没有 onload 属性）",
       "onload=" not in shell and "<img" not in shell, re.findall(r"onload=[^ ]*", shell))
 # 这条原来判的是 .mdui-theme-dark img { filter: brightness(.94) }，那批选择器随旧前端一起没了；

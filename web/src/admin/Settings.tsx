@@ -1,14 +1,19 @@
 import { useState } from "react";
-import { Button } from "@heroui/react";
+import { Button, Switch } from "@heroui/react";
 import { postForm } from "./api";
-import { Block, Card } from "./ui";
+import { Block, Card, isOn } from "./ui";
 import type { AdminView } from "./types";
 
 /** 「设置」那一节。表单项目由后端从 settings.SPEC 生成（加一项只改 settings.py），
- *  这里照着渲染就行 —— 老模板也是这个意思，别在界面里写死一项。 */
+ *  这里照着渲染就行。布尔项是 Switch，不是 <select>：开关只有一个问题要问
+ *  （"要不要"），下拉框把它读成"两个选项里的一个"，手机上还要多点一次。
+ *  开关的值存在 state 里、提交时按 state 写，不去捞 React Aria 那颗隐藏 input。 */
 export function Settings({ v }: { v: AdminView }) {
   const [msg, setMsg] = useState<string | null>(v.notice || null);
   const [busy, setBusy] = useState(false);
+  const fields = v.setfields || [];
+  const [bools, setBool] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(fields.filter((f) => f.spec.kind === "bool").map((f) => [f.key, isOn(f.value)])));
   const si = v.setinfo!;
   const upd = v.upd!;
   const SRC_CN: Record<string, string> = { env: "环境变量定的", file: `写在 ${si.path} 里`, default: "用的默认值" };
@@ -36,7 +41,11 @@ export function Settings({ v }: { v: AdminView }) {
             if (busy) return;
             setBusy(true);
             const data: Record<string, string> = {};
-            (v.setfields || []).forEach((f) => {
+            fields.forEach((f) => {
+              if (f.spec.kind === "bool") {
+                data[f.key] = bools[f.key] ? "1" : "0";
+                return;
+              }
               const el = e.currentTarget.elements.namedItem(f.key) as HTMLInputElement | HTMLSelectElement | null;
               if (el) data[f.key] = el.value;
             });
@@ -51,27 +60,44 @@ export function Settings({ v }: { v: AdminView }) {
           }}
         >
           <div className="grid gap-3 sm:grid-cols-2">
-            {(v.setfields || []).map((f) => {
+            {fields.map((f) => {
               const src = (v.setsrc || {})[f.key];
+              const note = src === "env" ? `（被环境变量 ${f.spec.env} 顶着，改这里不生效）` : `（${SRC_CN[src] || src}）`;
               return (
                 <div key={f.key} className="space-y-1">
-                  <label className="block text-xs text-foreground" htmlFor={`st-${f.key}`}>
-                    {f.spec.label}
-                    <span className="ml-1 text-[10px] text-muted">{src === "env" ? `（被环境变量 ${f.spec.env} 顶着，改这里不生效）` : `（${SRC_CN[src] || src}）`}</span>
-                  </label>
                   {f.spec.kind === "bool" ? (
-                    <select id={`st-${f.key}`} name={f.key}
-                            defaultValue={typeof f.value === "boolean" ? (f.value ? "1" : "0") : String(f.value)}
-                            className="h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border">
-                      <option value="1">开</option>
-                      <option value="0">关</option>
-                    </select>
+                    <>
+                      <p className="block text-xs text-foreground">
+                        {f.spec.label}
+                        <span className="ml-1 text-[10px] text-muted">{note}</span>
+                      </p>
+                      <Switch
+                        size="sm"
+                        isSelected={!!bools[f.key]}
+                        onChange={(on) => setBool((b) => ({ ...b, [f.key]: on }))}
+                        aria-label={f.spec.label}
+                        className={src === "env" ? "opacity-60" : ""}
+                      >
+                        <Switch.Content>
+                          <Switch.Control>
+                            <Switch.Thumb />
+                          </Switch.Control>
+                          <span className="num text-[11px]">{bools[f.key] ? "开" : "关"}</span>
+                        </Switch.Content>
+                      </Switch>
+                    </>
                   ) : (
-                    <input id={`st-${f.key}`} name={f.key} type="number" min={f.spec.min} max={f.spec.max} step={1}
-                           defaultValue={String(f.value)}
-                           className="num h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border" />
+                    <>
+                      <label className="block text-xs text-foreground" htmlFor={`st-${f.key}`}>
+                        {f.spec.label}
+                        <span className="ml-1 text-[10px] text-muted">{note}</span>
+                      </label>
+                      <input id={`st-${f.key}`} name={f.key} type="number" min={f.spec.min} max={f.spec.max} step={1}
+                             defaultValue={String(f.value)}
+                             className="num h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border" />
+                      {f.spec.hint ? <p className="text-[10px] leading-snug text-muted">{f.spec.hint}</p> : null}
+                    </>
                   )}
-                  {f.spec.hint && f.spec.kind !== "bool" ? <p className="text-[10px] leading-snug text-muted">{f.spec.hint}</p> : null}
                 </div>
               );
             })}

@@ -56,16 +56,16 @@ CLICK_KIND_CN = {"play": "观看地址", "detail": "详情"}
 SCOPE_CN = {"all": "全部", "query": "只看搜索", "click": "只看点开"}
 # 后台分标签页。一整页 11 块太长了：进后台多数只想知道"今天有没有人用"，
 # 翻明细、翻 STRM、改设置是完全不同的三件事，不该都挤在同一条滚动里。
-# 分组的唯一口径就这一处：tab 校验、标签栏、侧边目录、模板上的 data-grp 都从它生成，
+# 分组的唯一口径就这一处：tab 校验、左侧菜单、右侧目录、/api/admin/view 里的 tabs 都从它生成，
 # 加一块内容时只改这里，不会出现"块归在总览、目录却写在明细"这种对不上的情况。
-# 每个块 = (锚点 id, 目录里显示的名字)
+# 每个块 = (锚点 id, 目录里显示的名字)；这里的顺序就是菜单与目录的顺序
 ADMIN_TABS = {
     "overview": {"label": "总览", "blocks": [
         ("stat", "汇总卡片"), ("days", "按天"), ("top-kw", "热门关键词"),
         ("top-ip", "活跃 IP"), ("agents", "浏览器 / 设备"), ("refs", "来源页"),
         ("geo", "IP 归属地地图")]},
     "detail": {"label": "明细", "blocks": [
-        ("behavior", "像脚本的行为特征"), ("detail", "明细")]},
+        ("detail", "明细"), ("behavior", "像脚本的行为特征")]},
     "strm": {"label": "Emby STRM", "blocks": [
         ("strm", "采集与状态"), ("strm-zips", "分卷包"), ("strm-src", "各源采集进度")]},
     "settings": {"label": "设置", "blocks": [("settings", "运行设置")]},

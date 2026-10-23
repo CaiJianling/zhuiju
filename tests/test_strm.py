@@ -837,6 +837,7 @@ print("\n13) 后台页与登录门槛（后台已转 React：门槛在 /api/admi
 # 数据搬到 view 的 smeta/sspec/sjob，写法（表单、按钮、四类状态文案）搬到 web/src/admin/Strm.tsx。
 strm_tsx = (BASE / "web" / "src" / "admin" / "Strm.tsx").read_text(encoding="utf-8")
 ui_tsx = (BASE / "web" / "src" / "admin" / "ui.tsx").read_text(encoding="utf-8")
+clamp_ts = (BASE / "web" / "src" / "hooks" / "useClamp.ts").read_text(encoding="utf-8")
 admin_api_ts = (BASE / "web" / "src" / "admin" / "api.ts").read_text(encoding="utf-8")
 shell = client.get("/admin").get_data(as_text=True)
 denied = client.get("/api/admin/view?tab=strm").get_json()
@@ -995,9 +996,10 @@ check("库里没游标时那张表也照样给出（首轮进度才有地方落�
 check("两类分卷表都在（tv 一类还没打包时也要有地方填第一轮的结果）",
       '["movie", "tv"].map((kind)' in strm_tsx, None)
 # (b) 内联滚动框重量高度：旧版往 DOM 里塞完行后 dispatchEvent('resize') 逼 foldH 重算；
-#     React 的 Fold 用 ResizeObserver 观察容器，行变了自然重新量。等价形态钉 ResizeObserver。
-check("行塞进去之后会重量一次内联滚动框高度（旧靠手动 resize 事件，React 里是 ResizeObserver）",
-      "new ResizeObserver" in ui_tsx and "dispatchEvent" not in strm_tsx, None)
+#     现在 Table 的限高统一走 hooks/useClamp：ResizeObserver 管宽度，MutationObserver 管行落地。
+check("行塞进去之后会重量一次内联滚动框高度（旧靠手动 resize 事件，现在是 useClamp 的两个 observer）",
+      "new ResizeObserver" in clamp_ts and "new MutationObserver" in clamp_ts
+      and "dispatchEvent" not in strm_tsx, None)
 # (b) data-running 那个「多久问一次」的开关写在 DOM 属性上，React 里没有：
 #     节奏直接由 status 接口回来的 running 决定。
 check("轮询节奏由状态接口回来的 running 决定（不再有 data-running 那个 DOM 开关）",

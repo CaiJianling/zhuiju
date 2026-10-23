@@ -125,6 +125,13 @@
     animation: drawer-in-bottom 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
   }
 
+  /* 手机上的详情抽屉是从下面贴边推上来的：不躲开 home indicator，
+     最后一行观看地址就正好被那道横条盖住。shell.html 的 viewport 带了 viewport-fit=cover，
+     env() 在这里才不是恒等于 0。 */
+  .drawer__dialog--bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   .drawer__dialog--top {
     animation: drawer-in-top 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
   }
@@ -171,6 +178,33 @@
     .drawer__backdrop {
       animation: none;
     }
+  }
+
+  /* 详情是「从那张海报长出来」的（View Transitions 的共享元素morph），三条约定：
+     1) 面板里这一格常驻 cover-active 这个名字；列表里那张海报由 JS 在点开/缩回的
+        那一拍临时挂上、挂完就摘 —— 同屏两个元素重名的话浏览器判定冲突、整个过渡不做。
+     2) root 那一档关掉淡入淡出：整屏跟着闪一下才是真正晃眼的东西，动的应该只有那张图。
+     3) 有 VT 可用时别再让抽屉自己滑一遍：面板滑入 + 海报缩放两个动画叠着，
+        看着就是"整块在抖"。缩放只在这张图上做，其余内容一次到位。 */
+  .vt-hero {
+    view-transition-name: cover-active;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+
+  ::view-transition-group(cover-active) {
+    animation-duration: 0.42s;
+    animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+    /* 盖在 root 那份快照上面，否则海报缩放到一半会被整屏的新状态压住 */
+    z-index: 1;
+  }
+
+  html.vt-ok .drawer__dialog--right,
+  html.vt-ok .drawer__dialog--bottom {
+    animation: none;
   }
 
   /* 详情按钮常驻可见的补充：整张海报都是点击区（触屏上尤其重要 ——
@@ -252,14 +286,52 @@
   .map-mk { fill: var(--accent); stroke: var(--surface); stroke-width: .4; cursor: pointer; }
   .map-mk:hover { fill: var(--accent-hover); }
 
-  /* 命中过脚本行为特征的那一行：左边一条红，扫表格时先看见"哪几行有问题" */
-  .row-suspicious {
+  /* 命中过脚本行为特征的那一行：左边一条红，扫表格时先看见"哪几行有问题"。
+     着色必须落在单元格上 —— HeroUI 的 Table 给每个 .table__cell 都配了不透明底色，
+     写在 <tr> 上的背景与 inset 阴影会被单元格整个盖住（老版表格没有单元格底色，
+     所以那时写在行上是看得见的）。 */
+  .row-suspicious > .table__cell:first-child {
     box-shadow: inset 2px 0 0 var(--danger);
   }
 
   /* 点开行（观看/详情）与搜索行在合流列表里要一眼分开 */
-  .row-click {
-    background: color-mix(in oklab, var(--accent) 6%, transparent);
+  .row-click > .table__cell {
+    background: color-mix(in oklab, var(--accent) 6%, var(--surface));
+  }
+
+  /* 后台表格的密度。HeroUI 的 .table__cell 默认 px-4 py-3 + text-sm，
+     那张十二列的明细表按默认值铺要宽到没边；密度只在这两处收，
+     不在十几个调用点各写一套 padding（写歪一次就有两种行高，行高是限高量出来的）。 */
+  .tbl-dense :is(.table__cell, .table__column) {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  .tbl-plain :is(.table__cell, .table__column) {
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+
+  /* 内联滚动那个框（后台每张表、前台的检索快照）：滚动条收成细条并跟着主题走。
+     默认那条又粗又是系统色，暗色下就是一道白槽，还要从宽表本来就不够的横向空间里
+     再吃掉几像素。 ---------------- */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   /* 检索中的不确定进度条。HeroUI v3 的 ProgressBar 没有 indeterminate 态

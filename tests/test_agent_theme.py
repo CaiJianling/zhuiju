@@ -190,111 +190,139 @@ finally:
     stats_mod.MIGRATE_ERROR = ""
     stats_mod.ensure_schema()
 
-print("\n6) 主题：MDUI 2 装载顺序 + 三态切换 + 页面接线")
+print("\n6) 主题：前后台共用一个 heroui-theme（壳里首帧脚本 + theme.js 的无框架三态）")
 css = (BASE / "zhuiju" / "static" / "app.css").read_text(encoding="utf-8")
 import re
 root = css[css.index(":root {"):css.index("\n}", css.index(":root {"))]
-body = css[css.index("\n}", css.index(":root {")):]
-# 允许在变量定义里写死颜色（海报那一层就是不跟主题翻），不允许直接当属性值用在规则里
-bad = [l.strip() for l in re.findall(r"[^\n]*#[0-9a-fA-F]{3,8}[^\n]*", body)
-       if not l.strip().startswith("--")]
-check("组件规则里没有写死的颜色（颜色一律从 MDUI 令牌来）", not bad, bad[:4])
-check("三态各有选择器：亮 = 默认，暗 = 类，跟随系统 = 类 + 媒体查询",
-      all(t in css for t in (":root, .mdui-theme-light {", ".mdui-theme-dark {",
-                             "@media (prefers-color-scheme: dark) {", ".mdui-theme-auto {")), None)
-# 桥接层：站点语义名（--surface…）全部指向 MDUI 令牌，只有海报那层例外（压在任意封面上）
-bridge = dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", root))
-off = {k for k, v in bridge.items()
-       if re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(", v) and "--mdui-" not in v}
-check(":root 的颜色 token 全部桥到 --mdui-*（海报三层不跟主题翻是仅有的例外）",
-      off <= {"--poster-ink", "--poster-line"}, sorted(off))
-for pair in ("--mdui-color-success", "--mdui-color-warning"):
-    check(f"补的语义色 {pair} 亮暗两边都有（MDUI 只规定了 error 这一组）",
-          css.count(pair + "-light") >= 1 and css.count(pair + "-dark") >= 2, css.count(pair))
-check("旧的手写主题属性没有残留（data-theme 属性、data-stage 舞台轴）",
-      "[data-theme=" not in css and "data-stage" not in css, None)
-
-for name in ("index.html", "admin.html", "human.html"):
-    t = (BASE / "zhuiju" / "templates" / name).read_text(encoding="utf-8")
-    check(f"{name} 用同一份主题装载（_theme.html），不各写一份", "_theme.html" in t)
-    check(f"{name} 的主题装载在 app.css 之前（否则暗色用户刷新闪白）",
-          t.index("_theme.html") < t.index("app.css"), None)
-    if name != "human.html":
-        check(f"{name} 有切换按钮并挂了 theme.js", "data-theme-toggle" in t and "theme.js" in t, None)
+# (b) 这一节原来读 static/app.css 的 MDUI 令牌桥、_theme.html 里的 mdui.css / mdui.global.js /
+#     setColorScheme / localStorage('mdui-theme')，以及 theme.js 的 mdui-theme- 类与 mdui.snackbar。
+#     MDUI 整个退出：_theme.html 换成 HeroUI 的 spa/app.css + heroui-theme 键，theme.js 是无框架版
+#     useTheme；index.html、human.html 已不上屏、后台也走 admin_shell.html。原来那十几条按新机制合并重钉：
+#     壳与首帧脚本共用同一个键/同一对 <html> 属性/装在样式前/不引外网，theme.js 三态 + 跟随系统直读 matchMedia。
+sh = (BASE / "zhuiju" / "templates" / "shell.html").read_text(encoding="utf-8")
+ash = (BASE / "zhuiju" / "templates" / "admin_shell.html").read_text(encoding="utf-8")
 th = (BASE / "zhuiju" / "templates" / "_theme.html").read_text(encoding="utf-8")
-# 注释里就写着 defer / CDN 这些词，所以只能查真正的属性写法与真正的引用写法
-check("装载全在本地：不引外网、不 defer",
-      "<script defer" not in th and 'src="http' not in th and 'href="http' not in th
-      and "unpkg.com" not in th, None)
-check("顺序：主题类 → mdui.css → mdui.global.js → 主色（页面的 app.css 排在后面）",
-      # 注释里就把这几个名字提了一遍，所以只能比真正的标签写法
-      th.index("classList.add('mdui-theme-'") < th.index("filename='vendor/mdui/mdui.css'")
-      < th.index("filename='vendor/mdui/mdui.global.js'")
-      < th.index("mdui.setColorScheme('#3566E6')"), None)
-check("预置读 MDUI 那个键，非法值一律当跟随系统",
-      "localStorage.getItem('mdui-theme')" in th
-      and "if (t !== 'light' && t !== 'dark') t = 'auto';" in th, None)
-check("主色在首帧生成（等加载完再改会先紫后蓝闪一下），bundle 没跑起来也不报错",
-      "mdui.setColorScheme('#3566E6')" in th and "window.mdui &&" in th, None)
 tj = (BASE / "zhuiju" / "static" / "theme.js").read_text(encoding="utf-8")
-check("theme.js 三态循环，改的是 MDUI 的类",
-      all(k in tj for k in ('"auto"', '"light"', '"dark"'))
-      and 'classList.add("mdui-theme-"' in tj and 'classList.remove("mdui-theme-"' in tj, None)
-check("选择记在 mdui-theme 键；写不了也不崩（无痕模式）",
-      'KEY = "mdui-theme"' in tj and "setItem" in tj and "catch" in tj, None)
-check("跟随系统那档实时跟着系统变（类名看不出来，必须问 matchMedia）",
-      'addEventListener("change"' in tj or "addListener" in tj, None)
-check("切换有回音：MDUI 的 snackbar；存不进去时不谎报已保存",
-      "mdui.snackbar" in tj and "已保存 ·" in tj and "这台浏览器不给存" in tj, None)
-check("首屏预置不走 apply，所以不会一进来就闪一遍渐变",
-      "apply(" not in th.split("<script>")[0], None)
+# (a) 前后台共用一份偏好：两个壳 + 登录兜底页 include 的 _theme.html 都读同一个 localStorage 键。
+check("前后台读同一个主题键（shell.html、admin_shell.html、_theme.html 都是 heroui-theme）",
+      all("localStorage.getItem('heroui-theme')" in t for t in (sh, ash, th)), None)
+# (a) 旧版写的是 mdui-theme- 那一串类；新机制三处都写同一对 <html> 属性（class + data-theme）。
+check("三处都写同一对 <html> 属性（class 上加生效档、data-theme 同值），切一次两边一起翻面",
+      all("d.classList.add(r);" in t and "d.setAttribute('data-theme', r);" in t
+          for t in (sh, ash, th)), None)
+check("首帧脚本装在页面样式之前（否则暗色用户刷新会先白一下）",
+      sh.index("localStorage.getItem('heroui-theme')") < sh.index("filename='spa/app.css'")
+      and ash.index("localStorage.getItem('heroui-theme')") < ash.index("filename='spa/app.css'")
+      and th.index("localStorage.getItem('heroui-theme')") < th.index("filename='spa/app.css'"), None)
+check("装载全在本地：不引外网、不 defer",
+      'src="http' not in sh.split("</head>")[0] and "unpkg" not in th
+      and "<script defer" not in th and "mdui" not in th, None)
+# (a) theme.js 是无框架版三态：system/light/dark 循环，改的还是同一对 <html> 属性（不再是 mdui-theme-）。
+check("theme.js 三态循环，改的是同一对 <html> 属性（不再是 mdui-theme- 那套）",
+      all(k in tj for k in ('"system"', '"light"', '"dark"'))
+      and "root.classList.add(r)" in tj and 'root.setAttribute("data-theme", r)' in tj
+      and "mdui-theme-" not in tj, None)
+check("选择记在 heroui-theme 键；写不了也不崩（无痕模式）",
+      'KEY = "heroui-theme"' in tj and "setItem" in tj and "catch" in tj, None)
+# 这条钉的是刚修的真 bug：解析"跟随系统"时必须直接问 matchMedia，不能经由 stored()/applied()。
+# 旧写法在 write 里用 applied()（= resolve(stored())），而调用 write 时 localStorage 还是上一个选择，
+# 于是"跟随系统"被解析成切换前的旧值 —— 现象就是按钮说"亮色"、页面还黑着。write 里留着这条注释与
+# 正确写法 var r = resolve(mode)；判据钉"直接赋值 resolve(mode) + 绝不出现 var r = applied()"。
+m_resolve = tj[tj.index("function resolve"):tj.index("function applied")]
+check("跟随系统那档在写属性之前直接问 matchMedia，不绕 applied()/stored()（避免读到切换前的旧值）",
+      "var r = resolve(mode);" in tj and "matchMedia(\"(prefers-color-scheme: dark)\")" in m_resolve
+      and "不能用 applied()" in tj and "var r = applied()" not in tj, None)
+check("系统偏好变了实时跟着改，但只动跟随系统那一档（手动锁了亮暗不许被翻面）",
+      ('addEventListener("change"' in tj or "addListener" in tj)
+      and 'stored() === "system"' in tj, None)
 
-print("\n7) 后台页面真的把两列渲染出来了")
+print("\n7) 后台页面真的把两列渲染出来了（后台已转 React：数据在 view，列在组件里）")
 cfg = admin_mod.load()
 admin_mod.save({"password": "ce-shi-mi-ma", "secret_key": cfg["secret_key"], "password_is_temp": False})
 from zhuiju.app import create_app  # noqa: E402
 
+# (a) 原来这一节 grep /admin 那页 HTML 的表头/面板/筛选控件。后台转 React 后：明细列由 Detail.tsx 的
+#     表头数组定义、聚合面板由 Overview.tsx 的 Block 定义、筛选项在 Filters.tsx；数据在 /api/admin/view。
+#     csrf 也从 view 的 401 body 拿，不再从 HTML 里正则抠。
+AD = BASE / "web" / "src" / "admin"
+detail_ts = (AD / "Detail.tsx").read_text(encoding="utf-8")
+overview_ts = (AD / "Overview.tsx").read_text(encoding="utf-8")
+filters_ts = (AD / "Filters.tsx").read_text(encoding="utf-8")
 c = create_app().test_client()
-h = c.get("/admin").get_data(as_text=True)
-tok = re.search(r'name="csrf" value="([0-9a-f]+)"', h).group(1)
+tok = c.get("/api/admin/view").get_json()["csrf"]
 c.post("/admin/login", data={"csrf": tok, "password": "ce-shi-mi-ma"})
-d = c.get("/admin").get_data(as_text=True)
-check("明细表头有浏览器列", "<th>浏览器</th>" in d)
-check("明细表头有来源页列", "<th>来源页</th>" in d)
-check("有浏览器分布面板", "浏览器 / 设备" in d)
-check("有来源分布面板", "来源页（对方从哪来）" in d)
-check("筛选表单有浏览器与来源控件", 'name="browser"' in d and 'name="ref_kind"' in d and 'name="device"' in d)
-check("页脚说明了 Referer 的限制", "Referrer-Policy" in d)
-check("页脚说明了 UA 可伪造", "User-Agent" in d and "伪造" in d)
-r = c.get("/admin?browser=" + "Edge 124.0").get_data(as_text=True)
-check("按浏览器筛选后仍 200", "第 1 /" in r and 'name="browser" value="Edge 124.0"' in r)
-r = c.get("/admin?ref_kind=site").get_data(as_text=True)
-check("按来源类型筛选正常", r.count('name="ref_kind"') >= 1)
-r = c.get("/admin?ref_kind=bogus").get_data(as_text=True)
-check("非法来源类型当没填", "Edge 124.0" in r)      # 没被筛成空
+dv = c.get("/api/admin/view?tab=detail").get_json()
+check("明细表头有浏览器列", '"浏览器"' in detail_ts, None)
+check("明细表头有来源页列", '"来源页"' in detail_ts, None)
+check("有浏览器分布面板（那个块的标题就是「浏览器 / 设备」）",
+      'id="agents" title="浏览器 / 设备"' in overview_ts, None)
+# (c) 来源面板判据仍成立，锚点从旧标题「来源页（对方从哪来）」换成组件里实际的块标题「来源页」。
+check("有来源分布面板（块标题是「来源页」，那段括注老文案没进 SPA）",
+      'id="refs" title="来源页"' in overview_ts, None)
+check("筛选表单有浏览器与来源控件（browser 是文本项、ref_kind/device 是下拉项）",
+      '["browser", "浏览器", "text"]' in filters_ts and '["ref_kind", "来源类型"' in filters_ts
+      and '["device", "设备"' in filters_ts, None)
+# (b) 旧页脚那两句关于 Referer 与 UA 的散文本来只在退役的 admin.html 里；移植时确实丢了，
+#     现在按原意补回活的那两处：Referer 的限制挂在「来源页」那一栏下面，UA 不可全信挂在行为特征那一栏。
+check("来源页那一栏写明了 Referer 的限制（能给多少由 Referrer-Policy 决定，拿不到就不编）",
+      "Referrer-Policy" in overview_ts and "拿不到就不编" in overview_ts
+      and "直接访问" in overview_ts and "分不开" in overview_ts, None)
+check("页脚说明了 UA 可伪造（明细/行为那块把 UA 只当提示、不当身份）",
+      "判读只是提示，不是判决" in detail_ts
+      and "UA 是客户端自由发挥" in detail_ts, None)
+bv = c.get("/api/admin/view?browser=" + "Edge 124.0").get_json()
+check("按浏览器筛选后仍 200，且回填到条件里",
+      c.get("/api/admin/view?browser=" + "Edge 124.0").status_code == 200
+      and bv["flt"]["browser"] == "Edge 124.0", bv["flt"].get("browser"))
+rv = c.get("/api/admin/view?ref_kind=site").get_json()
+check("按来源类型筛选正常", rv["flt"]["ref_kind"] == "site", rv["flt"].get("ref_kind"))
+rv2 = c.get("/api/admin/view?ref_kind=bogus").get_json()
+plain = c.get("/api/admin/view").get_json()
+check("非法来源类型当没填（结果没被筛成空，与不填同一条 SQL 口径）",
+      rv2["rows"]["total"] == plain["rows"]["total"] and rv2["rows"]["total"] >= 1,
+      (rv2["rows"]["total"], plain["rows"]["total"]))
 
-print("\n8) 令牌桥接体检：换主题只改 MDUI 的令牌，站点这层不藏颜色")
+print("\n8) 令牌桥接体检：换主题只改主题令牌，站点这层不藏颜色（活的那份在 web/src/styles.css）")
+# (a) 顺带：app.css 现在只剩登录兜底页在用，后台/前台主体配色已走 web/src/styles.css + HeroUI 令牌。
+#     原来从 app.css 读调色板算对比来源的这套体检，一半按新令牌重钉（app.css 现在桥的是 HeroUI 令牌），
+#     一半搬到真正活着的 styles.css（.who-* / .num / --foreground/--muted/--surface 配对）。
+styles_css = (BASE / "web" / "src" / "styles.css").read_text(encoding="utf-8")
 bridge8 = dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", root))
-# 这几对是页面上真实存在的搭配。查的不是对比度数值 —— 那由 MDUI 加 setColorScheme 在运行时
-# 决定，静态算不出来（实测在浏览器里量，数字记在 docs/theme.md）。这里查的是来源：
-# 谁把某个 token 改回写死的十六进制，它就脱离主题系统，暗色下第一个坏掉的就是它
+# 这几对是页面上真实存在的搭配。查的不是对比度数值 —— 那由主题令牌在运行时决定、静态算不出来。
+# 查的是来源：谁把某个 token 改回写死的十六进制，它就脱离主题系统，暗色下第一个坏掉的就是它。
+# (c) 判据不变（成对语义 token 都从主题令牌派生、不各自写死），锚点从 --mdui- 换成 HeroUI：
+#     app.css 现在把 --ink 等桥到 var(--foreground)/var(--muted)/var(--accent) 这串 HeroUI 令牌。
 for fg, bg in (("--ink", "--surface"), ("--ink-2", "--surface-2"), ("--brand", "--brand-soft"),
                ("--ok", "--ok-bg"), ("--bad", "--bad-bg"), ("--warn", "--warn-bg"),
                ("--on-accent", "--brand"), ("--dim", "--surface")):
-    check(f"{fg} / {bg} 都是从 MDUI 令牌派生的（不各自写死）",
+    check(f"{fg} / {bg} 都是从主题令牌派生的（不各自写死）",
           fg in bridge8 and bg in bridge8
-          and "--mdui-" in bridge8[fg] and "--mdui-" in bridge8[bg],
+          and "var(--" in bridge8[fg] and "var(--" in bridge8[bg],
           (bridge8.get(fg), bridge8.get(bg)))
-check("海报上那层是例外：不跟主题翻（跟着 --on-accent 翻成近黑就成了黑压黑）",
-      bridge8["--poster-ink"].startswith("rgb(255")
-      and "mdui-color-scrim" in bridge8["--poster-scrim"],
+# (c) 海报那层仍是仅有的例外、不跟主题翻；只是写死的值从 rgb(255..) 变成 #fff、scrim 从 mdui-color-scrim
+#     变成写死的 rgba —— 判据"它不引主题令牌、是硬编码"原样成立，锚点换了。
+check("海报上那层是例外：不跟主题翻（硬编码，不引 --foreground 那套令牌）",
+      not bridge8["--poster-ink"].startswith("var(")
+      and not bridge8["--poster-scrim"].startswith("var("),
       (bridge8.get("--poster-ink"), bridge8.get("--poster-scrim")))
-VENDOR = BASE / "zhuiju" / "static" / "vendor" / "mdui"
-check("vendored 的 MDUI 真的在仓库里（不引 CDN），并且记了版本号",
-      (VENDOR / "mdui.css").stat().st_size > 1000
-      and (VENDOR / "mdui.global.js").stat().st_size > 100000
-      and re.match(r"^\d+\.\d+\.\d+$",
-                   (VENDOR / "VERSION").read_text(encoding="utf-8").strip()) is not None, None)
+# (b) 这一条原来钉的是"vendored 的 MDUI 在仓库里且不引 CDN"。MDUI 整个退出后，仓库里只剩几个
+#     没人引用的死文件（见 docs/frontend.md 那份清单），继续钉它等于给死代码上保险 ——
+#     判据反过来：所有还会上屏的表面（两个壳、_theme.html、两份 CSS、theme.js、React 源码）里
+#     一处 mdui 都不许剩，否则说明有东西还在偷偷引它。
+LIVE = [sh, ash, th, css, styles_css, tj] + [
+    p.read_text(encoding="utf-8") for p in (BASE / "web" / "src").rglob("*.ts*")]
+check("MDUI 在所有还会上屏的表面里一处不剩（不引它、也不给它留引用）",
+      not [w for t in LIVE for w in re.findall(r"mdui[\w.-]*", t)],
+      sorted({w for t in LIVE for w in re.findall(r"mdui[\w.-]*", t)})[:4])
+check("--surface 这一档不在 app.css 里桥：HeroUI 自己就叫这个名字，写自引用会被判成循环、"
+      "整个变量空掉（现象是后台卡片全透明）",
+      not re.search(r"^\s*--surface\s*:", root, re.M)
+      and "var(--surface-secondary)" in root and "var(--surface-tertiary)" in root,
+      re.findall(r"--surface[a-z0-9-]*\s*:\s*[^;]+", root))
+check("圆角写死 px：Tailwind v4 会把没用到的 --radius-* 从产物里剔掉，引用它得到空值（卡片角全变直角）",
+      all(re.match(r"^\s*\d+px$", bridge8.get(k, "")) for k in ("--r-cover", "--r-m", "--r-l", "--r-pill"))
+      and not re.findall(r"border-radius:\s*var\(--radius", css),
+      {k: bridge8.get(k) for k in ("--r-cover", "--r-m", "--r-l", "--r-pill")})
 
 gobtn = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
                         re.search(r"\.gobtn \{([^}]*)\}", css).group(1)))
@@ -308,27 +336,48 @@ check("主按钮与输入框同一套圆角（都走 --r-pill，按钮一律药�
       (gobtn.get("border-radius"), field_input.get("border-radius")))
 check("全站不再有第二种药丸写法（99px / 999px 那种硬编码已收干净）",
       "border-radius: 99px" not in css and "border-radius: 999px" not in css, None)
-check("圆角与阴影取 MDUI 的 shape / elevation，不留自造的数",
-      bridge8["--r-pill"].startswith("var(--mdui-shape")
-      and bridge8["--r-l"].startswith("var(--mdui-shape")
-      and bridge8["--shadow-s"].startswith("var(--mdui-elevation")
-      and bridge8["--shadow-m"].startswith("var(--mdui-elevation"), None)
-check("字号也走 MDUI 的 typescale（原来那套 11 / 11.5px 是自造的）",
-      bridge8["--fs-min"].startswith("var(--mdui-typescale")
-      and bridge8["--fs-sm"].startswith("var(--mdui-typescale")
-      and bridge8["--fs-input"].startswith("var(--mdui-typescale"), None)
-unified = re.search(r"\.pbtn, \.pager a, \.jumpbtn, \.themebtn, \.fbtn, \.frontbtn \{", css)
-check("翻页/跳转/主题/筛选/回前台胶囊合并成一处定义", unified is not None)
-check("主题切换渐变只在切换期间生效，时长取 MDUI 的 motion 令牌",
-      ".theme-anim" in css and "prefers-reduced-motion" in css
-      and "--mdui-motion-duration-medium2" in css, None)
-check("没 JS 的浏览器上未注册的组件不露裸文本（:not(:defined) 那条）", ":not(:defined)" in css, None)
-ajs3 = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
-check("换成自定义元素后回车仍然提交表单（「回车即可」这句承诺不能落空）",
-      "form.requestSubmit()" in ajs3 and "e.key !== 'Enter'" in ajs3, None)
-check("进度条改喂 value（旧的 .progbar > i 百分比宽度随组件一起删了）",
-      "setAttribute('value'" in ajs3 and "querySelector('.progbar" not in ajs3
-      and "progbar" not in css, None)
+# (a) "圆角/阴影/字号不各自写死" 的活体检搬到 styles.css：后台那几档真人/脚本徽章（.who-*）全部引
+#     HeroUI 状态令牌、数字 .num 走 --font-mono、页面前景底色引 --foreground/--background —— 谁改回硬编码
+#     颜色就脱离主题系统。（app.css 那份 radius 现在是登录兜底页的硬编码 999px，不再作为"取主题令牌"的判据。）
+who_rules = re.findall(r"\.who-[a-z][^{]*\{([^}]*)\}", styles_css)
+check("后台 .who-* 徽章全部从 HeroUI 状态令牌派生（不各自写死颜色）",
+      who_rules and all(("var(--" in r or "color-mix" in r) for r in who_rules), who_rules)
+check("数字 .num 走等宽令牌并 tabular-nums（一列数字对得齐）",
+      "--font-mono" in styles_css and "tabular-nums" in styles_css
+      and re.search(r"\.num \{[^}]*--font-mono", styles_css) is not None, None)
+check("页面前景/底色都引 HeroUI 的 foreground/background 令牌",
+      "var(--foreground)" in styles_css and "var(--background)" in styles_css, None)
+# (a) 「胶囊合并成一处定义」原来钉的是 app.css 里那条联合选择器（.pbtn/.pager a/.jumpbtn…）。
+#     那批类随旧前端一起不上屏了；React 这边药丸是 Tailwind 的 rounded-full，
+#     判据换成"活表面上只允许这一种药丸写法"：既没有 rounded-[...] 那种临时半径，
+#     app.css 里也只剩登录兜底页那一处在引 var(--r-pill)。
+react_ts = "".join(p.read_text(encoding="utf-8")
+                   for p in sorted((BASE / "web" / "src").rglob("*.tsx")))
+check("药丸只有一种写法：React 侧一律 rounded-full，没有临时半径；app.css 的联合胶囊规则已退役",
+      react_ts.count("rounded-full") > 10 and "rounded-[" not in react_ts
+      and "border-radius: 99px" not in css and "border-radius: 999px" not in css,
+      (react_ts.count("rounded-full"), re.findall(r"rounded-\[[^\]]*\]", react_ts)[:3]))
+# (c) 主题切换只在那 0.3s 里过渡、reduced-motion 下停住 —— 判据不变；时长不再取 MDUI 的 motion 令牌，
+#     改成 styles.css 里写死的 0.3s（活的那份），所以锚点从 --mdui-motion-… 搬到 styles.css 的 .theme-anim。
+check("主题切换渐变只在切换期间生效、且 reduced-motion 下不拖慢",
+      ".theme-anim" in styles_css and "prefers-reduced-motion" in styles_css
+      and "0.3s" in styles_css, None)
+# (b) :not(:defined) 是给 MDUI 那批自定义元素兜底（没注册的组件不露裸文本）；MDUI 整个退出、前台换成 React
+#     组件树，没有自定义元素可"未注册" —— 这条在新架构没有原样载体。等价那半：活 CSS 里对 reduced-motion
+#     的收口仍在（不再需要 :not(:defined)）。
+check("没有自定义元素需要 :not(:defined) 兜底了（MDUI 退出；a11y 收口改由 reduced-motion 那条守）",
+      ":not(:defined)" not in styles_css and "prefers-reduced-motion" in styles_css, None)
+# (b) 这两条钉的是 static/app.js 里的回车提交与进度条喂 value。app.js 已不上屏：
+#     「回车即查」在 React 是 SearchBar 的 onSubmit（禁 JS 时由壳里那张原生 GET 表单接手，
+#     回车本来就是浏览器的行为）；进度条在 React 是 .bar-run（跑着的那道）与 HeroUI 的 ProgressBar。
+sb = (BASE / "web" / "src" / "components" / "SearchBar.tsx").read_text(encoding="utf-8")
+ah = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
+check("回车仍然提交（React 走 form onSubmit，禁 JS 那份是原生 <form method=get>，都不靠脚本补）",
+      "onSubmit={(e) => {" in sb and 'e.preventDefault()' in sb
+      and '<form method="post" action="{{ url_for(\'admin_login\') }}" class="loginform">' in ah, None)
+check("进度条不再靠 app.js 喂 value：跑着的那道是 CSS 的 .bar-run，定量那道是 HeroUI ProgressBar",
+      ".bar-run" in styles_css and "bar-slide" in styles_css and "progbar" not in css
+      and "<ProgressBar" in react_ts, None)
 
 print("\n9) 宽度、系统列、归属地只到国家")
 # 这一节自带数据：不依赖前面留下的记录，否则改到别的节就会莫名其妙红
@@ -340,322 +389,236 @@ for ip, ua_ in (("223.5.5.5", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWe
                                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")):
     stats_mod.record("宽度用例", ip, via="api", results=4, ua=ua_,
                      referrer="http://127.0.0.1:5000/", own_hosts=OWN)
-d2 = c.get("/admin").get_data(as_text=True)
-wrap = re.search(r"\.wrap \{([^}]*)\}", css).group(1)
-check("内容宽度随屏走、有上限，上限走 --measure（不再写死一个数）",
-      "min(var(--measure), 100% - 48px)" in wrap and "--measure: 1680px;" in root, wrap.strip())
-check("前台收到阅读宽度，后台不吃这一档（数据表本来就要横向铺）",
-      "body.home { --measure: 1280px; }" in css, None)
-check("边框算在宽度内（不会溢出横向滚动）", "box-sizing: border-box" in wrap)
-ladder = [(int(m.group(2)), m.group(1), int(m.group(3))) for m in
-          re.finditer(r"@media \((min|max)-width: (\d+)px\)[^{]*\{\s*\.hotgrid \{ --hot-cols: (\d+)", css)]
-check("宽屏补了列数，不会一行 6 张右边空一大片",
-      {c for _, _, c in ladder} >= {9, 7, 5}, ladder)
-wide = {c for _, kind, c in ladder if kind == "min"}
-check("两条 min-width 断点互不重叠且都大于基础 6 列", wide == {9, 7} and min(wide) > 6, wide)
+# (a) 这一段原来全在 grep app.css 的 .wrap / --measure / .hotgrid 那三条媒体查询。
+#     前台转 React 后"内容宽度"落在 Tailwind 类上（App.tsx 的 max-w-[1440px] + px-4/sm:px-6），
+#     猜你想搜的列数阶梯落在 HotSection 的 grid-cols-* 上；后台那张宽表吃的是另一档（1680px）。
+#     判据按这三处重钉：随屏走、有上限、前后台不同档、宽屏补列数。
+import pathlib as _pl
+app_tsx = _pl.Path(BASE / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
+hot_tsx = _pl.Path(BASE / "web" / "src" / "components" / "HotSection.tsx").read_text(encoding="utf-8")
+adminapp_tsx = _pl.Path(BASE / "web" / "src" / "admin" / "AdminApp.tsx").read_text(encoding="utf-8")
+check("内容宽度随屏走、有上限：前后台同一档 1680，边距随屏给（不再写死一个数）",
+      app_tsx.count("max-w-[1680px]") == 3 and "max-w-[1680px]" in adminapp_tsx
+      and "px-4 sm:px-6" in app_tsx, app_tsx.count("max-w-[1680px]"))
+check("前后台不再各用一档宽度（统一 1680，后台那张宽表也放得下）",
+      "max-w-[1440px]" not in app_tsx + adminapp_tsx, None)
+# (b) 旧那条"box-sizing: border-box"是给 .wrap 手写内边距兜底的，Tailwind 的 preflight 全站统一给了。
+#     等价的新坑是栅格项默认 min-width:auto 顶在长内容上把整页撑宽 —— 前台靠 minmax(0,1fr)，
+#     后台靠 min-w-0，两处都要在
+check("栅格项允许缩到 0（长内容不会把整页顶得能横着拖）：前台 minmax(0,1fr)、后台 min-w-0",
+      "minmax(0,1fr)" in app_tsx and "min-w-0" in adminapp_tsx, None)
+# (b) 原来"宽屏补列数"钉的是 HotSection 的 grid 阶梯。现在整行横着滚、不按断点重排：
+#     一颗宽度 31%（手机三颗）且有 176px 上限，宽屏靠多露几颗而不是把海报摊成墙。
+check("猜你想搜是一条横滚条，不按断点重排：每颗 31% 起、上限 176px，宽屏自然多露几颗",
+      'className="scroll-thin snap-x flex gap-4 overflow-x-auto pb-1"' in hot_tsx
+      and 'const CELL = "w-[31%] min-w-[104px] max-w-[176px] shrink-0 snap-start";' in hot_tsx
+      and "const BATCH = 12;" in hot_tsx, None)
+check("横滚条只看右侧哨兵（root 是条本身，rootMargin 只往右放 260px），左端不会误触发补数",
+      'root: el, rootMargin: "0px 260px 0px 0px"' in hot_tsx
+      and 'aria-label={`把${label}往回滚`}' in hot_tsx
+      and 'aria-label={`把${label}往后滚`}' in hot_tsx, None)
 
-def detail_only(html):
-    """只取 #detail 到 #geo 之间的片段。
-    之前用 split("明细") 会被归属地那块注释里的"明细"两个字切到最后一段，取到的不是表格。
-    按 <th>时间 定位也一样会跑偏：明细改了列，切过去可能量到归属地那张表的行。"""
-    return html[html.index('id="detail"'):html.index('id="geo"')]
-
-
-d2 = c.get("/admin").get_data(as_text=True)
-dtail = detail_only(d2)
-head = re.search(r"<thead><tr>(.*?)</tr>", dtail, re.S).group(1)
-cols = re.findall(r"<th[^>]*>([^<]+)</th>", head)
+# (a) 明细表的列、系统格筛选这些原来 grep /admin 渲染出的 <th>/<td>。转 React 后：列顺序在 Detail.tsx
+#     的表头数组里、每一行的系统与归属地在 view 的 rows.items 上、可点筛选是 filterUrl({ os })。逐条搬。
+heads = re.findall(r'head=\{\[(.*?)\]\}', detail_ts, re.S)
+detail_head = next((hd for hd in heads if "浏览器" in hd and "系统" in hd), "")
+cols = re.findall(r'"([^"]+)"', detail_head)
 check("明细有独立的系统列", "系统" in cols, cols)
 check("系统列排在浏览器之后", cols.index("系统") == cols.index("浏览器") + 1, cols)
-i_os = cols.index("系统")
-row0 = re.search(r"<tbody>\s*<tr[^>]*>(.*?)</tr>", dtail, re.S).group(1)
-cells = [re.sub(r"<[^>]+>", " ", x).strip() for x in
-         re.findall(r"<td[^>]*>(.*?)</td>", row0, re.S)]
-check("系统格里有真实系统名或未知", any(k in cells[i_os] for k in
-      ("Windows", "macOS", "iOS", "Android", "Linux", "未知")), cells[i_os])
-check("系统格可点筛选", f'/admin?os=' in re.search(r"<td[^>]*>(.*?)</td>",
-      re.findall(r"<td[^>]*>.*?</td>", row0, re.S)[i_os], re.S).group(1))
-check("筛选栏有系统输入框", 'name="os"' in d2)
-check("按系统筛选能用", "macOS" in c.get("/admin?os=macOS").get_data(as_text=True))
+dv9 = c.get("/api/admin/view?tab=detail").get_json()
+check("系统格里有真实系统名或未知（数据在 rows.items 的 os 上）",
+      any((it.get("os") or "") in ("Windows 10/11", "macOS", "iOS 17.4", "Linux", "未知")
+          or not it.get("os") for it in dv9["rows"]["items"]),
+      [it.get("os") for it in dv9["rows"]["items"]][:4])
+# (b) 旧版把明细行里的系统格做成一个 /admin?os= 的可点链接；React 的系统列是随行渲染的纯文本，
+#     筛系统改走筛栏的 os 输入框 / filterUrl 那套通用"点一下加一个条件"的机制（服务端 flt 认 os 这键）。
+check("系统仍是可筛的一等条件（行里有这一列、服务端 flt 也认 os 这个键）",
+      "系统" in cols and "os" in dv9["flt"], None)
+check("筛选栏有系统输入框", '["os", "系统", "text"]' in filters_ts, None)
+check("按系统筛选能用（结果里确实有 macOS 那一行）",
+      any((it.get("os") or "") == "macOS" for it in
+          c.get("/api/admin/view?os=macOS").get_json()["rows"]["items"]), None)
 check("按系统前缀也能筛（输 Win 命中 Windows 10/11）",
-      "Windows 10/11" in detail_only(c.get("/admin?os=Win").get_data(as_text=True)))
-bogus_html = c.get("/admin?os=" + "x' OR 1=1").get_data(as_text=True)
+      any((it.get("os") or "") == "Windows 10/11" for it in
+          c.get("/api/admin/view?os=Win").get_json()["rows"]["items"]), None)
+bogus9 = c.get("/api/admin/view?os=" + "x' OR 1=1").get_json()
 check("填了不存在的系统值就给明确的空态，而不是假装没筛",
-      "这个条件下没有记录" in detail_only(bogus_html)
-      # Jinja 会把 ' 转义成 &#39;，所以按转义后的形态比，别比原始串
-      and 'name="os"' in bogus_html and "OR 1=1" in bogus_html)
+      bogus9["rows"]["items"] == [] and "这个条件下没有记录" in detail_ts, None)
 check("注入串被当普通字符串比对，表还在",
-      "这个条件下没有记录" in detail_only(bogus_html)
-      and stats_mod.list_queries({})["total"] > 0)
-
-geo = d2[d2.index("geotbl"):]
-# geo=CN 后面现在还会跟着 &tab=overview（页内链接都带当前标签），所以不能在参数末尾就要求 ">
-pairs = re.findall(r'[?&]geo=([A-Z]{2})[^"]*">([^<]+)<', geo)
+      stats_mod.list_queries({})["total"] > 0 and c.get(
+          "/api/admin/view?os=" + "x' OR 1=1").status_code == 200, None)
+geo9 = c.get("/api/admin/view?tab=overview").get_json()["agg"]["by_geo"]
+# (a) 归属地列表原来从 /admin 的 geotbl 抓 <a ...>国名</a>；转 React 后国家行来自 agg.by_geo 的 country，
+#     两字 ISO 才出完整国名、省市只留在明细那一列。表头"国家 / 地区"是 Overview.tsx 里那张表的列名。
 check("归属地列表只显示国家，不带省市运营商",
-      all(("省" not in v and "市" not in v and "·" not in v) for _, v in pairs), pairs)
-check("国家名取自库里那一列（中国 / Australia 原样）",
-      {"中国", "Australia", "Netherlands"} <= {v for _, v in pairs}, pairs)
-check("表头写的是国家 / 地区而不是含糊的归属地",
-      "<th>国家 / 地区</th>" in geo)
+      all(("省" not in (g["country"] or "") and "市" not in (g["country"] or ""))
+          for g in geo9 if g["iso"]), [(g["iso"], g["country"]) for g in geo9 if g["iso"]])
+check("国家名取自库里那一列（中国 / Australia / Netherlands 原样）",
+      {"中国", "Australia", "Netherlands"} <= {g["country"] for g in geo9 if g["iso"]},
+      sorted(g["country"] for g in geo9 if g["iso"]))
+check("表头写的是国家 / 地区而不是含糊的归属地", '"国家 / 地区"' in overview_ts, None)
 check("明细那一列仍然是带省市的完整归属地", "浙江省杭州市" in
       stats_mod.list_queries({"geo": "CN"})["items"][0]["geo"])
 
 print("\n10) 面板内联滚动：五行的五行，明细十行")
-ah = (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
-# 认身份靠各表自己的第一个表头，不靠 <h2>：明细和归属地那两块的 h2 里带 <span>，
-# 用 h2 配对着正则会直接漏掉这两块
-folded = [(m.group(1), re.search(r"<th>([^<]+)</th>", m.group(2)).group(1))
-          for m in re.finditer(r'<div class="fold" data-fold data-rows="(\d+)">\s*<table[^>]*>'
-                               r'\s*<thead><tr>(.*?)</tr>', ah, re.S)]
-DATA_TABLES = ["日期", "关键词", "IP", "浏览器", "来源", "IP", "时间", "国家 / 地区"]
-check("统计那八块表都包了滚动容器（按天/关键词/IP/浏览器/来源/行为特征/明细/归属地）",
-      [t for _, t in folded][:8] == DATA_TABLES, [t for _, t in folded])
-check("每块包的都是预期那张表（后面新增的区块排在它们之后，不参与这份对照）",
-      [t for _, t in folded[:8]] == DATA_TABLES, [t for _, t in folded[:8]])
-check("除了明细是 10 行，统计那八块都是 5 行（行为特征那节也折叠，别把首屏挤没）",
-      [n for n, _ in folded[:8]] == ["5", "5", "5", "5", "5", "5", "10", "5"],
-      [n for n, _ in folded])
-check("后来加的任何一块（如 Emby STRM 那几块）也得照同一个规矩：包容器、写清 data-rows",
-      len(folded) >= 8 and all(5 <= int(n) <= 10 for n, _ in folded),
-      [(n, t) for n, t in folded[8:]])
-# 表在滚动框里取自然宽度之后，行本身就不会被挤成竖排的字，不需要再逐列 nowrap
-check("明细表没有残留的 .nw（那是被 width:100% 挤出来的补丁，现在从根上修了）",
-      'class="nw"' not in ah and ".table .nw" not in css, ah.count('class="nw"'))
-# 说明文字必须在容器外：不然注意事项也跟着一起滚，第一眼看不到
-fold_spans = [(m.start(), ah.index("</table>", m.start())) for m in
-              re.finditer(r'<div class="fold" data-fold', ah)]
-check("说明文字在滚动容器外", all("atip" not in ah[s:e] for s, e in fold_spans),
-      [ah[s:e].count("atip") for s, e in fold_spans])
-check("没有残留的展开/收起按钮（要做的是内联滚动条，不是点击展开）",
-      "foldbtn" not in ah and "foldbtn" not in css and "is-open" not in ah,
-      (ah.count("foldbtn"), css.count("foldbtn"), ah.count("is-open")))
-
-fold = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
-                       re.search(r"\.fold \{([^}]*)\}", css).group(1)))
-check("容器自己就是滚动区，不在框内滚的写法（hidden）都算错",
-      fold.get("overflow", "").strip() == "auto", fold)
-check("框高不写死在 CSS 里：行高随折行变化，写死会露半行", "max-height" not in fold, fold)
-check("滚动条收成细条，不吃掉表格宽度", fold.get("scrollbar-width", "").strip() == "thin", fold)
-check("滚动条颜色跟着主题变量走，暗色下不会是一道白槽",
-      "var(--" in fold.get("scrollbar-color", ""), fold.get("scrollbar-color"))
-th = dict(re.findall(r"([a-z-]+)\s*:\s*([^;]+);",
-                     re.search(r"\.fold thead th \{([^}]*)\}", css).group(1)))
-check("框内滚动时表头吸顶", th.get("position", "").strip() == "sticky" and th.get("top", "").strip() == "0", th)
-check("吸顶表头有不透明底色，否则行会从字底下透过去",
-      "var(--surface)" in th.get("background", ""), th.get("background"))
-check("吸顶表头的分隔线是 inset box-shadow 而不是 border-bottom",
-      th.get("box-shadow", "").strip() == "inset 0 -1px 0 var(--line)", th.get("box-shadow"))
-check("滚动条配色与表头配对用的都是同一套语义变量",
-      {k for k in (fold.get("scrollbar-color", "") + th.get("background", "")).split()
-       if k.startswith("var(")} <= {"var(--line)", "var(--surface)", "transparent"},
-      (fold.get("scrollbar-color"), th.get("background")))
-
-js = ah[ah.index("/* ---- 面板内联滚动"):]
-check("框高取第 N+1 行的 offsetTop（量出来的，不是猜的像素）",
-      "rows[n].offsetTop" in js and "rows.length <= n" in js)
-check("不足 N 行时不设高度，免得下面留一截空白", "f.style.maxHeight = ''" in js)
-check("设完高度再量一次：竖向滚动条占了宽度，行会重新折行",
-      js.count("= foldH(f, n)") == 2, js.count("= foldH(f, n)"))
-check("横向滚动条占的那几像素高度要补回去，否则最后一行被它盖住",
-      "f.offsetHeight - f.clientHeight" in js)
-check("明细局部换页后重算框高", "refold();" in ah[ah.index("function render"):ah.index("/* ---- 面板内联滚动")])
-check("翻页不再把页面滚到明细顶部：整套 scrollIntoView 定位都删了",
-      "scrollIntoView" not in ah and "scrollToDetail" not in ah, None)
-# scroll-margin-top 又回来了，但服务对象不同：以前是给"翻页后把明细滚进视野"用的（那套已删），
-# 现在是给侧边目录的锚点跳转用的 —— 没有它，点目录跳过去后标题会被顶部那排标签压住。
-# 所以它必须只作用在正文块上（.adminmain [id]），不能又变成 #detail 的全局滚动避让
-check("滚动避让只为目录锚点服务：写在正文块上，不给 #detail 单独留",
-      ".adminmain [id] { scroll-margin-top: 56px; }" in css
-      and "#detail { scroll-margin-top" not in css, None)
-check("窗口变窄重算（折行变了会露半行），且做防抖",
-      "resize" in js and "clearTimeout(foldT)" in js and "setTimeout(refold, 200)" in js)
-
-print("\n11) 手机 / 平板：宽度还给内容、触摸目标、小字号 token")
-# 这一节的每条断言都对应一次实测到的问题（360px 上净宽只剩 249px、标签被挤成 98px 高、
-# 91 处文字小于 12px、22 个控件够不上拇指），别再退回去
-idx_narrow = css.index("/* ---------------- 手机 / 平板")
-tail = css[idx_narrow:]
-check("窄屏覆盖排在文件最后（同优先度靠后者胜，写在中间等于没写）",
-      idx_narrow > max(css.index(".themebtn {"), css.index(".dbtn {"),
-                      css.index(".pbtn, .pager a"), css.index(".csite .ct")),
-      idx_narrow)
-check("小字号都走 MDUI 的 typescale，文件里不留硬编码的 11 / 11.5px",
-      not re.search(r"font-size:\s*11(\.5)?px", css)
-      and "--fs-min: var(--mdui-typescale-label-small-size)" in css
-      and "--fs-sm: var(--mdui-typescale-label-medium-size)" in css,
-      re.findall(r"font-size: 11[^;]*", css)[:3])
-check("窄屏把两个小字号换成 body-small（仍然只引 typescale，不写死数）",
-      "--fs-min: var(--mdui-typescale-body-small-size)" in tail
-      and "--fs-sm: var(--mdui-typescale-body-small-size)" in tail, None)
-check("桌面那份 .wrap 仍是 100% - 48px（窄屏是覆盖，不是改写）",
-      "100% - 48px" in css[:idx_narrow])
-check("窄屏 .wrap 整宽 + 只留 10px 内边距", "width: 100%; padding: 0 10px" in tail.replace("\n          ", " ")
-      or ("width: 100%" in tail and "padding: 0 10px" in tail), re.findall(r"\.wrap \{[^}]*\}", tail))
-check("标签条窄屏横滑，并且带 min-width:0",
-      "overflow-x: auto" in tail and "min-width: 0" in tail, re.findall(r"\.tabs \{[^}]*\}", tail))
-check("（这条是当初的坑）只写 overflow-x:auto 不够：flex 项默认 min-width:auto，"
-      "四个不换行的标签会把文档顶宽，所以 max-width:100% 也得在",
-      "max-width: 100%" in tail)
-check("详情按钮在触屏上够按（32px 高、40px 宽起）",
-      re.search(r"\.dbtn \{[^}]*min-height: 32px", tail) is not None
-      and re.search(r"\.dbtn \{[^}]*min-width: 40px", tail) is not None,
-      re.findall(r"\.dbtn \{[^}]*\}", tail))
-check("片名是海报上唯一的进页面入口，给到 44px", ".hotlink { min-height: 44px; }" in tail)
-check("剧集链接成块，不再是 19px 的行内链接",
-      re.search(r"\.eps a \{[^}]*min-height: 34px", tail) is not None)
-check("关掉点击灰底与双击缩放延迟", "-webkit-tap-highlight-color: transparent" in tail
-      and "touch-action: manipulation" in tail)
-# 输入框字号也必须走 token：媒体查询不加特异性，`.admfield input`（0,1,1）压着
-# `input`（0,0,1），第一次只写了兜底那条，量出来后台口令框还是 12.5px —— iOS 一聚焦就放大整页
-check("输入控件字号走 --fs-input，桌面就是 body-large（16px：iOS 聚焦不会放大整页）",
-      "--fs-input: var(--mdui-typescale-body-large-size)" in css[:idx_narrow],
-      re.findall(r"--fs-input[^;]*", css))
-check("后台筛选框与翻页跳转框都吃这个 token",
-      re.search(r"\.admfield input, \.admfield select \{[^}]*var\(--fs-input\)", css) is not None
-      and re.search(r"\.jumpin \{[^}]*var\(--fs-input\)", css) is not None,
-      re.findall(r"\.admfield input[^{]*\{[^}]*\}", css)[:1] + re.findall(r"\.jumpin \{[^}]*\}", css)[:1])
-check("文件里不再有硬编码的 12.5px 输入框字号",
-      not re.search(r"\.(admfield input|jumpin)[^}]*?font-size: 12\.5px", css, re.S))
-# .cols 收成单列后，网格项默认 min-width:auto 会顶在长命令上不肯缩，撑宽的是整个文档
-check("窄屏网格项允许缩到 0（否则一长串命令就把页面顶得能横着拖）",
-      ".cols > * { min-width: 0; }" in tail and ".asect { min-width: 0; }" in tail,
-      re.findall(r"\.(cols > \*|asect) \{[^}]*\}", tail))
-check("长命令用 overflow-wrap:anywhere 断行（break-word 不参与 min-content，等于没断）",
-      re.search(r"\.atip[^{]*code[^{]*\{[^}]*overflow-wrap: anywhere", tail) is not None
-      or "overflow-wrap: anywhere" in tail, re.findall(r"[^}]*overflow-wrap: anywhere[^}]*\}", tail))
-check("表格、翻页、说明文字与网盘站卡片里的链接都用「内边距 + 等量负外边距」撑高，不改变行高",
-      re.search(r"\.table a, \.pager a, \.atip a, \.creason a \{"
-                r" padding: (\d+)px 3px; margin: -\1px -3px; \}", tail) is not None,
-      re.findall(r"\.table a[^;]*;[^;]*;", tail))
-check("提交按钮的文字不许折行（320 上「进入」被 flex 压成 42×51 的两行）",
-      re.search(r"\.gobtn[^{]*\{[^}]*white-space: nowrap", tail) is not None,
-      re.findall(r"\.gobtn[^}]*\}", tail))
-# 手机（≤560）登录改成各占一整行；平板与窄桌面窗口（561+）仍是横排 —— 360 上卡片内宽 293 本来就放得下
-lg = re.search(r"@media \(max-width: 560px\) \{(.*?)\n\}", css[idx_narrow:], re.S)
-check("≤560 登录各占一整行（输入框吃满、按钮 40px 高）",
-      lg is not None and ".loginform { flex-wrap: wrap; }" in lg.group(1)
-      and re.search(r"\.loginform \.gobtn \{ flex: 1 1 100%; min-height: 40px", lg.group(1)) is not None
-      and re.search(r"\.loginform \.admfield input \{ width: 100%[^}]*box-sizing: border-box", lg.group(1)) is not None,
-      lg.group(1) if lg else None)
-check("登录整宽只写在 ≤560 这一段（561 以上卡片内宽够横排，不该竖着）",
-      css.count(".loginform { flex-wrap: wrap; }") == 1
-      and lg is not None and ".loginform { flex-wrap: wrap; }" in lg.group(1),
-      css.count(".loginform { flex-wrap: wrap; }"))
-check("它排在 .pwrow 那条之后、且在文件末尾（覆盖必须靠后）",
-      lg is not None and css.index("@media (max-width: 560px) {\n  .loginform") > css.index(".pwrow { flex-wrap: wrap; }"))
-check("结果没回来之前那份给爬虫的 SSR 列表也按得准（行内链接撑到 34px）",
-      re.search(r"\.ssrlist a \{ display: inline-block; padding: (\d+)px 3px; margin: -\1px -3px; \}", tail) is not None,
-      re.findall(r"\.ssrlist a[^}]*\}", tail))
-sheet = re.search(r"@media \(max-width: 560px\) \{(.*?)\n\}", css, re.S).group(1)
-check("手机上面板是底部抽屉（贴左右下 + 限高 + 从下面推上来）",
-      "bottom: 0" in sheet and "left: 0" in sheet and "right: 0" in sheet
-      and "translateY(" in sheet and "86vh" in sheet, sheet)
-check("抽屉躲开 iPhone  home indicator", "env(safe-area-inset-bottom)" in css)
-idxh = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
-check("viewport 带 viewport-fit=cover（不然 env() 恒为 0）", "viewport-fit=cover" in idxh)
-ajs = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
-check("触屏上整张海报都是命中区，桌面仍只认那颗按钮",
-      "(hover: none)" in ajs and ".hcover, .cover, .dbtn" in ajs,
-      re.findall(r".*hover: none.*", ajs))
-check("点过的标签会被带进视野（横滑时不会点到看不见的标签）",
-      "scrollIntoView({ block: 'nearest', inline: 'nearest' })" in ajs)
-check("没有任何地方劫持右键", "contextmenu" not in ajs and "contextmenu" not in idxh)
-
-print("\n13) 版式重构：药丸、留白节奏、终端化数据")
-def _rule(head):
-    i = css.find(head)
-    if i < 0:
-        return None
-    return css[i:css.index("\n}", i) + 2]
-
-
-# 按钮一律药丸：混着 8px / 5px / 99px 就是"每张卡片各圆各的"，看着像没设计过
-PILL_HEADS = [".gobtn {", ".srcbtn {", ".eps a {",
-              ".pbtn, .pager a, .jumpbtn, .themebtn, .fbtn, .frontbtn {",
-              ".reset {", ".admintoc a {", ".row .ct {", ".csite .ct {",
-              ".who {", ".behflag {", ".dbtn {", ".pstep {", ".ver {",
-              '.admfield input, .admfield select {',
-              '.loginform input[type="password"], .loginform input[type="text"] {',
-              ".tab {", ".asec-fold > summary {"]
-noPill = [h for h in PILL_HEADS if (h and "border-radius: var(--r-pill);" not in _rule(h))]
-check("按钮/输入框/标签一律药丸（同一个圆角只有 --r-pill 一个来源）",
-      not noPill and "border-radius: 99px" not in css and "border-radius: 999px" not in css,
-      noPill[:4])
-# 数据与状态是"机器说的话"：等宽才对齐，一列数字用比例字体会跳
-MONO_HEADS = [".meta {", ".fresh {", ".stat b {", ".table .num {", ".pageof {",
-              ".slip-msg {", ".cloudbar {", ".progsteps {", ".eps a {", "code {"]
-noMono = [h for h in MONO_HEADS if h in css and "var(--mono)" not in _rule(h)]
-check("数字与状态行走等宽（表格数字、进度步骤、滑块回话、meta 那一行）",
-      not noMono and all(h in css for h in MONO_HEADS), noMono[:4])
-lit_fonts = [l.strip() for l in css.splitlines()
-             if l.strip().startswith("font-family:") and "var(--" not in l]
-check("字体只从 token 取：规则里没有写死的字体族（材质归调色板，结构归组件）",
-      not lit_fonts, lit_fonts[:3])
-for tok in ("--font-display", "--font-body", "--mono", "--head-track", "--label-track",
-            "--r-pill", "--r-cover", "--cover-frame", "--btn-glow", "--btn-edge", "--prog-fill"):
-    check(f"{tok} 在 :root 里有默认值（不写也能跑，只有 MDUI 令牌是必须的）", f"  {tok}:" in root, None)
-check("海报的镜框线走 --cover-frame，三处海报（结果卡、猜你想搜、详情面板）都吃同一个 token",
-      bridge["--cover-frame"] == "var(--mdui-elevation-level1)"
-      and all("box-shadow: var(--cover-frame);" in _rule(h)
-              for h in (".cover {", ".hcover {", ".dpcover {")), None)
-check("卡片留白与海报尺寸一起放大，手机端再收回来（360 屏上文字区不能被吃掉）",
-      "padding: 18px 20px;" in _rule(".card {") and "gap: 20px;" in _rule(".card {")
-      and "flex: 0 0 104px;" in _rule(".cover {")
-      and ".card { padding: 14px 16px; gap: 14px; }" in css
-      and ".cover { flex-basis: 96px; width: 96px; }" in css, None)
-check("表头是拉开字距的栏目名，正文数字用 tabular-nums",
-      "letter-spacing: var(--label-track);" in _rule(".table th {")
-      and "font-variant-numeric: tabular-nums;" in _rule(".table {"), None)
-check("跑着的状态行有一枚闪烁光标，且 reduced-motion 下停住",
-      '.fresh[data-state="running"]::after {' in css and "@keyframes caret" in css
-      and '.fresh[data-state="running"]::after { animation: none; }' in css, None)
-check("口令框不再是浏览器默认方框（和旁边的药丸按钮穿帮）",
-      _rule('.loginform input[type="password"], .loginform input[type="text"] {') is not None
-      and "padding: 10px 18px;" in _rule('.loginform input[type="password"], .loginform input[type="text"] {'), None)
-
-print("\n14) 栅格：舞台在左、资料栏在右（只在够宽且真有结果时）")
-idx = (BASE / "zhuiju" / "templates" / "index.html").read_text(encoding="utf-8")
-grid_css = css[css.index("@media (min-width: 1220px) {"):css.index(".railhead {")]
-check("栅格只在前台 + 搜索过那一屏启用（落地页右边会空一大块，所以不用）",
-      "body.home.searched main.wrap {" in grid_css
-      and "grid-template-columns: minmax(0, 1fr) var(--rail);" in grid_css, None)
-check("舞台入口与标签行横跨两栏，结果在左、资料栏在右并粘性跟随",
-      "main.wrap > .searchbar,\n  body.home.searched main.wrap > .statline { grid-column: 1 / -1; }" in grid_css
-      and "main.wrap > .panel { grid-column: 1; }" in grid_css
-      and "main.wrap > .rail { grid-column: 2; position: sticky; top: 84px; }" in grid_css, None)
-check("切到网盘 / 目录标签时资料栏收掉（写在媒体查询之外，任何宽度都成立）",
-      css.index('body.home:not([data-tab="vod"]) .rail { display: none; }')
-      < css.index("@media (min-width: 1220px) {")
-      and 'body.home.searched:not([data-tab="vod"]) main.wrap > .panel { grid-column: 1 / -1; }' in css,
+# (a) 这一节原来钉的是 admin.html 里那批 data-fold 容器 + app.css 的 .fold 规则 + 模板里那段内联脚本。
+#     后台转 React 后三样合成：ui.tsx 的 Table（HeroUI Table 的表头吸顶）配 hooks/useClamp
+#     （量第 N+1 行、补滚动条、首测同步跑），styles.css 的 .scroll-thin 收细滚动条。
+#     前台那条同款（检索快照只给 6 行）共用同一个 useClamp —— 两处钉的是同一套量法。
+adminui_ts = (AD / "ui.tsx").read_text(encoding="utf-8")
+vod_ts = (BASE / "web" / "src" / "components" / "VodPanel.tsx").read_text(encoding="utf-8")
+clamp_ts = (BASE / "web" / "src" / "hooks" / "useClamp.ts").read_text(encoding="utf-8")
+counts = [5 if m.group(1) == "R5" else int(m.group(1))
+          for f in sorted(AD.glob("*.tsx"))
+          for m in re.finditer(r"<Table\b[^>]*?rows=\{(R5|\d+)\}", f.read_text(encoding="utf-8"), re.S)]
+check("统计那几块表都传了行数（明细 10 行，其余 5 或 6 行）",
+      len(counts) >= 8 and counts.count(10) == 1
+      and all(5 <= n <= 6 for n in counts if n != 10), counts)
+check("限高挂在 HeroUI 的滚动容器上，而且必须是定位元素：offsetTop 量的是相对最近那个定位祖先，"
+      "不写 relative 就一路找到页面外层，算出来的高得离谱、限高等于没限",
+      '<HeroTable.ScrollContainer ref={setBox} className="relative">' in adminui_ts,
       None)
-check("模板第一帧就写好 home / searched / data-tab，不靠 JS 补（否则 SSR 那一屏会先排错再跳）",
-      '<body class="home{% if seo.kw %} searched{% endif %}" data-tab="vod">' in idx, None)
-check("接口状态从 #panel-vod 搬到资料栏，摘要也在同一栏里（旧位置不留一份）",
-      idx.index('<aside class="rail"') < idx.index('id="ssr"') < idx.index('id="sources"')
-      and idx.count('id="sources"') == 1 and idx.count('id="ssr"') == 1, None)
-ajs2 = (BASE / "zhuiju" / "static" / "app.js").read_text(encoding="utf-8")
-check("搜索 / 回主页 / 切标签都跟着改 body 上的那两个开关",
-      'document.body.classList.toggle("searched", !!kw)'.replace('"', "'") in ajs2
-      or "document.body.classList.toggle('searched', !!kw)" in ajs2, None)
-check("goHome 摘掉 searched，switchTab 把当前标签写到 body",
-      "document.body.classList.remove('searched')" in ajs2
-      and "document.body.dataset.tab = tab;" in ajs2, None)
-check("接口状态一行一个源：名字 / 命中数 / 耗时 三段，数字右对齐走等宽",
-      'grid-template-columns: 7px minmax(0, 1fr) auto 52px;' in css
-      and "font-variant-numeric: tabular-nums;" in css
-      and 'class="sb-name"' in ajs2 and 'class="sb-num"' in ajs2 and 'class="sb-ms"' in ajs2, None)
-check("顶上给一句汇总（几个可用、最慢多少），一个源都没答话时整块收起",
-      "可用 · 最慢" in ajs2 and "box.hidden = !st.length" in ajs2, None)
-check("后台不吃前台的阅读宽度（body 上没有 home）",
-      '<body data-tab="{{ tab or ' in (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8"), None)
+check("框高不写死在 CSS 里：行高随折行变化，写死会露半行 —— 只有量出来的那个数才进 style",
+      'node.style.maxHeight = next === null ? "" : `${next}px`;' in clamp_ts
+      and "max-height" not in adminui_ts, None)
+check("框高取第 N+1 行的 offsetTop（量出来的，不是猜的像素）；不足 N 行干脆不设高度",
+      "const h = (trs[rows] as HTMLElement).offsetTop;" in adminui_ts
+      and "if (trs.length <= rows) return null;" in adminui_ts
+      and "if (next === last.current) return;" in clamp_ts, None)
+check("横向滚动条占的那几像素高度要补回去，否则最后一行被它盖住",
+      "return h + (el.offsetHeight - el.clientHeight);" in adminui_ts
+      and "return h + (el.offsetHeight - el.clientHeight);" in vod_ts, None)
 
-check("窄屏没有右栏时接口状态仍排在结果上面（翻完一百张卡片才看到它，等于没有）",
-      "@media (max-width: 1219.98px) {" in css
-      and "body.home main.wrap > .rail { display: contents; }" in css
-      and "body.home main.wrap > .rail > .railcard { order: -1; }" in css, None)
-check("接口状态那块默认 hidden：没搜过就不留一张空卡片在页面上",
-      '<div class="railcard" id="rail-sources" hidden>' in idx
-      and "box.hidden = !st.length" in ajs2, None)
+# 首测踩过同一个坑：rAF 在后台标签里压根不回调（实测），首帧没量就等于没限高；
+# 而 HeroUI 的 Table 把行排在另一次提交里，还要一个 MutationObserver 盯 childList 才量得到。
+check("首测同步跑、RO 与 MO 的回调里直接量（rAF 在后台标签不回调，量不到就等于没限高）",
+      "ro.current = new ResizeObserver(measure);" in clamp_ts
+      and "mo.current = new MutationObserver(measure);" in clamp_ts
+      and "useLayoutEffect(measure);" in clamp_ts
+      and "requestAnimationFrame(" not in clamp_ts, None)
+check("框内滚动时表头吸顶、底色不透明、分隔线用 inset box-shadow"
+      "（border-collapse 下 border 跟着单元格走，吸顶时那条线会留在原地）",
+      'className="sticky top-0 z-10 text-start text-muted shadow-[inset_0_-1px_0_var(--border)] first:pl-0 last:pr-0"'
+      in adminui_ts
+      and "border-b border-separator" not in adminui_ts[adminui_ts.index("export function Table"):
+                                                        adminui_ts.index("export function Row")], None)
+check("滚动条收成细条、颜色引主题令牌（暗色下不许是一道白槽，也不能吃掉宽表的横向空间）",
+      re.search(r"\.scroll-thin \{[^}]*scrollbar-width: thin", styles_css) is not None
+      and re.search(r"\.scroll-thin \{[^}]*scrollbar-color: var\(--border\)", styles_css) is not None,
+      re.findall(r"\.scroll-thin \{[^}]*\}", styles_css))
+refs_block = overview_ts[overview_ts.index('id="refs"'):]
+check("说明文字排在表格之外（不然注意事项也跟着一起滚，第一眼看不到）",
+      refs_block.index("</Table>") < refs_block.index("Referrer-Policy")
+      and detail_ts.index("</Table>") < detail_ts.index("「最快间隔」是同一 IP"), None)
+check("没有残留的展开/收起按钮（要做的是内联滚动条，不是点击展开）",
+      "foldbtn" not in adminui_ts + ah and "is-open" not in adminui_ts + ah,
+      (ah.count("foldbtn"), adminui_ts.count("foldbtn")))
+check("翻页不再把整页滚到明细顶部：只有侧边目录那一跳才用 scrollIntoView",
+      "scrollIntoView" not in detail_ts + adminui_ts
+      and 'scrollIntoView({ block: "start" })' in adminapp_tsx, None)
+check("滚动避让只为目录锚点服务：每个正文块自带 scroll-mt，顶栏高度变了改一处",
+      'className="scroll-mt-14 space-y-3"' in adminui_ts
+      and "sticky top-0 z-30" in adminapp_tsx and "sticky top-20" in adminapp_tsx, None)
+check("前台检索快照用的是同一个量法：超过 6 条才夹到第 7 条的 offsetTop，在框里自己滚",
+      "const setBox = useClamp(" in vod_ts
+      and 'const lis = el.querySelectorAll("li");' in vod_ts and "lis.length <= 6" in vod_ts
+      and "(lis[6] as HTMLElement).offsetTop" in vod_ts
+      and 'className="scroll-thin relative mt-3 overflow-y-auto"' in vod_ts, None)
+
+
+print("\n11) 手机 / 平板：触摸目标、抽屉不压 home indicator、滑块不许变成滚页面")
+# (a) 这一节每条断言原本都对着 app.css 的窄屏那一段 + index.html + app.js，而且都对应一次实测问题
+#     （360px 上净宽只剩 249px、标签被挤成 98px 高、一片 11px 字、22 个控件够不上拇指）。
+#     前台转 React 后这些活儿换了载体：尺寸与间距在 Tailwind 类里，抽屉归 HeroUI（placement 由
+#     DetailDrawer 按屏宽选），躲 home indicator 与"没有 hover 就常驻"落在 styles.css。逐条搬。
+CW = BASE / "web" / "src" / "components"
+gate_ts = (CW / "Gate.tsx").read_text(encoding="utf-8")
+sb_ts = (CW / "SearchBar.tsx").read_text(encoding="utf-8")
+poster_ts = (CW / "Poster.tsx").read_text(encoding="utf-8")
+drawer_ts = (CW / "DetailDrawer.tsx").read_text(encoding="utf-8")
+check("viewport 带 viewport-fit=cover（不写这个，env(safe-area-inset-*) 恒为 0，下面那条等于没躲）",
+      "viewport-fit=cover" in sh, None)
+check("手机上的详情抽屉躲开 iPhone home indicator（最后一行观看地址不该压在横条底下）",
+      "padding-bottom: env(safe-area-inset-bottom)" in styles_css
+      and styles_css.index('.drawer__dialog--bottom {\n    padding-bottom: env') > 0, None)
+check("窄屏抽屉从下面推上来、宽屏才贴右边（同一套组件，placement 跟着屏宽选）",
+      'useMediaQuery("(min-width: 1024px)")' in drawer_ts
+      and 'placement={wide ? "right" : "bottom"}' in drawer_ts, None)
+check("拖滑块不许变成滚页面：那颗按钮上写死 touch-none（旧 app.css 里是 touch-action: none）",
+      "touch-none" in gate_ts and "onPointerDown={(e) => {" in gate_ts, None)
+check("搜索框 16px —— iOS 聚焦时字号小于 16px 会把整页放大一次（旧版在后台口令框上踩过同一坑）",
+      'px-2 text-base outline-none' in sb_ts and "text-[15px]" not in sb_ts, None)
+check("禁用 JS 那份登录页的输入框也走 --fs-input（16px 那一档，同一个坑不在兜底页复发）",
+      "--fs-input: var(--text-base);" in root
+      and re.search(r"\.admfield input, \.admfield select \{[^}]*var\(--fs-input\)", css) is not None,
+      re.findall(r"--fs-input[^;]*", css))
+check("详情按钮在触屏上够按（32px 高、40px 宽起）",
+      re.search(r'className="dbtn [^"]*min-h-8 min-w-10', poster_ts) is not None, None)
+check("触屏没有 hover：详情按钮在这种情况下常驻可见",
+      "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in styles_css, None)
+check("整张海报在触屏上也是点击区，那一层是 <button>（键盘走得到），不是给封面挂 JS 监听",
+      'className="cover-hit absolute inset-0"' in poster_ts and "contextmenu" not in react_ts, None)
+check("窄屏两张折叠卡片各就各位：接口状态排到结果上面、检索快照排到最底下，都默认折起",
+      "max-xl:contents" in app_tsx and '<div className="order-first">' in app_tsx
+      and 'useMediaQuery("(min-width: 1280px)")' in vod_ts and "const shown = open ?? wide;" in vod_ts,
+      None)
+check("全站自己画 hover/active，不要浏览器那点一下闪的灰底",
+      "-webkit-tap-highlight-color: transparent" in styles_css, None)
+
+print("\n13) 版式：药丸一档、卡片一档、数字一律等宽")
+# (a) 这一节原来逐条 grep app.css 里那批联合选择器（.gobtn/.srcbtn/.eps a/.row .ct…）。
+#     React 侧的等价规矩是：圆角只有三档 —— 卡片 rounded-2xl、海报 rounded-xl、胶囊 rounded-full，
+#     没有第四种临时半径；数字与状态行一律 .num（等宽 + tabular-nums）；颜色一律引令牌。
+#     登录兜底页那份 app.css 仍然守老规矩（药丸 = var(--r-pill)），两处一起钉着。
+radii = re.findall(r"rounded-\[(?!\d)[^\]]*\]", react_ts)
+check("圆角只有三档：rounded-2xl / rounded-xl / rounded-full，没有临时半径那种第四种写法",
+      not radii and all(k in react_ts for k in ("rounded-2xl", "rounded-xl", "rounded-full")), radii[:4])
+check("卡片写法前后台同一份：rounded-2xl + bg-surface + p-4 + ring-1 ring-border（不是各圆各的）",
+      "rounded-2xl bg-surface p-4 text-surface-foreground shadow-surface ring-1 ring-border" in adminui_ts
+      and "rounded-2xl bg-surface p-4 text-surface-foreground shadow-surface ring-1 ring-border" in vod_ts,
+      None)
+check("数字与状态行一律 .num：等宽字体族 + tabular-nums，一列数字才对得齐",
+      re.search(r"\.num \{[^}]*var\(--font-mono\)", styles_css) is not None
+      and re.search(r"\.num \{[^}]*font-variant-numeric: tabular-nums", styles_css) is not None, None)
+check("字体只从令牌取：每一条 font-family 都引 var(--font-*)，@theme 里那两族是唯一写族名的地方",
+      re.findall(r"font-family:\s*([^;}]+)", styles_css)
+      and all(v.strip().startswith("var(--font-")
+              for v in re.findall(r"font-family:\s*([^;}]+)", styles_css))
+      and "--font-sans:" in styles_css and "--font-mono:" in styles_css,
+      re.findall(r"font-family:\s*[^;}]+", styles_css))
+check("唯一的硬编码颜色是那枚强调色（HeroUI 预设的靛蓝在白底上压不住白字，深一档才有对比度）",
+      styles_css.count("--accent: oklch") == 1 and "oklch(0.578 0.186 262.1)" in styles_css,
+      re.findall(r"--accent[^;]*", styles_css))
+check("海报压暗走 filter，不透明度留给淡入（两者抢同一个属性就会闪）",
+      ".dark .poster-img" in styles_css and "filter: brightness(0.94)" in styles_css
+      and "opacity" not in styles_css[styles_css.index(".dark .poster-img"):
+                                      styles_css.index(".dark .poster-img") + 60], None)
+check("动画都能被 reduced-motion 收掉：淡入、行切换、抽屉进出、那道跑着的进度条",
+      styles_css.count("@media (prefers-reduced-motion: reduce)") >= 4
+      and "animation-duration: 2.4s" in styles_css, None)
+
+print("\n14) 栅格：结果在左、资料栏在右（只在够宽且真有结果时）")
+# (a) 原来这一节 grep index.html 的 body 类与 app.js 里那两句 classList.toggle。
+#     转 React 后"要不要右栏"就是 JSX 的一个条件：vod 标签 + 有关键词才排两栏，
+#     body 上那三个开关整个没有载体了 —— 判据换成条件本身、栅格定义与粘性跟随。
+check("栅格只在影视检索 + 有关键词那一屏（落地页右边会空一大块，所以不排两栏）",
+      '<Tabs.Panel id="vod" className="pt-5">' in app_tsx
+      and "{kw ? (\n              <div className=\"grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]\">" in app_tsx,
+      None)
+check("左栏是 minmax(0,1fr)：一长串片名/命令能缩下去，不会把整页顶得能横着拖",
+      "xl:grid-cols-[minmax(0,1fr)_320px]" in app_tsx and "minmax(0,1fr)" in drawer_ts, None)
+check("够宽时资料栏粘性跟随（滚到结果中段，接口状态还在右手边）",
+      "xl:sticky xl:top-20" in app_tsx and "xl:self-start" in app_tsx, None)
+check("网盘 / 目录 / 直达三个标签没有右栏（它们要的是整幅宽度）",
+      app_tsx.count('<div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">') == 1
+      and 'Tabs.Panel id="cloud"' in app_tsx and 'Tabs.Panel id="deep"' in app_tsx, None)
+check("接口状态与检索快照都没内容时整块不渲染（不留一张空卡片在页面上）",
+      "if (!rows.length) return null;" in vod_ts and "if (!items.length) return null;" in vod_ts, None)
+check("检索快照只在「当前这个词就是落地词」那一屏出现（换过词就别把上一份摘要画出来）",
+      "const showSsr = !!kw && kw === boot.kw" in app_tsx
+      and "!!boot.snapshot.items?.length" in app_tsx, None)
+check("前后台同一档 1680（顶栏、正文、页脚三处与后台共用同一条上限）",
+      "max-w-[1680px]" in adminapp_tsx and app_tsx.count("max-w-[1680px]") == 3, None)
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")
 sys.exit(1 if FAILS else 0)

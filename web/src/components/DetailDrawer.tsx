@@ -89,15 +89,30 @@ export function DetailDrawer({ spec, onClose }: { spec: DetailSpec | null; onClo
       <Drawer.Backdrop variant="blur" isOpen={open} onOpenChange={(v) => !v && onClose()}>
         <Drawer.Content placement={wide ? "right" : "bottom"}>
           <Drawer.Dialog>
-            <Drawer.Header>
-              <Drawer.Heading className="truncate">{spec?.title || "详情"}</Drawer.Heading>
+            <Drawer.Header className="flex-row items-center gap-2">
+              {/* 返回在原海报那一侧：点开是从那儿长出来的，缩回去也按同一条路，
+                  右上角那颗 CloseTrigger 留着（键盘 ESC 与鼠标习惯的人都找得到它） */}
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="返回海报列表"
+                className="-ml-1 inline-flex h-8 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-muted transition hover:bg-default hover:text-foreground"
+              >
+                <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                  <path d="M15 5l-7 7 7 7" />
+                </svg>
+                返回
+              </button>
+              <Drawer.Heading className="min-w-0 truncate">{spec?.title || "详情"}</Drawer.Heading>
               <Drawer.CloseTrigger aria-label="关闭详情" />
             </Drawer.Header>
             <Drawer.Body className="space-y-4">
               {spec ? (
                 <>
                   <div className="flex gap-3">
-                  <div className="relative aspect-2/3 w-24 shrink-0 self-start overflow-hidden rounded-xl bg-default ring-1 ring-border">
+                  {/* vt-hero：这一格带着 view-transition-name: cover-active（见 styles.css），
+                      它就是海报"长过来"要落到的那个矩形 */}
+                  <div className="vt-hero relative aspect-2/3 w-24 shrink-0 self-start overflow-hidden rounded-xl bg-default ring-1 ring-border">
                     <PosterImage pic={spec.pic} title={spec.title} />
                   </div>
                     <div className="min-w-0 space-y-1.5 text-xs">

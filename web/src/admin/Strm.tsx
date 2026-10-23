@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@heroui/react";
+import { Button, Switch } from "@heroui/react";
 import { postForm } from "./api";
-import { Block, Card, Fold, Num, Table, Txt, dash } from "./ui";
+import { Block, Card, Cell, Num, Row, Table, Txt, dash, isOn } from "./ui";
 import type { AdminView, StrmJob, StrmSpecRow } from "./types";
 
 /** 本轮停下来的原因（游标表里那个 stop）。文案与老模板一致，别改字。 */
@@ -130,8 +130,13 @@ function useStrmPoll(active: boolean) {
   return job;
 }
 
+/** 开关键值就存在这个 state 里，提交时按 state 写 —— 不去 elements.namedItem() 里捞
+ *  那个隐藏 input。HeroUI 的 Switch 是 compound 组件，那颗原生 input 归 React Aria 自己管，
+ *  名字、值、甚至存不存在都不该由我们押注（上一版是 <select>，捞 .value 刚好对得上）。 */
 function SpecForm({ rows, csrf, ondone }: { rows: StrmSpecRow[]; csrf: string; ondone: (msg: string | null) => void }) {
   const [busy, setBusy] = useState(false);
+  const [bools, setBools] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(rows.filter((f) => f.kind === "bool").map((f) => [f.key, isOn(f.value)])));
   const val = (f: StrmSpecRow) => (typeof f.value === "boolean" ? (f.value ? "1" : "0") : String(f.value ?? ""));
   return (
     <form
@@ -142,6 +147,10 @@ function SpecForm({ rows, csrf, ondone }: { rows: StrmSpecRow[]; csrf: string; o
         setBusy(true);
         const data = new URLSearchParams();
         rows.forEach((f) => {
+          if (f.kind === "bool") {
+            data.set(f.key, bools[f.key] ? "1" : "0");
+            return;
+          }
           const el = e.currentTarget.elements.namedItem(f.key) as HTMLInputElement | HTMLSelectElement | null;
           if (el && !(f.secret && !el.value)) data.set(f.key, el.value);
         });
@@ -158,26 +167,44 @@ function SpecForm({ rows, csrf, ondone }: { rows: StrmSpecRow[]; csrf: string; o
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {rows.map((f) => (
           <div key={f.key} className="space-y-1">
-            <label className="block text-[11px] text-muted" htmlFor={`ss-${f.key}`}>
-              {f.label}
-              {String(f.default) !== String(f.value) ? <span className="num">（默认 {String(f.default)}）</span> : null}
-            </label>
             {f.kind === "bool" ? (
-              <select id={`ss-${f.key}`} name={f.key} defaultValue={val(f)}
-                      className="h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border">
-                <option value="1">开</option>
-                <option value="0">关</option>
-              </select>
-            ) : f.secret ? (
-              <input id={`ss-${f.key}`} name={f.key} type="password" value="" autoComplete="off"
-                     placeholder={f.filled ? "已经存着了，留空=不改" : "还没配，留空就不查"}
-                     className="h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border" />
+              <>
+                <p className="text-[11px] text-muted">
+                  {f.label}
+                  {String(f.default) !== String(f.value) ? <span className="num">（默认 {String(f.default)}）</span> : null}
+                </p>
+                <Switch
+                  size="sm"
+                  isSelected={bools[f.key]}
+                  onChange={(v) => setBools((b) => ({ ...b, [f.key]: v }))}
+                  aria-label={f.label}
+                >
+                  <Switch.Content>
+                    <Switch.Control>
+                      <Switch.Thumb />
+                    </Switch.Control>
+                    <span className="num text-[11px]">{bools[f.key] ? "开" : "关"}</span>
+                  </Switch.Content>
+                </Switch>
+              </>
             ) : (
-              <input id={`ss-${f.key}`} name={f.key} type={f.kind === "int" ? "number" : "text"}
-                     min={f.kind === "int" ? f.lo : undefined} max={f.kind === "int" ? f.hi : undefined}
-                     defaultValue={val(f)}
-                     placeholder={f.kind === "int" ? undefined : "huya,suoni"}
-                     className="num h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border" />
+              <>
+                <label className="block text-[11px] text-muted" htmlFor={`ss-${f.key}`}>
+                  {f.label}
+                  {String(f.default) !== String(f.value) ? <span className="num">（默认 {String(f.default)}）</span> : null}
+                </label>
+                {f.secret ? (
+                  <input id={`ss-${f.key}`} name={f.key} type="password" value="" autoComplete="off"
+                         placeholder={f.filled ? "已经存着了，留空=不改" : "还没配，留空就不查"}
+                         className="h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border" />
+                ) : (
+                  <input id={`ss-${f.key}`} name={f.key} type={f.kind === "int" ? "number" : "text"}
+                         min={f.kind === "int" ? f.lo : undefined} max={f.kind === "int" ? f.hi : undefined}
+                         defaultValue={val(f)}
+                         placeholder={f.kind === "int" ? undefined : "huya,suoni"}
+                         className="num h-9 w-full rounded-lg bg-field-background px-2 text-xs text-foreground outline-none ring-1 ring-border" />
+                )}
+              </>
             )}
             {f.help ? <p className="text-[10px] leading-snug text-muted/80">{f.help}</p> : null}
           </div>
@@ -244,33 +271,29 @@ export function StrmTab({ v }: { v: AdminView }) {
                 <p className="mt-2 text-[11px] text-muted">{kv?.label || kind}还没有分卷：先跑一轮采集，攒够条目才会打包。</p>
               ) : (
                 <div className="mt-2">
-                  <Fold rows={6}>
-                    <Table dense head={["卷", "部", "文件", "包", ""]} >
-                      <tbody>
-                        {kv!.parts.map((p) => (
-                          <tr key={p.name} className="border-b border-separator/70 last:border-0">
-                            <Txt mono>{p.name}</Txt>
-                            <Num>{p.titles}</Num>
-                            <Num>{p.files}</Num>
-                            <Num>{kb(p.zip_bytes)}</Num>
-                            <td className="px-2 py-1 text-[11px]">
-                              {p.zip_url ? (
-                                <>
-                                  <a className="text-accent underline" href={p.zip_url} target="_blank" rel="noopener noreferrer">下载 {p.zip}</a>
-                                  {" · "}
-                                  <a className="text-accent underline" href={p.index_url || "#"} target="_blank" rel="noreferrer">看条目</a>
-                                  {" · "}
-                                  <a className="text-accent underline" href={p.tree_url || "#"} target="_blank" rel="noreferrer">文件清单</a>
-                                </>
-                              ) : (
-                                <span className="text-muted">还没打包</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
-                  </Fold>
+                  <Table dense rows={6} head={["卷", "部", "文件", "包", "下载"]}>
+                    {kv!.parts.map((p) => (
+                      <Row key={p.name}>
+                        <Txt mono>{p.name}</Txt>
+                        <Num>{p.titles}</Num>
+                        <Num>{p.files}</Num>
+                        <Num>{kb(p.zip_bytes)}</Num>
+                        <Cell>
+                          {p.zip_url ? (
+                            <>
+                              <a className="text-accent underline" href={p.zip_url} target="_blank" rel="noopener noreferrer">下载 {p.zip}</a>
+                              {" · "}
+                              <a className="text-accent underline" href={p.index_url || "#"} target="_blank" rel="noreferrer">看条目</a>
+                              {" · "}
+                              <a className="text-accent underline" href={p.tree_url || "#"} target="_blank" rel="noreferrer">文件清单</a>
+                            </>
+                          ) : (
+                            <span className="text-muted">还没打包</span>
+                          )}
+                        </Cell>
+                      </Row>
+                    ))}
+                  </Table>
                 </div>
               )}
             </Card>
@@ -281,21 +304,17 @@ export function StrmTab({ v }: { v: AdminView }) {
       <Block id="strm-src" title="各源采集进度" sub="游标在 strm.db 的 cur 表里，跨天续采">
         <Card>
           {(meta.cursor || []).length ? (
-            <Fold rows={6}>
-              <Table dense head={["源", "下一跳页码", "本轮状态", "已翻页数", "翻到的最新更新时间"]}>
-                <tbody>
-                  {meta.cursor.map((c) => (
-                    <tr key={c.src} className="border-b border-separator/70 last:border-0">
-                      <Txt mono>{c.src}</Txt>
-                      <Num>{c.pg}</Num>
-                      <Txt dim>{STOP_CN[c.stop ?? ""] ?? (c.stop || "待续")}</Txt>
-                      <Num>{c.requests}</Num>
-                      <Txt dim mono>{dash(c.last_time)}</Txt>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </Fold>
+            <Table dense rows={6} head={["源", "下一跳页码", "本轮状态", "已翻页数", "翻到的最新更新时间"]}>
+              {meta.cursor.map((c) => (
+                <Row key={c.src}>
+                  <Txt mono>{c.src}</Txt>
+                  <Num>{c.pg}</Num>
+                  <Txt dim>{STOP_CN[c.stop ?? ""] ?? (c.stop || "待续")}</Txt>
+                  <Num>{c.requests}</Num>
+                  <Txt dim mono>{dash(c.last_time)}</Txt>
+                </Row>
+              ))}
+            </Table>
           ) : (
             <p className="text-xs text-muted">
               还没采过：一轮都没跑起来，游标是空的。
@@ -307,20 +326,16 @@ export function StrmTab({ v }: { v: AdminView }) {
           <h3 className="text-xs font-semibold text-foreground">覆盖度</h3>
           {(meta.sources || []).length ? (
             <div className="mt-2">
-              <Fold rows={5}>
-                <Table dense head={["源", "条目", "部", "可播地址"]}>
-                  <tbody>
-                    {meta.sources.map((s) => (
-                      <tr key={s.id} className="border-b border-separator/70 last:border-0">
-                        <Txt>{s.name}<span className="ml-1 text-[10px] text-muted">{s.id}</span></Txt>
-                        <Num>{s.vods}</Num>
-                        <Num>{s.titles}</Num>
-                        <Num>{s.m3u8_urls}</Num>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </Fold>
+              <Table dense rows={5} head={["源", "条目", "部", "可播地址"]}>
+                {meta.sources.map((s) => (
+                  <Row key={s.id}>
+                    <Txt>{s.name}<span className="ml-1 text-[10px] text-muted">{s.id}</span></Txt>
+                    <Num>{s.vods}</Num>
+                    <Num>{s.titles}</Num>
+                    <Num>{s.m3u8_urls}</Num>
+                  </Row>
+                ))}
+              </Table>
             </div>
           ) : (
             <p className="mt-2 text-xs text-muted">库里还没有任何源的条目。</p>

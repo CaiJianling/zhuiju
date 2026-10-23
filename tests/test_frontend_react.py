@@ -313,8 +313,9 @@ try:
     check("海报卡里的 <img> 用的是 posterOf 的结果，不是 r.pic 本体",
           "const src = posterOf(pic);" in poster_ts and "src={src}" in poster_ts,
           re.findall(r"src=\{[^}]*\}", poster_ts))
-    check("详情抽屉里那张也是 posterOf（两处共用同一个入口，才不会出现漏的那一处）",
-          "src={posterOf(spec.pic)}" in read("components", "DetailDrawer.tsx"), None)
+    check("详情抽屉里那张也走同一个 PosterImage（posterOf 因此只有一处调用，漏不掉）",
+          "<PosterImage pic={spec.pic} title={spec.title} />" in read("components", "DetailDrawer.tsx")
+          and "posterOf" not in read("components", "DetailDrawer.tsx"), None)
     imgs = re.findall(r"<img[^>]*", " ".join(
         (p.read_text(encoding="utf-8") for p in SRC.rglob("*.tsx"))))
     check("web/src 里每一个 <img> 的 src 都来自 posterOf",
@@ -334,20 +335,25 @@ try:
           "try {" in apijs[apijs.index("export function sendClick"):]
           and "/* 统计丢了就丢了 */" in apijs, None)
 
-    print("\n10) 分页判据只看服务端那一句 has_more")
+    print("\n10) 分页判据只看服务端那一句 has_more（翻页按钮换成滚到底自动追加）")
     vod = read("components", "VodPanel.tsx")
+    stack = read("stack.ts")
     check("判据是 d.has_more 且这一页真的合出了东西",
-          "const hasMore = !!d.has_more && d.results.length > 0;" in vod,
-          re.findall(r"const hasMore[^\n]+", vod))
+          "hasMore: d.has_more && d.results.length > 0," in stack,
+          re.findall(r"hasMore:[^\n]+", stack))
     check("没有重新出现「拿 hits 当页数」的算术（hits 只在统计那一行被读出来看）",
           "d.hits >=" not in vod and "hits >=" not in vod and "hits /" not in vod,
           re.findall(r"hits[^\n]{0,30}", vod))
     check("hits 仍然显示，但只当「接口返回多少条」这个信息用",
           "{d.hits}" in vod, None)
-    check("下一页按钮的 disabled 直接跟着 hasMore（不是自己再算一遍）",
-          "isDisabled={!hasMore" in vod, None)
-    check("第 1 页且没有下一页时整条翻页栏收掉，深层页留「上一页」这条退路",
-          "hasMore || page > 1" in vod and "isDisabled={page <= 1" in vod, None)
+    check("并完一部新片都没加也算到头（stalled），别把同一批片反复要",
+          "const stalled = fresh === 0 && items.length > 0;" in stack
+          and "hasMore: d.has_more && !stalled," in stack, None)
+    check("自动追加卡着「还有下一页、此刻没在取、上一轮没出错」，不是见底就发",
+          "const canAuto = !!stack && stack.hasMore && !loading && !appending && !error && ioOk;"
+          in vod and "rootMargin: \"200px 0px\"" in vod, None)
+    check("没有 IntersectionObserver 的老浏览器留一条手动出口，不闷着",
+          ") : d.hasMore ? (" in vod and "onPress={onLoadMore}" in vod, None)
 
     print("\n11) 构建产物与依赖版本")
     for f in ("app.js", "app.css"):

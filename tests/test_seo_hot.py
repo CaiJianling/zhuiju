@@ -98,12 +98,11 @@ WEB = BASE / "web" / "src"
 def wread(*rel):
     return WEB.joinpath(*rel).read_text(encoding="utf-8")
 
-print("\n7) 猜你想搜分页：一行铺满 + 上一页/下一页，不做横向滚动条")
-# 曾经的两个 bug：① 用截成一行的高度数判断按钮是否禁用，于是"下一页"永远点不动；
-# ② 用 flex + overflow-x 做成横向拖动条，不是翻页。
-# (a) 这一节原来读 static/app.css 的 .hotgrid 与 static/app.js：那两份的这一块已经不上屏了
-# （app.css 本身还活着，但 .hotgrid/.hotcard 那批规则只有旧 index.html 在用）。
-# 网格与翻页现在都在 web/src/components/HotSection.tsx 里，每条判据原样搬过去。
+print("\n7) 猜你想搜：一行横着滚、滚到头自动补下一批（不再整行换页）")
+# 旧版是"整行换页"：上一页渐隐、下一页渐现，三十几张海报同时改透明度，看着像整块在闪。
+# 现在是一条横滚条：内容一直在那儿，动的是位移不是透明度；滚到右端自动补 12 条。
+# (a) 这一节原来读 static/app.css 的 .hotgrid 与 static/app.js。那两份不上屏了，
+# 判据搬到 web/src/components/HotSection.tsx 与 App.tsx。
 import re  # noqa: E402
 
 from zhuiju import app as app_mod  # noqa: E402
@@ -111,18 +110,19 @@ from zhuiju import app as app_mod  # noqa: E402
 hotsec = wread("components", "HotSection.tsx")
 app_ts = wread("App.tsx")
 stcss = wread("styles.css")
-grid_cls = (re.search(r"className=\{`(grid[^`]*)`", hotsec) or re.search(r"className=\"(grid[^\"]*)\"", hotsec)).group(1)
-check("热榜网格是 CSS 网格而不是 flex 横滚", "grid grid-cols-" in grid_cls, grid_cls)
-check("列数由响应式断点给：手机 3 列起，宽屏到 6 列（不再一行 6 张右边空一大片）",
-      all(k in grid_cls for k in ("grid-cols-3", "sm:grid-cols-4", "lg:grid-cols-6")), grid_cls)
-check("没有横向滚动条（翻页不是横拖）：这一块里不许出现 overflow-x-auto / scroll",
-      not re.search(r"overflow-x-(auto|scroll)", hotsec) and "scrollbar" not in hotsec,
-      re.findall(r"overflow-\S+", hotsec))
-# (c) 旧的「列数走 --hot-cols 变量」是为了让 JS 与 CSS 共用一个来源。新实现做得更彻底：
-# 直接问 CSS 这一屏实际排出几列，两边不可能对不上，那个变量也就没有了存在的必要
-check("一页装几条是问 CSS 网格现量的（旧 --hot-cols 那条「只有一个来源」的不变量只会更强）",
-      "getComputedStyle(el).gridTemplateColumns" in hotsec and "--hot-cols" not in hotsec,
-      re.findall(r"gridTemplateColumns[^\n]*", hotsec))
+check("热榜是一条横滚条（snap-x + overflow-x-auto），不是整行换页也不按断点重排",
+      'className="scroll-thin snap-x flex gap-4 overflow-x-auto pb-1"' in hotsec
+      and "grid-cols-" not in hotsec, re.findall(r"overflow-\S+", hotsec))
+check("每颗宽度 31% 起、176px 封顶（手机三颗，宽屏多露几颗而不是把海报摊成墙）",
+      'const CELL = "w-[31%] min-w-[104px] max-w-[176px] shrink-0 snap-start";' in hotsec,
+      None)
+check("每批 12 条：一个常量同时进请求，没有 data-per / --hot-cols 这类跨文件对齐的口子",
+      "const BATCH = 12;" in hotsec and "api\n      .hot(kind, offset, BATCH)" in hotsec
+      and "data-per" not in hotsec and "--hot-cols" not in hotsec,
+      re.findall(r"\.hot\([^\n]*", hotsec))
+check("右端哨兵进视野才补下一批（root 是横滚条本身，rootMargin 只往右放 260px）",
+      "new IntersectionObserver((es) => {" in hotsec
+      and 'root: el, rootMargin: "0px 260px 0px 0px"' in hotsec, None)
 
 fake = {
     "since": "2026-04-01", "candidates": 99, "stale": False, "cached": True,
@@ -155,41 +155,25 @@ check("壳里给首屏的就是每组一屏（12 条）加两组各自的总数�
       len(bh["movie"]) == 12 and len(bh["tv"]) == 12
       and bh["movie_total"] == 30 and bh["tv_total"] == 12,
       {k: bh.get(k) for k in ("movie_total", "tv_total")})
-check("两组各有一排上一页/下一页（每个 kind 各挂一个 HotSection，不会只出一组）",
+check("两组各有一条横滚条和一对箭头（每个 kind 各挂一个 HotSection，不会只出一组）",
       html.count("<h2>") == 2 and app_ts.count("<HotSection kind=") == 2,
       app_ts.count("<HotSection kind="))
-# (c) 判据不变，锚点换了：翻页取数时按钮也要按住，所以禁用条件多了 `|| loading`；
-# 页数不再现算 boot.rows.length，而是 total 初值就是 boot.total || boot.rows.length，
-# pages 用 Math.max(1, Math.ceil(total / (cols || paint.rows.length || 1)))。
-check("能翻页的那组按钮可用、只剩一屏的那组按住：页数由没截过的 total 推出来",
-      "isDisabled={page <= 0 || loading}" in hotsec
-      and "isDisabled={page >= pages - 1 || loading}" in hotsec
-      and "useState(boot.total || boot.rows.length)" in hotsec
-      and "Math.max(1, Math.ceil(total / (cols || paint.rows.length || 1)))" in hotsec,
-      re.findall(r"isDisabled=\{[^}]*\}", hotsec))
-check("判有没有下一页不许拿截过的 rows 长度（旧 bug：len(rows) <= 12 时按钮永远点不动）",
-      "boot.total ||" in hotsec and "rows.length <= 12" not in hotsec, None)
-# (c) 旧写法是 data-per="12"（服务端和 JS 各写一个 12，靠这两个字符串对齐）。
-# 新架构里一页装几条就是现量出来的 cols，同一个变量直接进请求，没有第二处要对齐的数
-check("每页张数不再靠 data-per 这种跨文件对齐的口子（只有一个 cols，请求和渲染都用它）",
-      "page * cols, cols" in hotsec and "data-per" not in hotsec,
-      re.findall(r"\.hot\([^\n]*", hotsec))
-check("总数也不再写在 data-total 上，而是进了 state、每次翻页跟着接口回来的 d.total 更新",
+# 箭头只是把视野往左右挪一屏（0.86 个容器宽）；补数仍由右端哨兵负责。
+check("左右箭头按容器宽度的 86% 滚（一次挪一屏，不是一格一格蹭），来回两颗都常驻",
+      "Math.max(160, el.clientWidth * 0.86)" in hotsec
+      and 'aria-label={`把${label}往回滚`}' in hotsec
+      and 'aria-label={`把${label}往后滚`}' in hotsec, None)
+check("往后那颗在补数时按住、真到末尾也按住；往回那颗始终可用（左端只是没得滚）",
+      "isDisabled={loading || (atEnd && items.length >= total)}" in hotsec
+      and "boot.total || boot.rows.length" in hotsec, None)
+check("总数每次跟着接口回来的 d.total 更新，列表变短会夹住，不停在空的那一截",
       "const t = d.total ?? total;" in hotsec and "setTotal(t);" in hotsec
       and "data-total" not in hotsec, None)
-# (c) 同上：夹页那一步的自变量名是 page + delta（不再是函数式更新的 p + delta），
-# 而第一屏按住「上一页」这条判据落在按钮上就是 isDisabled={page <= 0 || loading}。
-check("上一页按钮初始禁用（第一屏没有上一页可退）",
-      "const go = (delta: number) => {" in hotsec
-      and "Math.max(0, Math.min(pages - 1, page + delta))" in hotsec
-      and "isDisabled={page <= 0 || loading}" in hotsec,
-      None)
-# (a) 「整行替换、不往当前那行后面追加」的不变量还在，载体从「const rows = byPage[page]
-# 直接渲染」换成「把这一页存进 byPage，再让 setPaint 整个替换正在画的那一屏 rows」。
-check("翻页时整行替换而非追加（每一页是独立一组行，切页就是换这一组）",
-      "setByPage((m) => ({ ...m, [page]: d.items ?? [] }))" in hotsec
-      and "setPaint({ page, rows: r });" in hotsec and "paint.rows.map" in hotsec
-      and ".push(" not in hotsec, None)
+# (a) 这里和新版要求一致地改成「追加」：下一批并进已有那一叠，
+# 按 片名+年份 去重（同一部片在两批里都上榜时只留一张卡），不重置正在看的位置。
+check("补下一批是追加而非替换，同一部片按 片名+年份 去重",
+      "setItems((prev) => {" in hotsec and "seen.has(key(x))" in hotsec
+      and "next.push(x);" in hotsec and ".push(" in hotsec, None)
 check("首屏卡片共 24 张（禁 JS 那份列表同源同数，两边不存在谁多谁少）",
       html[html.index('id="nojs"'):html.index('<script id="boot-data"')].count("<li>") == 24,
       html[html.index('id="nojs"'):html.index('<script id="boot-data"')].count("<li>"))
@@ -252,26 +236,26 @@ check("旧缓存里那些没有 vids 的行不炸，仍给出 probe 那一个源
       == [{"id": "red", "name": "red", "vid": "456"}],
       app_mod.hot_mod.pack_row({k: v for k, v in b.items() if k != "vids"}, {})["sources"])
 print("\n10) 列表在眼皮底下变短时，不许停在空页")
-# 缓存每 6 小时后台重建一次，条目数会变（实测过 36 → 25）。页数按新总数算是对的，
-# 但人正停在第 6 页 —— 再翻就落到一行都没有的 offset 上，页码还会写成"7 / 4"。
-# (a) 原来这几条读 static/app.js 的 showHotPage / noteHotChange；同一套逻辑现在在
-# HotSection.tsx 取数那个 effect 里，一条条按新写法钉回来。
-eff = hotsec[hotsec.index("if (!cols || byPage[page] || loading) return;"):
+# 缓存每 6 小时后台重建一次，条目数会变（实测过 36 → 25）。横滚条没有"页码"这回事：
+# offset 就是"已经拿到几条"，总数变短只会停止继续补，不会落在一个空 offset 上。
+eff = hotsec[hotsec.index("const more = useCallback"):
              hotsec.index("  if (!boot.rows.length && !boot.building)")]
-check("每次翻页都按接口回来的总数重算页数", "Math.max(1, Math.ceil(t / cols));" in eff,
-      re.findall(r"Math\.max\(1[^\n]+", eff))
-check("取回的一页超出新页数时，夹到最后一页并把缓存作废重取",
-      "if (page > np - 1) {" in eff and "setPage(np - 1);" in eff and "setByPage({});" in eff,
-      re.findall(r"if \(page > np[^\n]*", eff))
-check("夹页这条一定终止（只会往更小的页码走，不会来回弹）",
-      "setPage(np - 1);" in eff and "setPage(np + 1)" not in eff and "return;" in eff, None)
-check("条数变了要当场写出来，不然人只会以为翻页算错了",
-      "列表刚更新过：" in eff and "if (t !== total) {" in eff,
+check("补下一批的 offset 就是「已经拿到几条」（不是页码×列数），列表变短也不会落到空页",
+      "const offset = gotRef.current;" in eff
+      and "if (loadingRef.current || offset >= total) return;" in eff,
+      re.findall(r"const offset[^\n]*", eff))
+check("接口回来的 total 变少时当场写出来，并把上限换成新的 total",
+      "if (t !== total) {" in eff and "列表刚更新过：" in eff and "setTotal(t);" in eff,
       [l for l in eff.splitlines() if "列表刚更新过" in l])
+check("已经铺出去的卡不因为 total 变短被抹掉（不重置 items，只停止继续补）",
+      "setItems((prev) => {" in eff and "setItems([])" not in eff, None)
+check("同一轮里只发一个请求（loadingRef 挡着；每批到货重挂 observer 才会连着补第二批）",
+      "if (loadingRef.current || offset >= total) return;" in eff
+      and "loadingRef.current = true;" in eff and "loadingRef.current = false;" in eff, None)
 # (a) 旧写法靠模板里那一个 id="hotupd-{{ sec }}"。现在这一句是组件的 note，
-# 两个 HotSection 各自渲染自己的标题行，天然是"每组一个"
-check("提示挂在两组的组标题上（电影、电视剧各一个，由各自组件的 note 给）",
-      "第 {page + 1} / {pages} 页" in hotsec and "<SectionHead" in hotsec, None)
+# 两个 HotSection 各自渲染自己的标题行，天然是"每组一个"。
+check("进度挂在两组的组标题上（电影、电视剧各一个：已铺 N / total 部）",
+      "已铺 {items.length} / {total} 部" in hotsec and "<SectionHead" in hotsec, None)
 ui_ts = wread("components", "ui.tsx")
 check("提示不是 nowrap（窄屏上会把标题那行顶出容器）",
       "flex-wrap" in ui_ts and "nowrap" not in ui_ts and "nowrap" not in hotsec,
@@ -323,135 +307,64 @@ check("搜索完再进这个标签页走的仍是真查询（带着词去打，�
 check("失败过要把门闩放开：再进这一栏能重试，不然永远卡在错误上",
       "cloudDone.current = null; // 失败过就该让人再进来时重试" in cld, None)
 
-print("\n12) 猜你想搜翻页动画、海报不许重复加载，与「没有搜索时不挂翻页」")
+print("\n12) 猜你想搜横滚：不推不隐、海报不重复解码，与「没有搜索时不挂横滚」")
 # (a) 这一节原来读 static/app.js 里那套手工搬 DOM 的推入（ghost 节点、offsetWidth 重排、
-# 三路收尾）与 static/app.css 的 hotOutLeft/hotInRight。React 这一版不需要那套机械：
-# 整行随页码换 key、方向记在 state 里、动画由 CSS class 给。每条不变量各归各处。
+# 三路收尾）与 WAAPI 的 28px 轻推。整行换页整个撤掉后，这些机械在组件里没有载体：
+# 横滚条只做 scrollBy，内容从不重挂、也不改透明度。
 vod_ts = wread("components", "VodPanel.tsx")
 poster_ts = wread("components", "Poster.tsx")
 searchbar_ts = wread("components", "SearchBar.tsx")
-kf = stcss[stcss.index("@keyframes row-next"):stcss.index("@keyframes row-prev") + 90]
-# (a) 原来靠两个 class（row-push-next / row-push-prev）互推。动画换成 WAAPI 后，
-# styles.css 里那两组 @keyframes 与两个 class 已不再被前台组件引用，是历史残留 —— 不再拿它当判据。
-# 实际生效的路径是 el.animate：位移方向由 dir 给（下一页 +28 顶进、上一页 -28 反过来），
-# 终帧回到 transform: none 与 opacity 1（旧那行的「退场」就是被原地替换 + 新行从反方向推入）。
-check("翻页是两行互推：新行从一边顶进来、旧行往另一边退场（上一页反过来）",
-      "el.animate(" in hotsec
-      and "translateX(${dir > 0 ? 28 : -28}px)" in hotsec
-      and '{ opacity: 1, transform: "none" }' in hotsec, None)
-# (a) 原来钉 setDir(delta) 早于 setPage((p) => ...)。方向现在记在 ref 上（dirRef），
-# 因为 setPage 之后旧页码就取不到了；把 dirRef.current = delta 放在 setPage(next) 之前即可，
-# 判据等价：写方向的语句严格早于改页码那一句。
-check("方向在改页码之前记住（不然 setPage 之后永远算出 0）",
-      "dirRef.current = delta;" in hotsec
-      and hotsec.index("dirRef.current = delta;") < hotsec.index("setPage(next);"),
-      None)
-# (b) 原来钉的是 key={`${page}`} 强制整块重挂。这恰恰是被点名的 bug 源头：取数那一瞬间格子里
-# 一张卡都没有 → 高度塌陷、滚动条回闪。新机制换成「旧那几行留在原地，新数据到了才由 setPaint
-# 当场替换」，所以 key={`${page}`} 反过来必须不在。不变量搬到它等价的那一半：渲染读的是
-# paint.rows（换页时先留着上一屏，不会空帧），手工搬 DOM 那套（replaceChildren/cloneNode）照旧无对应物。
-check("旧行不会凭空消失：旧屏留在原地等新数据替换，而不是整块重挂成空帧",
-      "paint.rows.map" in hotsec and "key={`${page}`}" not in hotsec
+check("横滚不靠关键帧与幽灵节点：没有 WAAPI、没有 replaceChildren/cloneNode，只有 scrollBy",
+      "el.scrollBy({" in hotsec and "el.animate(" not in hotsec
       and "replaceChildren" not in hotsec and "cloneNode" not in hotsec, None)
-# (c) 旧 ghost 要复制一份定位，为的是"进场时区块高度不跳"。新实现只有一行在正常流里，
-# 位移又只有 28px（不是整行宽），高度天然不跳 —— 等价形态是不存在第二个绝对定位的副本
-check("区块高度不跳：只有一行在正常流里，没有第二份绝对定位的副本",
-      "position: absolute" not in hotsec and "absolute" not in grid_cls,
-      re.findall(r"absolute", hotsec))
-# (a) 旧写法靠换 key 让同名 CSS class 重新触发。WAAPI 每次调用 el.animate() 都新建一条动画，
-# 天然「第二次也播得动」，既不需要换 key、也不需要 offsetWidth 强制重排那一行。
-# 「不许 offsetWidth 强排」那半原样保留；「每次新建一条动画」是它在新机制里的等价载体。
-check("同名动画第二次也播得动：每次新建一条 el.animate()，不再靠换 key 触发 class、也不需要强制重排",
-      "el.animate(" in hotsec and "offsetWidth" not in hotsec, None)
-# (a) 原来钉的是 dir=0 时那串 class 拼成空字符串。新机制没有 class：同页重铺时把 dirRef 归 0
-# 后直接 return，动画守卫里 `!dir` 同样挡住 0 —— 于是首屏（seed 进去的第 0 页）与同页重铺都不推。
-check("同一页重铺与首屏不推：dir=0 时动画守卫直接 return，不放 WAAPI",
-      "if (paint.page === page) {" in hotsec and "dirRef.current = 0;" in hotsec
-      and "if (!el || !dir || reduced()) return;" in hotsec, None)
-# (c) 判据本身仍成立，只是锚点字符串变了：夹页那步的自变量是 page + delta（不再是 p + delta）；
-# 「永远只渲染当前那一行」的载体从 const rows = byPage[page] 换成 paint.rows —— DOM 里始终只有一屏，
-# 连点两次时 `if (next === page) return;` 还会把没挪窝的那一下直接吞掉，绝不会再叠一层。
-check("连点两次不能叠两层：页码被夹在 0..pages-1，而且永远只渲染当前那一行",
-      "Math.min(pages - 1, page + delta)" in hotsec and "paint.rows.map" in hotsec
-      and "if (next === page) return;" in hotsec, None)
-check("动画自己会停在终态（both 填充），不需要 JS 去收尾摘 class",
-      "row-next 0.32s cubic-bezier(0.22, 0.61, 0.36, 1) both" in stcss
-      and "animationend" not in hotsec, None)
-check("没有收尾代码，也就没有「三条路都来、重复执行把下一次登记删掉」那一类坑",
-      "animationend" not in hotsec and "clearTimeout" not in hotsec, None)
-# (c) 旧那条 480ms 定时器是给"animationend 可能不来"兜底的。现在没有需要兜底的临时节点，
-# 时长只剩 CSS 一个来源（0.32s），JS 侧不再出现第二个数
-check("时长只有一个来源：CSS 的 .32s，JS 里没有那个 480ms 兜底",
-      "setTimeout" not in hotsec and ".32s" in stcss and "480" not in hotsec, None)
-# (c) 判据原样成立，锚点换了：旧版只有一个 setShown(true)，新版是一个 { shown, instant } 状态；
+check("系统要求减少动态效果时直接跳过去，不用 smooth",
+      'behavior: reduced() ? "auto" : "smooth"' in hotsec, None)
+check("没有动画收尾要兜底：组件里没有 animationend / 定时器这一类临时状态",
+      "animationend" not in hotsec and "setTimeout" not in hotsec
+      and "clearTimeout" not in hotsec, None)
+check("也不需要 offsetWidth 强制重排（横滚不量行高，也不靠换 key 重播动画）",
+      "offsetWidth" not in hotsec, None)
+# (c) 判据原样成立：旧版只有一个 setShown(true)，新版是一个 { shown, instant } 状态；
 # 在 ref 里当场问 complete —— 已经解码完的图置 instant，class 三元里 instant 直接不加 .poster-in，
 # 于是「当场可见、不再淡一次」；只有还没落地的图才走那一遍淡入。
-check("翻回来的页不重新解码海报、也不再各自淡一次：命中缓存的图当场就是可见",
+check("横滚经过同一张海报不重新解码、也不再淡一次：命中缓存的图当场就是可见",
       "node?.complete && node.naturalWidth > 0" in poster_ts
       and "setSt({ shown: true, instant: true })" in poster_ts
       and 'st.instant ? "" : "poster-in"' in poster_ts,
       re.findall(r"node\?\.\w+[^\n]{0,40}", poster_ts))
-# (c) 判据不变，锚点换：旧写法把首屏单列（page === 0 || rows），新写法把 boot 那份 seed 进
-# byPage[0]，于是「命中缓存」与「首屏」合流成同一个条件 —— 取数之前就看过 byPage[page] 就 return。
-check("翻回来那一页连 /api/hot 都不该再发：取数之前就看过 byPage",
-      "if (!cols || byPage[page] || loading) return;" in hotsec, None)
-check("列数一变旧那批就作废（一页装哪几条跟着变）",
-      "setByPage({});\n  }, [cols]);" in hotsec, re.findall(r"\}, \[cols\]\);", hotsec))
-# (a) 旧断言钉的是「渲染那行时 class 不区分缓存/接口」。新机制里数据不管来自首屏 seed 还是接口
-# 回填，都进同一张 byPage，推入由那条依赖 [byPage, page, paint.page] 的 effect 统一触发 ——
-# 它只看 byPage[page] 命中没有、dir 是不是非 0，压根不看这一屏是从哪儿来的。等价形态钉这个合流点。
-check("搬回来的页同样要走一次推入：seed 与取数都进同一张 byPage，动画 effect 不分来源",
-      "setByPage((m) => (m[0] ? m : { ...m, 0: boot.rows.slice(0, cols) }));" in hotsec
-      and "setByPage((m) => ({ ...m, [page]: d.items ?? [] }));" in hotsec
-      and "[byPage, page, paint.page]" in hotsec, None)
-check("CSS 里进退场两组关键帧都在，方向相反（位移量从整行宽改成 28px 的轻推）",
-      "translateX(28px)" in kf and "translateX(-28px)" in kf, kf[:180])
-# 这条的后半（"没有任何 opacity 参与"）在新实现里**不成立**：row-next / row-prev 这两组关键帧
-# 同时把 opacity 从 0 推到 1，而"半透明的行进场会闪"正是上一版被指出的问题（旧 app.css 里
-# 那两组 hotOutLeft / hotInRight 就是专门不带 opacity 的）。不改实现，这里只钉还成立的前半，
-# 后半已作为疑似回归写进交付报告。
-check("进退场两组关键帧时长都在 .4s 以内（opacity 那一半新实现没守住，已上报）",
-      "row-next 0.32s" in stcss and "row-prev 0.32s" in stcss
-      and not re.search(r"\.(\d{2,})s", kf.replace("0.32s", "")), kf[:150])
-# (c) 旧版整行 100% 位移，必须给那一组套一个 overflow-x: clip 的裁切容器，
-# 否则会压到下面「电视剧」那一组。新实现只推 28px，落在页面自身的留白里，
-# 裁切容器与 clip/hidden 那一争论随之消失
-check("不再需要裁切容器：轻推的越界量在页面留白里，组件里既不写 clip 也不写 hidden",
-      "overflow" not in hotsec and "clip" not in hotsec, re.findall(r"overflow\S*", hotsec))
-# (b) 原来一处 CSS 媒体查询就够（动画是 class 给的）。动画换成 WAAPI 后，styles.css 里那段
-# @media (prefers-reduced-motion: reduce){ .row-push-*{animation:none} } 已成死规则（组件不再引用
-# 那两个 class），拿它当判据等于钉在没生效的表面上。不变量搬到实际生效的那条路径：
-# 组件用 reduced() 现问 matchMedia，命中就在动画守卫里 return，一条 WAAPI 都不放。
-check("系统要求减少动态效果时不播：组件里 matchMedia 问到 reduce 就在动画守卫里挡住",
-      'window.matchMedia?.("(prefers-reduced-motion: reduce)")' in hotsec
-      and "reduced()) return;" in hotsec, None)
-# (c) 不变量原样成立（动效挂在整行容器上，一次合成），锚点从 class 换成 WAAPI 的目标元素：
-# el.animate 拿的是 gridRef.current（那一整行网格容器），Poster 里既不出现 animate 也不出现 row-push。
-check("动效挂在整行容器上而不是每张卡上（一次合成，六张卡不会各自错开拍）",
-      "el.animate(" in hotsec and "const el = gridRef.current;" in hotsec
-      and "animate" not in poster_ts and "row-push" not in poster_ts, None)
+# 数据只有两条路：boot 首屏一次、右端哨兵补批（且不是见底就发）。
+check("已铺出去的内容不会因为补批被重置（setItems 是 append 不是 replace）",
+      "useState<HotRow[]>(boot.rows)" in hotsec
+      and "setItems((prev) => {" in hotsec and "setItems([])" not in hotsec, None)
+# 动效挂在容器滚动上而不是每张卡：Poster 里不出现 scrollBy，横滚只有一处触发点。
+check("滚动只由那一条横滚容器执行，Poster 里没有第二处 scrollBy / animate",
+      "animate" not in poster_ts and "scrollBy" not in poster_ts, None)
 runf = app_ts[app_ts.index("const goSearch = useCallback"):app_ts.index("const openDetail = useCallback")]
 check("空关键词走和「首页」那颗按钮同一套重置，不是只把猜你想搜显出来",
       "onHome={goHome}" in app_ts and "const goHome = useCallback" in app_ts
       and "if (next.length < 2) {" in runf, re.findall(r"if \(next\.length[^\n]*", runf))
 gh = app_ts[app_ts.index("const goHome = useCallback"):app_ts.index("useEffect(() => {\n    const onPop")]
 check("这套重置会把结果与网盘那份一起收掉（不留上一个词的东西在屏上）",
-      "setSearch({ data: null, loading: false, error: \"\", ms: 0 });" in gh
-      and "setCloud(null);" in gh, re.findall(r"set(Cloud|Search)\([^\n]*", gh))
-check("翻页条跟着一起收：它只在有数据那一路才渲染（第 1 页且没有下一页时整条不出现）",
-      "hasMore || page > 1" in vod_ts and "if (!data) {" in vod_ts, None)
+      "setStack(null);" in gh and "setCloud(null);" in gh
+      and 'setLoad({ loading: false, appending: false, error: "" });' in gh,
+      re.findall(r"set(Cloud|Stack|Load)\([^\n]*", gh))
+check("自动追加的尾巴只在有数据那一路：loading、error、空结果三种分支都排在它前面",
+      vod_ts.index("if (loading && !stack)") < vod_ts.index("const d = stack;")
+      and vod_ts.index("const d = stack;") < vod_ts.index("ref={sentinel}"), None)
 check("标签栏不跟着搜索一起藏了：Tabs 整块在任何 kw 条件之外（没词也能切到网盘查询 / 资源站目录）",
-      "kw ?" not in app_ts[:app_ts.index("<Tabs\n")] and '<Tabs.Panel id="dir"' in app_ts,
+      "{kw ?" not in app_ts[:app_ts.index("<Tabs\n")] and '<Tabs.Panel id="dir"' in app_ts,
       re.findall(r"\{!?kw \?", app_ts[:app_ts.index("<Tabs\n")]))
-check("只清那一行「命中 N 部…」：统计那一段跟着 data 走，data 一空就没有",
-      "{d.hits}" in vod_ts and "if (!data) {" in vod_ts and vod_ts.index("if (!data) {")
-      < vod_ts.index("命中"), None)
+check("统计那一段跟着 stack 走：stack 一空（loading / error / 空结果）就整块不渲染",
+      "{d.hits}" in vod_ts and "if (loading && !stack) {" in vod_ts
+      and "if (!stack) {" in vod_ts and vod_ts.index("if (!stack) {") < vod_ts.index("命中"),
+      None)
 check("落地页上清空关键词提交要真的落回 /，否则 URL 停在一个没内容的关键词页",
       'const url = nextKw ? landingUrl(nextKw, nextPage) : "/";' in app_ts
       and 'commit("", 1, true);' in gh, re.findall(r"const url = [^\n]*", app_ts))
-check("开始查新词时结果已经换成骨架屏（loading 且手上还没有这一屏的数据）",
-      "if (loading && !data) {" in vod_ts and "<Skeleton" in vod_ts
-      and "setSearch((s) => ({ ...s, loading: true, error: \"\" }));" in app_ts, None)
+check("开始查新词时结果已经换成骨架屏（loading 且手上还没有这一叠）",
+      "if (loading && !stack) {" in vod_ts and "<Skeleton" in vod_ts
+      and "setStack((cur) => (cur && cur.kw === kw && cur.from === page ? cur : null));" in app_ts,
+      None)
 check("搜索没成功时给一句人话而不是留一屏旧东西（翻页条整条不出现，回主页那颗按钮就是退路）",
       'if (error) {\n    return <EmptyNote' in vod_ts and 'aria-label="回主页"' in searchbar_ts,
       None)
@@ -486,8 +399,8 @@ check("翻页仍然一次只给一页的量：全量只存在缓存里，不整�
 sub = hotsec[hotsec.index("export function hotNote"):]
 # (c) 判据不变，锚点字符串里 `${...}` 换成 JSX 的 `{...}`：这一句「第 N / M 页」现在以 JSX 写在
 # SectionHead 的 note 里（无 $），而 hotNote 里的「候选 X 条」仍是模板串（有 $）。
-check("标题写的是成品数，不再只写「共 N 条候选」（每组另有各自的页数）",
-      "候选 ${hot.candidates} 条" in sub and "第 {page + 1} / {pages} 页" in hotsec
+check("标题写的是「已铺 N / total 部」，不再只写「共 N 条候选」",
+      "候选 ${hot.candidates} 条" in sub and "已铺 {items.length} / {total} 部" in hotsec
       and "boot.total ||" in hotsec, sub[:160])
 check("认不出类别丢掉几条也写在标题上", "dropped_kind" in sub and "丢掉" in sub, None)
 check("「最近一年/半年」跟着缓存里的 window_days 走，旧缓存不会提前说新话",
@@ -531,9 +444,10 @@ check("同步的是当前这一词：title / canonical / description / og 三项
                               'script[type="application/ld+json"]')), None)
 check("JSON-LD 的形状与服务端那一份一致：有词才写 ItemList",
       '"@type": "ItemList"' in sync and "numberOfItems: items.length" in sync, None)
-check("meta 只在「当前这一词与已到手的数据」变化时同步，不挂在请求成功那一路的回调里",
-      "useEffect(() => syncSeo(kw, search.data), [kw, search.data]);" in app_ts, None)
-pop = app_ts[app_ts.index("const onPop = () => {"):app_ts.index("useEffect(() => syncSeo")]
+check("meta 只在「当前这一词与已到手的那一叠」变化时同步，不挂在请求成功那一路的回调里",
+      "useEffect(\n    () => syncSeo(kw, stack ? { items: stack.items, sourcesOk: stack.sources_ok } : null),\n    [kw, stack],\n  );"
+      in app_ts, None)
+pop = app_ts[app_ts.index("const onPop = () => {"):app_ts.index("useEffect(\n    () => syncSeo")]
 check("从后退/前进进来时只把词与页码读回 state，一次历史都不写（地址已经是目标了）",
       "setKw(nkw);" in pop and "setPage(np);" in pop
       and "history." not in pop, re.findall(r"set(Kw|Page)\([^\n]*", pop))
@@ -541,8 +455,10 @@ check("后退/前进接住了：地址是 /s/<词> 就搜那个词，不再出�
       'location.pathname.match(/^\\/s\\/(.+)$/)' in app_ts
       and 'window.addEventListener("popstate", onPop)' in app_ts
       and "decodeURIComponent(m[1])" in app_ts, re.findall(r"location\.pathname\.match\([^\n]*", app_ts))
-check("翻页与取数用的都是同一个 state（页码进 commit，词与页码进依赖）",
-      "onPage={(p) => commit(kw, p, false)}" in app_ts and "}, [kw, page, tick]);" in app_ts, None)
+check("起始页与取数用的是同一个 state（page 进 commit、也进取数依赖；往后追加只读 stack.pages）",
+      "const [page, setPage] = useState(boot.page || 1);" in app_ts
+      and "api\n      .search(kw, page, ac.signal)" in app_ts
+      and "}, [kw, page, tick]);" in app_ts, None)
 check("从落地页换词时服务端那份旧摘要整块不再画出来（不是藏起来：判据就是当前词等不等于 boot.kw）",
       "const showSsr = !!kw && kw === boot.kw" in app_ts and "{showSsr ? (" in app_ts, None)
 

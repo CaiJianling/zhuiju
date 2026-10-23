@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@heroui/react";
 import { api } from "../api";
 import type { HotResult, HotRow } from "../types";
@@ -17,13 +17,23 @@ interface Group {
 
 const reduced = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-/** 猜你想搜：一行正好铺满容器，翻页是整行左右推入（不做横向滚动条）。
- *  每页张数直接问 CSS 网格实际几列，两边共用一个来源，不会算错行。
+/** 一颗海报在条里的宽度：三颗铺满手机、上限 176px（再宽就是把一张海报摊成墙），
+ *  窄到 104px 时片名开始挤，所以那也是下限。整行横滚，不按断点重排 ——
+ *  原来"一行正好铺满容器 + 整行换页"要先量有几列才知道该取几条，量不到还会白跳一次。 */
+const CELL = "w-[31%] min-w-[104px] max-w-[176px] shrink-0 snap-start";
+
+/** 每次补一批多少条：比最宽的一屏（1680 ÷ 176 ≈ 9）多一点 */
+const BATCH = 12;
+
+/** 猜你想搜：一行横着滚，滚到头自动补下一批。
  *
- *  换页时**旧的那一行留在原地**，新数据到了才当场替换，并对容器做一次位移动画。
- *  上一版是 `key={page}` 强制重挂整个网格：取数那一瞬间格子里一个卡片都没有，
- *  区块高度塌成一行文字，文档变矮、浏览器把滚动位置往上顶 —— 现象就是
- *  "翻页时滚动条回闪 / 电视剧那一组直接跳"。 */
+ *  以前是"整行换页"：上一页渐隐、下一页渐现。晃眼的原因在那次交叉淡入 ——
+ *  三十几张海报同时改透明度，人眼会当成"整块在闪"。横滚之后所有内容一直实在那儿，
+ *  只是视野在动，动的是位移不是透明度，读起来才是"往右翻了一页"。
+ *
+ *  每一批 12 条：比最宽的一屏（1680 ÷ 176 ≈ 9）多一点，取完这一批哨兵多半就
+ *  滚出视野了，不会一次连发好几个请求；列表变短（6 小时缓存换档）时按 total 夹住，
+ *  不会停在空的那一截。 */
 export function HotSection({
   kind,
   label,
@@ -33,172 +43,150 @@ export function HotSection({
   kind: "movie" | "tv";
   label: string;
   boot: Group;
-  onDetail: (s: DetailSpec) => void;
+  onDetail: (s: DetailSpec, from?: HTMLElement | null) => void;
 }) {
-  const gridRef = useRef<HTMLDivElement>(null);
-  const dirRef = useRef(0);
-  const [cols, setCols] = useState(0);
-  const [page, setPage] = useState(0);
-  const [total, setTotal] = useState(boot.total || boot.rows.length);
-  const [byPage, setByPage] = useState<Record<number, HotRow[]>>({});
-  const [paint, setPaint] = useState<{ page: number; rows: HotRow[] }>({ page: 0, rows: boot.rows });
-  const [note, setNote] = useState("");
-  const [loading, setLoading] = useState(false);
+  const row = useRef<HTMLDivElement>(null);
+  const tailRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
   const reqId = useRef(0);
+  const [items, setItems] = useState<HotRow[]>(boot.rows);
+  const [total, setTotal] = useState(boot.total || boot.rows.length);
+  const [loading, setLoading] = useState(false);
+  const [note, setNote] = useState("");
+  const [atEnd, setAtEnd] = useState(false);
+  // 已经拿到几条要能被 more() 当场读到（state 在这一轮里还是旧的），所以配一个 ref
+  const gotRef = useRef(boot.rows.length);
+  gotRef.current = items.length;
 
-  const measure = useCallback(() => {
-    const el = gridRef.current;
-    if (!el) return;
-    const v = window.getComputedStyle(el).gridTemplateColumns || "";
-    const n = v.split(" ").filter(Boolean).length;
-    if (n > 0) setCols((c) => (c === n ? c : n));
-  }, []);
+  // 同一部片可能在两批里都出现（各源上榜时间不同），按 片名+年份 去重，别铺两张卡
+  const key = (x: HotRow) => `${x.title}#${x.year || ""}`;
 
-  // 列数要在浏览器画第一帧之前就知道，否则首屏会先铺 12 张再缩成一行，白跳一次
-  useLayoutEffect(() => {
-    measure();
-    const el = gridRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [measure]);
-
-  // 列数变了，一页装哪几条就跟着变了：按列数作废，翻回来的页才不许变
-  useEffect(() => {
-    setByPage({});
-  }, [cols]);
-
-  // 首屏那一条服务端已经渲染进 HTML 了：够用就直接当第 0 页，不发请求；
-  // 窗口特别宽（一行的数比首屏还多）时才回去补一次
-  useLayoutEffect(() => {
-    if (!cols || boot.rows.length < cols) return;
-    setByPage((m) => (m[0] ? m : { ...m, 0: boot.rows.slice(0, cols) }));
-  }, [cols, boot.rows]);
-
-  useEffect(() => {
-    const r = byPage[page];
-    if (!r) return;
-    if (paint.page === page) {
-      setPaint({ page, rows: r }); // 同一页重铺（列数变了），不推
-      dirRef.current = 0;
-      return;
-    }
-    setPaint({ page, rows: r });
-    const dir = dirRef.current;
-    dirRef.current = 0;
-    const el = gridRef.current;
-    if (!el || !dir || reduced()) return;
-    el.animate(
-      [
-        { opacity: 0, transform: `translateX(${dir > 0 ? 28 : -28}px)` },
-        { opacity: 1, transform: "none" },
-      ],
-      { duration: 320, easing: "cubic-bezier(0.22, 0.61, 0.36, 1)" },
-    );
-  }, [byPage, page, paint.page]);
-
-  useEffect(() => {
-    if (!cols || byPage[page] || loading) return;
-    const mine = ++reqId.current;
+  const more = useCallback(() => {
+    const offset = gotRef.current;
+    if (loadingRef.current || offset >= total) return;
+    loadingRef.current = true;
     setLoading(true);
+    const mine = ++reqId.current;
     api
-      .hot(kind, page * cols, cols)
+      .hot(kind, offset, BATCH)
       .then((d: HotResult) => {
         if (mine !== reqId.current) return;
         const t = d.total ?? total;
-        const np = Math.max(1, Math.ceil(t / cols));
         if (t !== total) {
           setTotal(t);
           setNote(`列表刚更新过：${total} → ${t} 条`);
         }
-        if (page > np - 1) {
-          // 列表变短了还停在原来那一页，翻出来就是空白：夹回最后一页重取
-          setPage(np - 1);
-          setByPage({});
-          return;
-        }
-        setByPage((m) => ({ ...m, [page]: d.items ?? [] }));
+        setItems((prev) => {
+          const seen = new Set(prev.map(key));
+          const next = prev.slice();
+          (d.items || []).forEach((x) => {
+            if (!seen.has(key(x))) {
+              seen.add(key(x));
+              next.push(x);
+            }
+          });
+          return next;
+        });
       })
       .catch(() => {
-        /* 取数失败就停在原来那一行，页码标签会说"没取到" */
+        /* 取数失败就停在已拿到的那些，标题那行"正在补"会消失，不会假装还在取 */
       })
       .finally(() => {
-        if (mine === reqId.current) setLoading(false);
+        loadingRef.current = false;
+        setLoading(false);
       });
-  }, [cols, page, byPage, loading, kind, total]);
+  }, [kind, total]);
+
+  /* 哨兵在滚动条右侧 260px 处露头就来下一批。
+     root 必须是这条横滚容器（不是视口）：贴着视口的话，右边看不见的那截也算"在视野里"。
+     每批到货后 items.length 变了 → 重挂一次 observer → 立刻重算可见性，
+     于是"还露着哨兵"能连着补第二批，不需要等人再滚。 */
+  useEffect(() => {
+    const el = row.current;
+    const tail = tailRef.current;
+    if (!el || !tail || items.length >= total) return;
+    if (typeof IntersectionObserver === "undefined") {
+      more();   // 老浏览器没 IO：那就一次取满，不再指望滚动触发
+      return;
+    }
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) more();
+    }, { root: el, rootMargin: "0px 260px 0px 0px" });
+    io.observe(tail);
+    return () => io.disconnect();
+  }, [items.length, total, more]);
+
+  const scrollBy = (dir: number) => {
+    const el = row.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(160, el.clientWidth * 0.86), behavior: reduced() ? "auto" : "smooth" });
+  };
 
   if (!boot.rows.length && !boot.building) return null;
-
-  const pages = Math.max(1, Math.ceil(total / (cols || paint.rows.length || 1)));
-  const go = (delta: number) => {
-    const next = Math.max(0, Math.min(pages - 1, page + delta));
-    if (next === page) return;
-    dirRef.current = delta;
-    setPage(next);
-  };
 
   return (
     <section className="space-y-3" aria-label="猜你想搜">
       <SectionHead
         title={label}
         note={
-          <span>
-            第 {page + 1} / {pages} 页
-            {loading ? <span className="text-accent"> · 正在取…</span> : ""}
+          <span className="num">
+            已铺 {items.length} / {total} 部
+            {loading ? <span className="text-accent"> · 正在补…</span> : ""}
             {note ? ` · ${note}` : ""}
           </span>
         }
         actions={
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="rounded-full"
-              isDisabled={page <= 0 || loading}
-              onPress={() => go(-1)}
-            >
-              ‹ 上一页
+            <Button size="sm" variant="ghost" className="rounded-full" aria-label={`把${label}往回滚`}
+                    onPress={() => scrollBy(-1)}>
+              ‹
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="rounded-full"
-              isDisabled={page >= pages - 1 || loading}
-              onPress={() => go(1)}
-            >
-              下一页 ›
+            <Button size="sm" variant="ghost" className="rounded-full" aria-label={`把${label}往后滚`}
+                    isDisabled={loading || (atEnd && items.length >= total)}
+                    onPress={() => { scrollBy(1); more(); }}>
+              ›
             </Button>
           </>
         }
       />
       <div
-        ref={gridRef}
-        className="grid grid-cols-3 gap-x-4 gap-y-6 sm:grid-cols-4 lg:grid-cols-6"
+        ref={row}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 8);
+        }}
+        className="scroll-thin snap-x flex gap-4 overflow-x-auto pb-1"
         aria-busy={loading}
       >
-        {paint.rows.map((x) => (
-          <Poster
-            key={`${x.title}-${x.year}`}
-            title={x.title}
-            pic={x.pic}
-            href={x.url}
-            meta={[x.year || x.type, x.rate ? `豆瓣 ${x.rate}` : "", x.n_sources > 1 ? `${x.n_sources} 源` : ""]}
-            spec={{
-              title: x.title,
-              pic: x.pic,
-              year: x.year,
-              type: x.type,
-              remarks: x.remarks,
-              src: x.src,
-              vid: x.vid,
-              n: x.n_sources,
-              sources: (x.sources || []).map((s) => ({ id: s.id, name: s.name, vid: s.vid ?? "" })),
-              from: "hot",
-            }}
-            onDetail={onDetail}
-          />
+        {items.map((x) => (
+          <div key={`${x.title}-${x.year}`} className={CELL}>
+            <Poster
+              title={x.title}
+              pic={x.pic}
+              href={x.url}
+              meta={[x.year || x.type, x.rate ? `豆瓣 ${x.rate}` : "", x.n_sources > 1 ? `${x.n_sources} 源` : ""]}
+              spec={{
+                title: x.title,
+                pic: x.pic,
+                year: x.year,
+                type: x.type,
+                remarks: x.remarks,
+                src: x.src,
+                vid: x.vid,
+                n: x.n_sources,
+                sources: (x.sources || []).map((s) => ({ id: s.id, name: s.name, vid: s.vid ?? "" })),
+                from: "hot",
+              }}
+              onDetail={onDetail}
+            />
+          </div>
         ))}
+        <div ref={tailRef} aria-hidden="true" className="w-px shrink-0 self-stretch" />
+        {loading ? (
+          <div className="grid w-24 shrink-0 place-items-center text-[11px] text-muted" role="status">
+            正在补…
+          </div>
+        ) : null}
       </div>
     </section>
   );

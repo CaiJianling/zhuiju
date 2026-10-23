@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { Table as HeroTable } from "@heroui/react";
+import { useClamp } from "../hooks/useClamp";
 import type { AdminView, BehRow, Filters, Reason } from "./types";
 
 /** 后台的路由就是查询字符串本身：tab / 筛选 / 页码全在 URL 上，
@@ -53,76 +55,81 @@ export function Card({ children, className }: { children: ReactNode; className?:
   return <div className={`rounded-2xl bg-surface p-4 text-surface-foreground shadow-surface ring-1 ring-border ${className ?? ""}`}>{children}</div>;
 }
 
-/** 「5 行内联滚动」：超过 N 行就给 tbody 一个刚好 N 行的 maxHeight，在卡片内部滚，
- *  而不是让一张 40 行的表把整页撑长。行高是量出来的 —— 各列换行情况不一，
- *  写死 32px 会切掉半行（老模板那段 JS 就是在补这个）。 */
-export function Fold({ rows, children }: { rows: number; children: ReactNode }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [max, setMax] = useState<number | null>(null);
-
-  const measure = useCallback(() => {
-    const el = box.current;
-    if (!el) return;
-    const trs = el.querySelectorAll("tbody tr");
-    if (trs.length <= rows) {
-      setMax(null);
-      return;
-    }
-    const nth = trs[rows] as HTMLElement;
-    const h = nth.offsetTop;
-    // 出现滚动条后行会重排一次，量第二遍才是真的（老实现踩过）
-    el.style.maxHeight = `${h}px`;
-    const extra = el.offsetHeight - el.clientHeight;
-    setMax(h + extra);
-  }, [rows]);
-
-  useEffect(() => {
-    // 测量放在 rAF 里：在 ResizeObserver 的回调里同步改样式，浏览器会报
-    // "ResizeObserver loop completed with undelivered notifications" —— 无害但控制台里刺眼，
-    // 而后台控制台是要给人看问题的
-    const id = requestAnimationFrame(measure);
-    return () => cancelAnimationFrame(id);
-  }, [measure]);
-
-  useEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => requestAnimationFrame(measure));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [measure]);
+/** 后台每一张表都是这一份：HeroUI 的 Table + 「N 行内联滚动」+ 表头吸顶。
+ *
+ *  限高为什么落在 .table__scroll-container 这一层，而不是外面再套一个 div：
+ *  Table.Root 自带 overflow-clip（它是 grid，给圆角用的），把限高写在外层的话，
+ *  宽表是被**裁掉**而不是滚出来的；同时 sticky 的 th 只跟着"最近的滚动祖先"吸，
+ *  外层滚、内层也滚的话表头就吸在看不见的位置上。所以这一层既是横向滚动条，
+ *  也是纵向限高与吸顶的那个框。 */
+export function Table({ head, children, dense, rows, label }: {
+  head: ReactNode[];
+  children: ReactNode;
+  dense?: boolean;
+  rows?: number;
+  label?: string;
+}) {
+  // 限高那三件事（量第 N+1 行、补滚动条、不许用 rAF）收在 useClamp 里，前台的检索快照共用
+  const calc = useCallback(
+    (el: HTMLElement) => {
+      if (rows === undefined) return null;
+      const trs = el.querySelectorAll("tbody tr");
+      if (trs.length <= rows) return null;
+      const h = (trs[rows] as HTMLElement).offsetTop;
+      el.style.maxHeight = `${h}px`;   // 先夹一次再量第二遍：滚动条一出现行会重排
+      return h + (el.offsetHeight - el.clientHeight);
+    },
+    [rows],
+  );
+  const setBox = useClamp(calc);
 
   return (
-    <div ref={box} className="overflow-auto" style={max ? { maxHeight: max } : undefined}>
-      {children}
-    </div>
+    <HeroTable variant="secondary" className={dense ? "tbl-dense" : "tbl-plain"}>
+      {/* relative 不是可有可无：offsetTop 量的是"相对最近的定位祖先"，
+          不写就会一路找到页面外层，算出来的高度大得离谱，限高等于没限 */}
+      <HeroTable.ScrollContainer ref={setBox} className="relative">
+        <HeroTable.Content aria-label={label || head.filter(Boolean).join(" / ") || "统计表"}>
+          <HeroTable.Header>
+            {/* 表头吸顶：这些表都在自己那个框里滚，滚两行就认不出这一列是什么了。
+                底色由 .table-root--secondary .table__column 给（必须不透明，否则行从字底下透过去）；
+                分隔线用 inset box-shadow —— HeroUI 给列头画的是列间竖线，横着那条得自己补。 */}
+            {head.map((h, i) => (
+              <HeroTable.Column
+                key={i}
+                isRowHeader={i === 0}
+                className="sticky top-0 z-10 text-start text-muted shadow-[inset_0_-1px_0_var(--border)] first:pl-0 last:pr-0"
+              >
+                {h}
+              </HeroTable.Column>
+            ))}
+          </HeroTable.Header>
+          <HeroTable.Body>{children}</HeroTable.Body>
+        </HeroTable.Content>
+      </HeroTable.ScrollContainer>
+    </HeroTable>
   );
 }
 
-export function Table({ head, children, dense }: { head: ReactNode[]; children: ReactNode; dense?: boolean }) {
-  return (
-    <table className={`w-full border-collapse text-left ${dense ? "text-[11px]" : "text-xs"}`}>
-      <thead>
-        <tr className="border-b border-separator">
-          {head.map((h, i) => (
-            <th key={i} className="px-2 py-1.5 align-bottom text-[11px] font-semibold tracking-wider text-muted first:pl-0 last:pr-0">
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      {children}
-    </table>
-  );
+/** 一行。行与行之间的分隔线 HeroUI 已经画在 .table__row 上了，调用点别再写 border-b；
+ *  但"点开行"和"命中行为特征的行"那两种着色必须走 .row-click / .row-suspicious
+ *  （它们落在单元格上，写在 tr 上会被单元格的底色盖住）。 */
+export function Row({ children, className }: { children: ReactNode; className?: string }) {
+  return <HeroTable.Row className={className ?? ""}>{children}</HeroTable.Row>;
 }
+
+export const Cell = ({ children, className }: { children: ReactNode; className?: string }) => (
+  <HeroTable.Cell className={className ?? ""}>{children}</HeroTable.Cell>
+);
 
 export const Num = ({ children, zero }: { children: ReactNode; zero?: boolean }) => (
-  <td className={`num px-2 py-1 text-right tabular-nums ${zero ? "text-danger" : "text-foreground"}`}>{children}</td>
+  <HeroTable.Cell className={`num text-right tabular-nums ${zero ? "text-danger" : "text-foreground"}`}>{children}</HeroTable.Cell>
 );
 export const Txt = ({ children, dim, mono, title }: { children: ReactNode; dim?: boolean; mono?: boolean; title?: string }) => (
-  <td className={`px-2 py-1 ${dim ? "text-muted" : "text-foreground"} ${mono ? "num" : ""} max-w-[28rem] truncate`} title={title}>
-    {children}
-  </td>
+  <HeroTable.Cell className={`${dim ? "text-muted" : "text-foreground"} ${mono ? "num" : ""} max-w-[28rem] truncate`}>
+    {/* title 挂在单元格里那层 span 上：RAC 的 Cell 不接受 title 属性，
+        而悬停说明必须挂在能显示省略号的这一层，挂到 td 上会被 overflow 裁掉 */}
+    {title ? <span title={title}>{children}</span> : children}
+  </HeroTable.Cell>
 );
 
 /** 空值一律一个破折号：留白会让人以为"还没统计出来" */
@@ -183,18 +190,10 @@ export function ReasonChips({ reasons, onlyAct, onFilter }: { reasons: Reason[];
   );
 }
 
-/** 「像脚本的行为特征」那一节默认收起、点开过就记住（同一个 localStorage 键） */
-export function useFoldMemo(key: string) {
-  const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem(key) === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem(key, open ? "1" : "0"); } catch { /* 无痕就这次记住 */ }
-  }, [key, open]);
-  return [open, setOpen] as const;
-}
-
 export const gap = (v: number | null | undefined) => (v === null || v === undefined ? "—" : `${v.toFixed(1)}`);
+
+/** 设置里布尔项的取值：后端可能给 true / 1 / "1"，开关只看这几种。 */
+export const isOn = (v: string | number | boolean | null | undefined) => v === true || v === 1 || String(v) === "1";
 
 export function behHref(flt: Filters | undefined, ip: string, base: string) {
 
