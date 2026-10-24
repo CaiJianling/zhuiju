@@ -175,6 +175,15 @@ check("验证壳里没有站点数据：#nojs 整块没渲染，快照/榜单/�
 check("验证壳本身照样有 SEO：title / canonical / robots index / WebSite 结构化数据",
       "<title>追剧资源搜索" in body and 'rel="canonical"' in body
       and 'content="index,follow"' in body and '"@type":"WebSite"' in body, None)
+# 门禁页也要有那条词的门面：同一部剧在 /s/<词> 上，门禁开着与关着不该是两个标题、两条 canonical
+r_s = g1.get("/s/%E5%BA%86%E4%BD%99%E5%B9%B4")
+h_s = r_s.get_data(as_text=True)
+check("未验证打开 /s/<词>：SEO 跟着词走（标题 / canonical / og:type），不是站级文案",
+      r_s.status_code == 200 and "<title>《庆余年》影视资源怎么找" in h_s
+      and 'rel="canonical" href="http://localhost/s/%E5%BA%86%E4%BD%99%E5%B9%B4"' in h_s
+      and 'property="og:type" content="video.movie"' in h_s, None)
+check("验证页只借词、不借结果：没有 #nojs、没有 ItemList（快照一个字都没下发）",
+      'id="nojs"' not in h_s and '"@type":"ItemList"' not in h_s, None)
 check("接口未验证时 423 并带上 human 标记（前端据此弹滑块）",
       g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").status_code == 423
       and g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").get_json()["human"] == 1, None)

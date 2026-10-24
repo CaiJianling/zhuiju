@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -302,6 +303,12 @@ def create_app() -> Flask:
     app.json.ensure_ascii = False
     app.wsgi_app = TrustForwarded(app.wsgi_app)
 
+    # 控制台默认不刷每一发请求的访问日志：一次搜索要打十几个接口、前端还在轮询
+    # /api/refresh 与海报代理，不关的话启动窗口几秒就滚过一屏，真正的报错反而被淹没。
+    # werkzeug 的访问行是 INFO，抬到 WARNING 后只剩错误堆栈；要全程请求行走
+    # run.py --debug（等级可用入参给，见 run.py 的 LOG_LEVELS）。
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
     # 登录会话用配置文件里的密钥签名（zhuiju/data/admin.json，见 zhuiju/admin.py）
     app.secret_key = admin_mod.secret_key()
     app.permanent_session_lifetime = timedelta(seconds=admin_mod.SESSION_TTL)
@@ -438,11 +445,20 @@ def create_app() -> Flask:
             # 不用 401/403 是因为那不是"你没权限"，是"还不知道你是不是人"
             return jsonify({"error": "需要先通过真人验证", "human": 1}), 423
         # 页面这一侧不再单独渲染一张"验证页"：交同一个 React 壳，只是 boot.locked=true，
-        # 于是界面里出的就是一块滑块，而 SEO 的站点级 title/description/SearchAction
+        # 于是界面里出的就是一块滑块，而 SEO 的 title/description/canonical/SearchAction
         # 照旧写在 HTML 里（不 noindex、不 403，万一爬虫豁免那条判据不准，
         # 它看到的仍然是这个站点的门面，不是一个把收录掐死的死胡同）。
-        # 关键点：locked 时快照与榜单一个字段都不下发，没验过的人拿不到任何内容。
-        return make_response(_page(locked=True), 200)
+        # 地址是 /s/<词> 时把词也带进去：同一部剧的门面页不能因为"门禁开着"就换一套
+        # 标题与 canonical（/ 与 /s/X 是两条不同的 URL，门禁不该改变它们在搜索引擎里的样子）。
+        # 借的只有词，不借结果：locked 时不翻缓存也不敲上游，快照一个字段都不下发，
+        # 所以没验过的人拿到的仍然只有一块滑块 —— SEO 数据是门面，不是内容。
+        kw = ""
+        hit = re.fullmatch(r"/s/(.+)", request.path)
+        if hit:
+            kw = seo_mod.clean_kw(hit.group(1))
+            if len(kw) < MIN_KW:
+                kw = ""
+        return make_response(_page(kw, locked=True), 200)
 
     @app.post("/api/human/challenge")
     def api_human_challenge():
@@ -485,6 +501,8 @@ def create_app() -> Flask:
 
         `locked`（还没通过真人验证）时三个数据字段一律不给 —— 快照、猜你想搜、更新状态
         都不下发，页面里能看到的只有站名与一句话简介，界面上只剩一块滑块。
+        但 title / description / canonical / og:type 仍跟着 `kw` 走：门禁挡的是内容，
+        不是这条 URL 在搜索引擎里的样子（locked 时 `snap` 恒为空，不会顺手翻缓存）。
         """
         host = request.host_url.rstrip("/")
         snap = snap or {}

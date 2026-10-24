@@ -196,11 +196,16 @@ export default function AdminApp({ boot }: { boot: Boot }) {
             退出登录
           </Button>
         </div>
-        {pending ? (
-          /* 只留那根条：文字说明是多余的，"在取新的"这件事进度条自己会说
-              （STRM 那一屏要几秒，没有这根条看着就是卡死） */
-          <div className="bar-run" role="status" aria-label="正在读后台数据" aria-hidden="false" />
-        ) : null}
+        {/* 这条 3px 的槽位**一开始就占着**：只在 pending 时插进去，夹在 sticky 的
+            header 里就等于每次取数把下面整页往下推 3px 再弹回来，表格读着读着跳一下。
+            槽位常驻、条按需出现，高度从头到尾不变。
+            条里只留那道动画：文字说明是多余的，"在取新的"这件事它自己会说
+            （STRM 那一屏要几秒，没有这根条看着就是卡死）。 */}
+        <div className="h-[3px]">
+          {pending ? (
+            <div className="bar-run" role="status" aria-label="正在读后台数据" aria-hidden="false" />
+          ) : null}
+        </div>
       </header>
 
       <main className="mx-auto max-w-[1680px] px-4 pb-20 sm:px-6">

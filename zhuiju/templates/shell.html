@@ -37,10 +37,13 @@
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fbfbfc">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121214">
   <script type="application/ld+json">
-  {%- if seo.kw and seo.snapshot['items'] %}
+  {#- 必须用 .get('items')，不能写 snapshot['items']：门禁页的 snapshot 是空字典，
+      而 Jinja 对空字典的 ['items'] 会退到属性查找，拿到的是 dict.items 这个方法 ——
+      它真值，于是条件通过、循环时炸在"方法不可下标"上。 #}
+  {%- if seo.kw and seo.snapshot.get('items') %}
   {"@context":"https://schema.org","@type":"ItemList","name":"《{{ seo.kw }}》相关影视资源",
    "numberOfItems": {{ seo.snapshot['count'] or 0 }},"itemListElement": [
-   {%- for it in seo.snapshot['items'][:12] %}
+   {%- for it in seo.snapshot.get('items')[:12] %}
    {"@type":"ListItem","position":{{ loop.index }},"name":{{ it.title | tojson }},
     "url": "{{ seo.site }}/s/{{ it.title | urlencode }}"}{{ "," if not loop.last }}
    {%- endfor %} ]}

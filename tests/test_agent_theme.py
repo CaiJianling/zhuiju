@@ -287,6 +287,8 @@ print("\n8) 令牌桥接体检：换主题只改主题令牌，站点这层不�
 #     原来从 app.css 读调色板算对比来源的这套体检，一半按新令牌重钉（app.css 现在桥的是 HeroUI 令牌），
 #     一半搬到真正活着的 styles.css（.who-* / .num / --foreground/--muted/--surface 配对）。
 styles_css = (BASE / "web" / "src" / "styles.css").read_text(encoding="utf-8")
+# 后台主体也搬进 React 了，这一节与后面的宽度一节都要照着它查（AdminApp.tsx）
+adminapp_tsx = (BASE / "web" / "src" / "admin" / "AdminApp.tsx").read_text(encoding="utf-8")
 bridge8 = dict(re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", root))
 # 这几对是页面上真实存在的搭配。查的不是对比度数值 —— 那由主题令牌在运行时决定、静态算不出来。
 # 查的是来源：谁把某个 token 改回写死的十六进制，它就脱离主题系统，暗色下第一个坏掉的就是它。
@@ -378,6 +380,11 @@ check("回车仍然提交（React 走 form onSubmit，禁 JS 那份是原生 <fo
 check("进度条不再靠 app.js 喂 value：跑着的那道是 CSS 的 .bar-run，定量那道是 HeroUI ProgressBar",
       ".bar-run" in styles_css and "bar-slide" in styles_css and "progbar" not in css
       and "<ProgressBar" in react_ts, None)
+# 条外面那个 3px 槽位必须常驻。写成 {pending ? <div className="bar-run"/> : null} 的旧样子，
+# 条一出现就把 sticky header 撑高 3px，下面整页跟着往下跳一格 —— 表格正读着的时候最明显。
+check("后台进度条先占位再出现：3px 槽位常驻，pending 时只往槽里放条，页面不跟着跳",
+      re.search(r'<div className="h-\[3px\]">\s*\{pending \? \(\s*'
+                r'<div className="bar-run"', adminapp_tsx) is not None, None)
 
 print("\n9) 宽度、系统列、归属地只到国家")
 # 这一节自带数据：不依赖前面留下的记录，否则改到别的节就会莫名其妙红
@@ -396,7 +403,6 @@ for ip, ua_ in (("223.5.5.5", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWe
 import pathlib as _pl
 app_tsx = _pl.Path(BASE / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
 hot_tsx = _pl.Path(BASE / "web" / "src" / "components" / "HotSection.tsx").read_text(encoding="utf-8")
-adminapp_tsx = _pl.Path(BASE / "web" / "src" / "admin" / "AdminApp.tsx").read_text(encoding="utf-8")
 check("内容宽度随屏走、有上限：前后台同一档 1680，边距随屏给（不再写死一个数）",
       app_tsx.count("max-w-[1680px]") == 3 and "max-w-[1680px]" in adminapp_tsx
       and "px-4 sm:px-6" in app_tsx, app_tsx.count("max-w-[1680px]"))
@@ -558,8 +564,10 @@ check("触屏没有 hover：详情按钮在这种情况下常驻可见",
       "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in styles_css, None)
 check("整张海报在触屏上也是点击区，那一层是 <button>（键盘走得到），不是给封面挂 JS 监听",
       'className="cover-hit absolute inset-0"' in poster_ts and "contextmenu" not in react_ts, None)
-check("窄屏两张折叠卡片各就各位：接口状态排到结果上面、检索快照排到最底下，都默认折起",
-      "max-xl:contents" in app_tsx and '<div className="order-first">' in app_tsx
+check("窄屏两张折叠卡片各就各位：结果之后依次是接口状态、《xxx》的检索结果，都默认折起"
+      "（order-first 会把接口状态顶到结果上面，手机上等于把结果推出半屏）",
+      "max-xl:contents" in app_tsx and "order-first" not in app_tsx
+      and app_tsx.index("<SourcesPanel") < app_tsx.index("<SnapshotCard")
       and 'useMediaQuery("(min-width: 1280px)")' in vod_ts and "const shown = open ?? wide;" in vod_ts,
       None)
 check("全站自己画 hover/active，不要浏览器那点一下闪的灰底",

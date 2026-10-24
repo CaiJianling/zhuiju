@@ -176,9 +176,19 @@ try:
         check(f"{label}：三个数据字段一律是空的（快照、榜单、更新状态都不下发）",
               b["snapshot"] == {} and b["hot"] == {} and b["refresh"] is None,
               {k: bool(b[k]) for k in ("snapshot", "hot", "refresh")})
-        check(f"{label}：但站级门面（title/canonical/SearchAction）照旧写在 HTML 里",
-              "<title>追剧资源搜索" in h and "SearchAction" in h
-              and 'rel="canonical"' in h, None)
+        if path == "/":
+            check("未验证的首页：站级门面照旧（站点标题 / canonical 指根 / SearchAction）",
+                  "<title>追剧资源搜索" in h and 'rel="canonical" href="http://localhost/"' in h
+                  and "SearchAction" in h, None)
+        else:
+            # 门禁页也带 SEO，而且跟着地址里那一条词走：同一条 URL 不能因为门禁开着
+            # 就换一套标题与 canonical（那等于给搜索引擎两条互相打架的门面）
+            check("未验证的落地页：SEO 跟着词走（标题 / canonical / og:type 都不退回站级）",
+                  "<title>《庆余年》影视资源怎么找" in h
+                  and 'rel="canonical" href="http://localhost/s/%E5%BA%86%E4%BD%99%E5%B9%B4"' in h
+                  and 'property="og:type" content="video.movie"' in h, None)
+            check("验证页只借词、不借结果：结构化数据里没有 ItemList，页面上也没有结果",
+                  '"@type":"ItemList"' not in h and 'id="nojs"' not in h, None)
         check(f"{label}：back 记的是用户本来要点开的那一页（验完回得来）",
               b["back"] == (path if path != "/" else "/"), b["back"])
     check("未验证时的接口那条路仍然是 423 + human 标记（壳给 200，数据给 423）",
@@ -396,6 +406,38 @@ try:
                         + " ".join(p.read_text(encoding="utf-8") for p in SRC.rglob("*.ts*"))), None)
     check("字体也明确不引外网：--font-sans 全是系统族",
           "--font-sans:" in st and "url(" not in st[st.index("@theme"):st.index("@layer")], None)
+
+    print("\n13) 详情弹框的圆开圆缩：弹框与暗幕常驻名字，圆心由 JS 现算")
+    check("弹框本体常驻 detail-sheet、暗幕常驻 detail-dim（关着的抽屉整个不挂载，平时不占名字）",
+          re.search(r"\.drawer__dialog\s*\{[^}]*view-transition-name: detail-sheet", st) is not None
+          and re.search(r"\.drawer__backdrop\s*\{[^}]*view-transition-name: detail-dim", st) is not None,
+          None)
+    check("圆开与圆缩是同一对关键帧的正反放：圆心与半径都来自 root 上的 --vt-x/--vt-y/--vt-r",
+          "clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%))" in st
+          and "clip-path: circle(var(--vt-r, 120vmax)" in st
+          and "@keyframes sheet-open" in st and "@keyframes sheet-close" in st, None)
+    check("水纹是圆缘扫过弹框轮廓时荡出去的那圈 box-shadow，色取 accent",
+          "@keyframes sheet-ripple" in st
+          and "color-mix(in oklab, var(--accent)" in st.split("@keyframes sheet-ripple")[1]
+          .split("@keyframes")[0], None)
+    check("三层快照的堆叠次序写死：暗幕 1、弹框 2、飞行中的海报 3（海报不能被弹框层压住）",
+          re.search(r"::view-transition-group\(detail-dim\)\s*\{[^}]*z-index: 1", st) is not None
+          and re.search(r"::view-transition-group\(detail-sheet\)\s*\{[^}]*z-index: 2", st) is not None
+          and re.search(r"::view-transition-group\(cover-active\)\s*\{[^}]*z-index: 3", st) is not None,
+          None)
+    appjs = read("App.tsx")
+    check("圆心与半径在点开/缩回那一刻现算（海报在哪圆心就在哪，不写死像素）",
+          "function setVtOrigin" in appjs and appjs.count("setVtOrigin(") >= 3
+          and 'root.setProperty("--vt-r"' in appjs, None)
+    check("开与缩都在 startViewTransition 之前先摆好圆心（旧快照拿到的才是对的圆心）",
+          appjs.index("setVtOrigin(hero);") < appjs.index('hero.style.viewTransitionName = "cover-active";')
+          and appjs.count("setVtOrigin(hero);") == 2, None)
+
+    print("\n14) 窄屏的排序：结果之后依次是接口状态、《xxx》的检索结果")
+    check("接口状态不再用 order-first 顶到结果上面（手机上它把结果顶出半屏）",
+          "order-first" not in appjs and "xl:order-none" not in appjs, None)
+    check("aside 两块的 DOM 顺序就是窄屏的视觉顺序：接口状态在前、检索快照在后",
+          appjs.index("<SourcesPanel") < appjs.index("<SnapshotCard"), None)
 
 finally:
     hot_mod.get, seo_mod.snapshot = _real_hot, _real_snap

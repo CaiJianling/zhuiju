@@ -180,14 +180,24 @@
     }
   }
 
-  /* 详情是「从那张海报长出来」的（View Transitions 的共享元素morph），三条约定：
-     1) 面板里这一格常驻 cover-active 这个名字；列表里那张海报由 JS 在点开/缩回的
-        那一拍临时挂上、挂完就摘 —— 同屏两个元素重名的话浏览器判定冲突、整个过渡不做。
-     2) root 那一档关掉淡入淡出：整屏跟着闪一下才是真正晃眼的东西，动的应该只有那张图。
-     3) 有 VT 可用时别再让抽屉自己滑一遍：面板滑入 + 海报缩放两个动画叠着，
-        看着就是"整块在抖"。缩放只在这张图上做，其余内容一次到位。 */
+  /* 详情是「从那张海报中间圆着开出来」的（View Transitions），四条约定：
+     1) 弹框本体与暗幕常驻 detail-sheet / detail-dim 这两个名字，海报那一格常驻
+        cover-active；列表里那张海报仍由 JS 在点开/缩回的那一拍临时挂上、挂完就摘
+        —— 同屏两个元素重名的话浏览器判定冲突、整个过渡不做。
+     2) root 那一档关掉淡入淡出：整屏跟着闪一下才是真正晃眼的东西。
+     3) 有 VT 可用时别再让抽屉自己滑一遍：滑入 + 圆开两个动画叠着，看着就是"整块在抖"。
+     4) 三层的堆叠次序用 z-index 写死：暗幕最底下、弹框在其上、飞行中的海报最上
+        （不然海报缩放的半路会被弹框那层快照压住，看着就是海报"钻进面板里消失了"）。 */
   .vt-hero {
     view-transition-name: cover-active;
+  }
+
+  .drawer__dialog {
+    view-transition-name: detail-sheet;
+  }
+
+  .drawer__backdrop {
+    view-transition-name: detail-dim;
   }
 
   ::view-transition-old(root),
@@ -198,8 +208,77 @@
   ::view-transition-group(cover-active) {
     animation-duration: 0.42s;
     animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
-    /* 盖在 root 那份快照上面，否则海报缩放到一半会被整屏的新状态压住 */
+    z-index: 3;
+  }
+
+  ::view-transition-group(detail-dim) {
     z-index: 1;
+  }
+
+  ::view-transition-group(detail-sheet) {
+    z-index: 2;
+  }
+
+  /* 暗幕那条进场的快照是透明捕捉的（data-entering 那一拍 opacity 就是 0），
+     真正的淡入由真元素自己的动画在过渡结束后接着做 —— 这里别再给它叠一层默认的淡入 */
+  ::view-transition-new(detail-dim) {
+    animation: none;
+  }
+
+  /* 开：从海报圆心把弹框「圆着」撑开。圆心与半径由 JS 在点开那一刻现算
+     （--vt-x/--vt-y/--vt-r 写在 root 上，半径取圆心到视口最远一角），
+     圆缘扫过弹框轮廓的那一拍，box-shadow 那圈水纹荡出去再散掉。 */
+  ::view-transition-new(detail-sheet) {
+    animation:
+      sheet-open 0.42s cubic-bezier(0.32, 0.72, 0, 1) both,
+      sheet-ripple 0.66s ease-out 0.16s both;
+  }
+
+  /* 缩：弹框整块收回海报圆心，暗幕跟着淡掉 —— 缩的是「详情页」本身，
+     不是把面板淡出再让海报单独飞回去。 */
+  ::view-transition-old(detail-sheet) {
+    animation: sheet-close 0.38s cubic-bezier(0.5, 0, 0.75, 0.5) both;
+  }
+
+  ::view-transition-old(detail-dim) {
+    animation: sheet-dim 0.32s ease-out both;
+  }
+
+  @keyframes sheet-open {
+    from {
+      clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%));
+    }
+    to {
+      clip-path: circle(var(--vt-r, 120vmax) at var(--vt-x, 50%) var(--vt-y, 50%));
+    }
+  }
+
+  @keyframes sheet-close {
+    from {
+      clip-path: circle(var(--vt-r, 120vmax) at var(--vt-x, 50%) var(--vt-y, 50%));
+    }
+    to {
+      clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%));
+    }
+  }
+
+  @keyframes sheet-ripple {
+    from {
+      box-shadow:
+        0 0 0 0 color-mix(in oklab, var(--accent) 42%, transparent),
+        0 0 0 0 color-mix(in oklab, var(--accent) 20%, transparent);
+    }
+    to {
+      box-shadow:
+        0 0 0 18px transparent,
+        0 0 0 44px transparent;
+    }
+  }
+
+  @keyframes sheet-dim {
+    to {
+      opacity: 0;
+    }
   }
 
   html.vt-ok .drawer__dialog--right,

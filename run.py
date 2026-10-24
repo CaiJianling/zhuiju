@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """一键启动：起服务并自动打开浏览器。
 
-    python run.py                  默认 127.0.0.1:5000
+    python run.py                  默认 127.0.0.1:5000，控制台安静（只留报错）
     python run.py --port 8000      换端口
     python run.py --host 0.0.0.0   允许局域网访问（配合 nginx / 防火墙自行判断）
+    python run.py --debug          打开控制台日志（等级缺省 info）
+    python run.py --debug debug    日志开到最细；等级可选 debug/info/warning/error
 
 数据自动更新改为"访问网站时触发"（见 zhuiju/autoupdate.py），这里不再处理。
 """
 import argparse
+import logging
 import os
 import socket
 import sys
@@ -24,6 +27,16 @@ import zhuiju  # noqa: F401,E402  导入包就会读 zhuiju.env，下面这两�
 
 DEFAULT_PORT = int(os.environ.get("ZHUIJU_PORT", "5000"))
 DEFAULT_HOST = os.environ.get("ZHUIJU_HOST", "127.0.0.1")
+
+# --debug 接受的等级。名字跟 logging 对齐，warn 是 warning 的别名；
+# 没给等级时（--debug 后面不带值）按 info 算。
+LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+}
 
 
 def port_in_use(host: str, port: int) -> bool:
@@ -59,7 +72,15 @@ def main() -> int:
     ap.add_argument("--host", default=DEFAULT_HOST,
                     help="监听地址，默认 127.0.0.1；填 0.0.0.0 允许局域网访问")
     ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    ap.add_argument("--debug", nargs="?", const="info", metavar="LEVEL",
+                    default=(os.environ.get("ZHUIJU_DEBUG", "").strip().lower() or None),
+                    help="打开控制台日志（默认关，只留报错）。等级 debug/info/warning/error，"
+                         "缺省 info，例如 --debug 或 --debug debug；也可用环境变量 ZHUIJU_DEBUG=info")
     args = ap.parse_args()
+
+    if args.debug and str(args.debug).lower() not in LOG_LEVELS:
+        print(f"不认识的日志等级：{args.debug}（可用 " + "/".join(k for k in LOG_LEVELS if k != "warn") + "）")
+        return 1
 
     if port_in_use(args.host, args.port):
         print(f"端口 {args.port} 已被占用。")
@@ -77,6 +98,15 @@ def main() -> int:
     from zhuiju.app import app
     from zhuiju import admin as admin_mod
 
+    # 控制台日志在 create_app 里默认是关的（werkzeug 抬到 WARNING）：
+    # 这里按入参重开。必须在 import app 之后跑，不然会被那份默认值盖回去。
+    log_note = "关（要看请求行就 --debug info，等级可选 debug/info/warning/error）"
+    if args.debug:
+        level = LOG_LEVELS[str(args.debug).lower()]
+        logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+        logging.getLogger("werkzeug").setLevel(level)
+        log_note = f"开（{str(args.debug).lower()}）"
+
     (BASE / "logs").mkdir(exist_ok=True)
     (BASE / "logs" / "server.pid").write_text(str(os.getpid()), encoding="utf-8")
 
@@ -84,6 +114,7 @@ def main() -> int:
     print(f"追剧资源搜索已启动： {url}   （Ctrl+C 退出）")
     # 把解释器打出来：服务器上"更新没跑"八成是 python 用错了，这行日志最直接
     print(f"  解释器： {sys.executable}")
+    print(f"  控制台日志：{log_note}")
     from zhuiju import autoupdate as au
     print(f"  更新解释器判据： {au.python_info()[1]}")
     if args.host not in ("127.0.0.1", "localhost"):

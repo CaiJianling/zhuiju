@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Tabs, toast, Toast } from "@heroui/react";
 import { api, isGate, sendClick } from "./api";
 import { useAuthTick, useGateLocked } from "./auth";
@@ -26,6 +27,26 @@ const vtOn =
   typeof document !== "undefined" &&
   "startViewTransition" in document &&
   !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** 把海报圆心写进 root 的 CSS 变量：弹框的圆开/圆缩（styles.css 的 sheet-open/sheet-close）
+ *  都以它为圆心。半径取「圆心到视口四角最远的那条」—— 弹框不管停在屏幕哪一侧，
+ *  圆撑到这个半径就一定整个盖住它，撑开与收拢的速度曲线也因此两端都是真的。 */
+function setVtOrigin(el: HTMLElement | null) {
+  if (!el || !el.isConnected) return;
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  const far = Math.max(
+    Math.hypot(x, y),
+    Math.hypot(window.innerWidth - x, y),
+    Math.hypot(x, window.innerHeight - y),
+    Math.hypot(window.innerWidth - x, window.innerHeight - y),
+  );
+  const root = document.documentElement.style;
+  root.setProperty("--vt-x", `${Math.round(x)}px`);
+  root.setProperty("--vt-y", `${Math.round(y)}px`);
+  root.setProperty("--vt-r", `${Math.ceil(far)}px`);
+}
 
 const landingUrl = (kw: string, page: number) =>
   `/s/${encodeURIComponent(kw)}${page > 1 ? `?page=${page}` : ""}`;
@@ -286,11 +307,13 @@ export default function App() {
     return () => ac.abort();
   }, [tab, category, kw, tick]);
 
-  /* 详情不是从右边滑进来的一块面板，而是**从那张海报长出来**：点开时给海报方框挂一个
-     view-transition-name，同一拍里把面板挂上（面板里那张海报在 CSS 上带着同一个名字），
-     浏览器就把旧的那张矩形缩放到新的那个位置 —— 人眼跟着的是同一张图在动，不是两块内容在换。
-     名字只在这两拍之间挂着，平时不挂：同屏有两个元素挂着同一个名字时，
-     浏览器判定重名、整个过渡直接不做（现象就是"点了没动画"）。
+  /* 详情不是从右边滑进来的一块面板，而是**从那张海报的圆心里圆着开出来**：
+     点开时给海报方框挂一个 view-transition-name，同一拍里把面板挂上（面板里那张海报
+     在 CSS 上带着同一个名字），浏览器就把旧的那张矩形缩放到新的那个位置 —— 海报自己
+     长进详情；与此同时弹框本体（styles.css 里的 detail-sheet）以海报圆心为圆心做
+     clip-path 圆展开，圆缘扫过弹框轮廓时荡出一圈水纹。名字只在这两拍之间挂着：
+     平时同屏有两个元素挂着同一个名字，浏览器判定重名、整个过渡直接不做
+     （现象就是"点了没动画"）。
      不支持 startViewTransition 的浏览器（老 Firefox）走原来那条路：抽屉照常滑进来。 */
   const openDetail = useCallback(
     (s: DetailSpec, from?: HTMLElement | null) => {
@@ -310,9 +333,13 @@ export default function App() {
         return;
       }
       vtHero.current = hero;
+      setVtOrigin(hero);
       hero.style.viewTransitionName = "cover-active";
       document.startViewTransition!(() => {
-        setSpec(s);
+        // flushSync 是这里的关键：新状态的快照在回调返回后下一帧就拍，React 异步提交
+        // 会赶不上那一拍 —— 捕获拿到的就是一块没有弹框的画面，detail-sheet 的圆开
+        // 和海报的落点全都不存在。同步提交完弹框才真的在快照里。
+        flushSync(() => setSpec(s));
         // 新状态里这个名字只能由面板里那张海报持有，海报卡片要立刻摘掉，否则重名
         hero.style.viewTransitionName = "";
       });
@@ -320,7 +347,8 @@ export default function App() {
     [kw],
   );
 
-  /** 缩回原海报。焦点也一起还回去：键盘/读屏的人点开的是哪颗按钮，回来就该停在那儿。 */
+  /** 缩回原海报：弹框本体以海报圆心圆着收拢（sheet-close），暗幕淡掉，海报缩回原位。
+   *  焦点也一起还回去：键盘/读屏的人点开的是哪颗按钮，回来就该停在那儿。 */
   const closeDetail = useCallback(() => {
     const hero = vtHero.current;
     vtHero.current = null;
@@ -338,8 +366,14 @@ export default function App() {
       focusBack();
       return;
     }
+    setVtOrigin(hero);
     document.startViewTransition!(() => {
-      setSpec(null);
+      // 浮层必须先从绘制里整块拿掉：RAC 关闭时会把退出中的浮层多挂一小段，
+      // 那时它身上的 vt-hero 还带着 cover-active，和下面要挂回卡片的名字重名，
+      // 浏览器判冲突、整场过渡直接跳掉 —— 现象就是"返回时什么动画都没有"。
+      const overlay = document.querySelector(".drawer__backdrop");
+      if (overlay instanceof HTMLElement) overlay.style.display = "none";
+      flushSync(() => setSpec(null));
       hero.style.viewTransitionName = "cover-active";
     }).finished.finally(() => {
       // 等 finished 而不是立刻摘：新状态的快照还没拿完，摘了就变成"面板淡出"而不是缩回去
@@ -430,11 +464,12 @@ export default function App() {
                   onLoadMore={loadMore}
                   onDetail={openDetail}
                 />
-                <aside className="max-xl:contents xl:sticky xl:top-20 xl:order-none xl:self-start xl:space-y-4">
-                  {/* 窄屏时这一栏是 display:contents：两块各自成为栅格项，才能一块排到结果上面、
-                      一块排到最底下 —— 整个 aside 一起排序的话，两块只能都在同一侧。 */}
+                <aside className="max-xl:contents xl:sticky xl:top-20 xl:self-start xl:space-y-4">
+                  {/* 窄屏时这一栏是 display:contents：两块各自成为栅格项，跟着结果列表
+                      依次排在后面 —— 接口状态在前、《xxx》的检索结果在后（两块默认都折起，
+                      只占一行标题，不会把结果顶出屏幕）；宽屏才整栏排到右侧粘住。 */}
                   {stack ? (
-                    <div className="order-first">
+                    <div>
                       <SourcesPanel
                         rows={stack.status}
                         sum={`${stack.sources_ok}/${stack.sources_total} 可用`}

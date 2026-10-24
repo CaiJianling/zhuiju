@@ -16,6 +16,10 @@ python -m venv .venv
 .venv\Scripts\python.exe run.py
 ```
 
+控制台默认是安静的（不刷每一发请求的访问行，只留报错）。要看请求行走
+`python run.py --debug`（等级缺省 info；`--debug debug` 是最细一档，
+debug/info/warning/error 任选，也可用环境变量 `ZHUIJU_DEBUG=info`）。
+
 打开 <http://127.0.0.1:5000/> 。想换端口：`set ZHUIJU_PORT=8000 && .venv\Scripts\python.exe run.py`。
 Linux（含宝塔面板）不是这一套命令：解释器路径、`zhuiju.env`、权限与验收清单在 [docs/deploy.md](docs/deploy.md)。
 
