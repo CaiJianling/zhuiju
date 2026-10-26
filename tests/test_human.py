@@ -25,6 +25,7 @@ from zhuiju import app as app_mod                                  # noqa: E402
 from zhuiju import hot as hot_mod                                  # noqa: E402
 from zhuiju import human as human_mod                              # noqa: E402
 from zhuiju import search as search_mod                            # noqa: E402
+from zhuiju import seo as seo_mod                                  # noqa: E402
 from zhuiju import settings as settings_mod                        # noqa: E402
 from zhuiju import stats as stats_mod                              # noqa: E402
 
@@ -35,6 +36,8 @@ settings_mod.PATH = TMP / "settings.json"
 stats_mod.DB = TMP / "stats.db"
 stats_mod.DATA = TMP
 stats_mod._ready = False
+# 快照缓存也指到临时目录：门禁页会读它，判据不能跟着这台机器上碰巧缓存过哪个词走
+seo_mod.CACHE = TMP / "cache"
 admin_mod.load()
 
 
@@ -42,6 +45,11 @@ def check(name, cond, got=None):
     print(("  ok   " if cond else "  FAIL ") + name + ("" if cond else f"  got={got!r}"))
     if not cond:
         FAILS.append(name)
+
+
+def boot_of(html):
+    return json.loads(html.split('<script id="boot-data" type="application/json">')[1]
+                      .split("</script>")[0])
 
 
 def fresh_ip(n=[0]):
@@ -176,14 +184,39 @@ check("验证壳本身照样有 SEO：title / canonical / robots index / WebSite
       "<title>追剧资源搜索" in body and 'rel="canonical"' in body
       and 'content="index,follow"' in body and '"@type":"WebSite"' in body, None)
 # 门禁页也要有那条词的门面：同一部剧在 /s/<词> 上，门禁开着与关着不该是两个标题、两条 canonical
+# （seo_mod.snapshot 套上计数器：门禁页只许读缓存，一次构建都不许有 —— 构建要敲上游）
+_builds = {"n": 0}
+_real_snapshot = seo_mod.snapshot
+
+
+def _counting_snapshot(kw, force=False):
+    _builds["n"] += 1
+    return _real_snapshot(kw, force)
+
+
+seo_mod.snapshot = _counting_snapshot
+seo_mod._save(seo_mod.CACHE / f"seo-{seo_mod._key('庆余年')}.json", seo_mod._pack(
+    "庆余年", {"results": [
+        {"title": "庆余年", "year": "2024", "type": "国产剧", "remarks": "完结", "sources": [{"id": "a"}, {"id": "b"}]},
+        {"title": "庆余年第二季", "year": "2024", "type": "国产剧", "remarks": "", "sources": [{"id": "a"}]},
+    ], "sources_ok": 7, "sources_total": 9}))
 r_s = g1.get("/s/%E5%BA%86%E4%BD%99%E5%B9%B4")
 h_s = r_s.get_data(as_text=True)
+b_s = boot_of(h_s)
 check("未验证打开 /s/<词>：SEO 跟着词走（标题 / canonical / og:type），不是站级文案",
       r_s.status_code == 200 and "<title>《庆余年》影视资源怎么找" in h_s
       and 'rel="canonical" href="http://localhost/s/%E5%BA%86%E4%BD%99%E5%B9%B4"' in h_s
       and 'property="og:type" content="video.movie"' in h_s, None)
-check("验证页只借词、不借结果：没有 #nojs、没有 ItemList（快照一个字都没下发）",
-      'id="nojs"' not in h_s and '"@type":"ItemList"' not in h_s, None)
+check("未验证打开 /s/<词>：缓存里已有的结果照样下发（#nojs、ItemList、boot.snapshot 都有）",
+      'id="nojs"' in h_s and '"@type":"ItemList"' in h_s
+      and b_s["locked"] is True and len(b_s["snapshot"].get("items") or []) == 2
+      and b_s["snapshot"]["kw"] == "庆余年", b_s["snapshot"])
+check("缓存里没有的词仍然只有门面（没有 #nojs、没有 ItemList，boot.snapshot 是空的）",
+      (lambda h: 'id="nojs"' not in h and '"@type":"ItemList"' not in h
+       and boot_of(h)["snapshot"] == {})(g1.get("/s/%E6%97%A0%E7%BC%93%E5%AD%98%E8%AF%8D").get_data(as_text=True)),
+      None)
+check("整段门禁页的请求一次快照构建都没触发（seo_mod.snapshot 一次都没被调用）",
+      _builds["n"] == 0, _builds["n"])
 check("接口未验证时 423 并带上 human 标记（前端据此弹滑块）",
       g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").status_code == 423
       and g1.get("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4").get_json()["human"] == 1, None)
@@ -383,9 +416,12 @@ check("cookie 那几段长说明默认收起（首屏只看到标题、一句引
 check("弹层显隐交给 Modal 的 isOpen（受控），不再靠那条全站 [hidden] 的 !important 硬压",
       "isOpen={open}" in gate_ts and "isDismissable={false}" in gate_ts
       and "hidden" not in gate_ts[gate_ts.index("export function GateModal"):], None)
-check("被整页挡下时界面上只有滑块那一张卡（服务端此刻一个内容字段都没下发）",
+check("被整页挡下时主界面让位给滑块（LockedView 接管；缓存里已有的结果由它自己带出来）",
       "if (locked && boot.locked) {" in app_ts and "<LockedView" in app_ts
       and "return (" in app_ts[app_ts.index("if (locked && boot.locked) {"):], None)
+check("门禁页把缓存结果带进界面：LockedView 读 boot.snapshot 渲染条目，而不是只给一块滑块",
+      "const cached = boot.locked ? boot.snapshot.items || [] : [];" in gate_ts
+      and "cached.map(" in gate_ts and "已有人搜过" in gate_ts, None)
 check("门禁关这一项在后台「设置」里（表单从 SPEC 生成，不是模板写死一格）",
       "for key, spec, val in setfields" in (BASE / "zhuiju" / "templates" / "admin.html").read_text(encoding="utf-8")
       and "human_gate" in settings_mod.SPEC and settings_mod.SPEC["human_gate"]["kind"] == "bool", None)

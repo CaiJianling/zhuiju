@@ -448,17 +448,20 @@ def create_app() -> Flask:
         # 于是界面里出的就是一块滑块，而 SEO 的 title/description/canonical/SearchAction
         # 照旧写在 HTML 里（不 noindex、不 403，万一爬虫豁免那条判据不准，
         # 它看到的仍然是这个站点的门面，不是一个把收录掐死的死胡同）。
-        # 地址是 /s/<词> 时把词也带进去：同一部剧的门面页不能因为"门禁开着"就换一套
-        # 标题与 canonical（/ 与 /s/X 是两条不同的 URL，门禁不该改变它们在搜索引擎里的样子）。
-        # 借的只有词，不借结果：locked 时不翻缓存也不敲上游，快照一个字段都不下发，
-        # 所以没验过的人拿到的仍然只有一块滑块 —— SEO 数据是门面，不是内容。
+        # 地址是 /s/<词> 时把词与**缓存里已有**的快照也带进去：分享与收录出去的链接
+        # 不能只有一块滑块。但只读缓存、绝不敲上游 —— "建快照"要并发打一轮采集站，
+        # 让没验过的人白使唤它，门禁就只剩个样子。缓存里没有的词退回只带词的门面；
+        # 任意新词的检索、详情与播放线路仍然全在 /api/* 后面（423）。
         kw = ""
+        snap: dict = {}
         hit = re.fullmatch(r"/s/(.+)", request.path)
         if hit:
             kw = seo_mod.clean_kw(hit.group(1))
-            if len(kw) < MIN_KW:
+            if len(kw) >= MIN_KW:
+                snap = seo_mod.cached_snapshot(kw)
+            else:
                 kw = ""
-        return make_response(_page(kw, locked=True), 200)
+        return make_response(_page(kw, snap, locked=True), 200)
 
     @app.post("/api/human/challenge")
     def api_human_challenge():
@@ -499,10 +502,11 @@ def create_app() -> Flask:
     def _page(kw: str = "", snap: dict | None = None, locked: bool = False):
         """前台唯一的 HTML：一个 SEO 壳 + 一份 boot 数据 + React 的挂载点。
 
-        `locked`（还没通过真人验证）时三个数据字段一律不给 —— 快照、猜你想搜、更新状态
-        都不下发，页面里能看到的只有站名与一句话简介，界面上只剩一块滑块。
-        但 title / description / canonical / og:type 仍跟着 `kw` 走：门禁挡的是内容，
-        不是这条 URL 在搜索引擎里的样子（locked 时 `snap` 恒为空，不会顺手翻缓存）。
+        `locked`（还没通过真人验证）时榜单与更新状态不下发；`/s/<词>` 会带上调用方
+        传入的那份**缓存里已有**的快照（`seo.cached_snapshot` 只读盘、不敲上游），
+        快照里没有的词 snap 为空，页面里能看到的只有站名与一句话简介。
+        title / description / canonical / og:type 仍跟着 `kw` 与快照走：门禁挡的是
+        "任意新词的检索"（全部在 /api/* 后面），不是"看别人搜过的词"。
         """
         host = request.host_url.rstrip("/")
         snap = snap or {}

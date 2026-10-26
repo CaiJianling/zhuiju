@@ -544,12 +544,9 @@ poster_ts = (CW / "Poster.tsx").read_text(encoding="utf-8")
 drawer_ts = (CW / "DetailDrawer.tsx").read_text(encoding="utf-8")
 check("viewport 带 viewport-fit=cover（不写这个，env(safe-area-inset-*) 恒为 0，下面那条等于没躲）",
       "viewport-fit=cover" in sh, None)
-check("手机上的详情抽屉躲开 iPhone home indicator（最后一行观看地址不该压在横条底下）",
-      "padding-bottom: env(safe-area-inset-bottom)" in styles_css
-      and styles_css.index('.drawer__dialog--bottom {\n    padding-bottom: env') > 0, None)
-check("窄屏抽屉从下面推上来、宽屏才贴右边（同一套组件，placement 跟着屏宽选）",
-      'useMediaQuery("(min-width: 1024px)")' in drawer_ts
-      and 'placement={wide ? "right" : "bottom"}' in drawer_ts, None)
+check("详情已换成居中弹框（不再贴边，home indicator 那条 env() 兜底随抽屉一起退役）",
+      'Modal.Container size="md"' in drawer_ts and "placement" not in drawer_ts
+      and "drawer__dialog" not in styles_css and "safe-area-inset-bottom" not in styles_css, None)
 check("拖滑块不许变成滚页面：那颗按钮上写死 touch-none（旧 app.css 里是 touch-action: none）",
       "touch-none" in gate_ts and "onPointerDown={(e) => {" in gate_ts, None)
 check("搜索框 16px —— iOS 聚焦时字号小于 16px 会把整页放大一次（旧版在后台口令框上踩过同一坑）",

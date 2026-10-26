@@ -84,7 +84,10 @@
   {# React 的挂载点。真人即使禁了 JS 也不会看到"空白页"——下面那块 #nojs 就是给他的 #}
   <div id="app"></div>
 
-  {% if not boot.locked %}
+  {# 无 JS 时这一份服务端渲染的内容才露面。门禁开着也照样渲染——只要这条 /s/<词>
+     在缓存里有快照（未验证只借缓存里已有的结果，绝不为此敲上游，见 app.py 的 _human_gate），
+     禁 JS 的访问者与没匹配上豁免的爬虫才能看到结果而不是一块死胡同。 #}
+  {% if not boot.locked or seo.snapshot.get('items') %}
   <div id="nojs">
     <h1>追剧资源搜索</h1>
     <p class="lede">{{ seo.description }}</p>

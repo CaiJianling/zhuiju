@@ -109,95 +109,28 @@
     }
   }
 
-  /* 抽屉打开的滑入。HeroUI 那份是靠 .drawer__content[data-entering] 切换 translate 值
-     来做过渡的，实测那个属性根本没挂上（元素挂载时 translate 就已经是 0），
-     于是抽屉是"啪"地出现而不是滑进来。这里不再等那次握手：
-     挂载即播一段 keyframes，placement 决定方向，浏览器一插入节点就会跑，没有时序前提。 */
-  .drawer__dialog--right {
-    animation: drawer-in-right 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
-  }
+  /* 详情已从抽屉换成居中弹框（.detail-sheet，见下面的 View Transitions 一节），
+     HeroUI Drawer 在前台不再有使用者，这一套滑入/淡出动画随之退役。 */
 
-  .drawer__dialog--left {
-    animation: drawer-in-left 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
-  }
-
-  .drawer__dialog--bottom {
-    animation: drawer-in-bottom 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
-  }
-
-  /* 手机上的详情抽屉是从下面贴边推上来的：不躲开 home indicator，
-     最后一行观看地址就正好被那道横条盖住。shell.html 的 viewport 带了 viewport-fit=cover，
-     env() 在这里才不是恒等于 0。 */
-  .drawer__dialog--bottom {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-
-  .drawer__dialog--top {
-    animation: drawer-in-top 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
-  }
-
-  .drawer__backdrop {
-    animation: drawer-fade 0.2s ease-out both;
-  }
-
-  @keyframes drawer-in-right {
-    from {
-      translate: 100% 0;
-    }
-  }
-
-  @keyframes drawer-in-left {
-    from {
-      translate: -100% 0;
-    }
-  }
-
-  @keyframes drawer-in-bottom {
-    from {
-      translate: 0 100%;
-    }
-  }
-
-  @keyframes drawer-in-top {
-    from {
-      translate: 0 -100%;
-    }
-  }
-
-  @keyframes drawer-fade {
-    from {
-      opacity: 0;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .drawer__dialog--right,
-    .drawer__dialog--left,
-    .drawer__dialog--bottom,
-    .drawer__dialog--top,
-    .drawer__backdrop {
-      animation: none;
-    }
-  }
-
-  /* 详情是「从那张海报中间圆着开出来」的（View Transitions），四条约定：
-     1) 弹框本体与暗幕常驻 detail-sheet / detail-dim 这两个名字，海报那一格常驻
-        cover-active；列表里那张海报仍由 JS 在点开/缩回的那一拍临时挂上、挂完就摘
-        —— 同屏两个元素重名的话浏览器判定冲突、整个过渡不做。
+  /* 详情是居中弹框，出场是**从点击点环形揭示**的（安卓 material ripple 那种）。约定：
+     1) 只有弹框本体（.detail-sheet）挂名字参与过渡。背后的遮罩用 variant=transparent
+        （不暗、不糊），页面原样露着，那个圆只负责"荡开"弹框这一层。
      2) root 那一档关掉淡入淡出：整屏跟着闪一下才是真正晃眼的东西。
-     3) 有 VT 可用时别再让抽屉自己滑一遍：滑入 + 圆开两个动画叠着，看着就是"整块在抖"。
-     4) 三层的堆叠次序用 z-index 写死：暗幕最底下、弹框在其上、飞行中的海报最上
-        （不然海报缩放的半路会被弹框那层快照压住，看着就是海报"钻进面板里消失了"）。 */
-  .vt-hero {
-    view-transition-name: cover-active;
-  }
-
-  .drawer__dialog {
+     3) 有 VT 可用时别再让弹框自己播进场动画：进场 + 揭示两个动画叠着，看着就是"抖"。
+     圆心与半径来自 JS 现量：--vt-lx/--vt-ly 是点击点在弹框本地的坐标、--vt-r 是盖住
+     弹框最远一角的半径（圆撑到那一刻正好盖住弹框整块）。 */
+  .detail-sheet {
     view-transition-name: detail-sheet;
-  }
 
-  .drawer__backdrop {
-    view-transition-name: detail-dim;
+    /* 宽高只跟窗口走，不跟内容走：骨架屏 / 详情 / 展开线路这三种状态箱子一样大。
+       以前高度是内容撑的，换源或点开一条线路，弹框就一截截地长，背后的页面也跟着跳；
+       现在窗口定了尺寸就定了，内容超出在 Modal.Body 里滚（scroll="inside" 是默认档）。
+       宽取窗口减两侧内边距、上限 560px；高取窗口的 84%、上限 760px。
+       高度还有 HeroUI 的 max-height:100% 兜一层（容器本身带 16/40px 内边距）。 */
+    width: min(560px, calc(100vw - 2rem));
+    max-width: 100%;
+    height: min(760px, 84vh);
+    height: min(760px, 84dvh);
   }
 
   ::view-transition-old(root),
@@ -205,60 +138,38 @@
     animation: none;
   }
 
-  ::view-transition-group(cover-active) {
-    animation-duration: 0.42s;
-    animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
-    z-index: 3;
-  }
-
-  ::view-transition-group(detail-dim) {
-    z-index: 1;
-  }
-
   ::view-transition-group(detail-sheet) {
     z-index: 2;
   }
 
-  /* 暗幕那条进场的快照是透明捕捉的（data-entering 那一拍 opacity 就是 0），
-     真正的淡入由真元素自己的动画在过渡结束后接着做 —— 这里别再给它叠一层默认的淡入 */
-  ::view-transition-new(detail-dim) {
-    animation: none;
-  }
-
-  /* 开：从海报圆心把弹框「圆着」撑开。圆心与半径由 JS 在点开那一刻现算
-     （--vt-x/--vt-y/--vt-r 写在 root 上，半径取圆心到视口最远一角），
-     圆缘扫过弹框轮廓的那一拍，box-shadow 那圈水纹荡出去再散掉。 */
+  /* 开：一个以点击点为圆心的圆把弹框"荡"开 —— 弹框不动、不缩，只是随着圆缘扫过
+     一格格显现，背后页面原样露着；扫过弹框轮廓的那一拍，box-shadow 那圈水纹荡出去再散掉。 */
   ::view-transition-new(detail-sheet) {
     animation:
       sheet-open 0.42s cubic-bezier(0.32, 0.72, 0, 1) both,
       sheet-ripple 0.66s ease-out 0.16s both;
   }
 
-  /* 缩：弹框整块收回海报圆心，暗幕跟着淡掉 —— 缩的是「详情页」本身，
-     不是把面板淡出再让海报单独飞回去。 */
+  /* 缩：同一个圆反向收拢回点击点。 */
   ::view-transition-old(detail-sheet) {
     animation: sheet-close 0.38s cubic-bezier(0.5, 0, 0.75, 0.5) both;
   }
 
-  ::view-transition-old(detail-dim) {
-    animation: sheet-dim 0.32s ease-out both;
-  }
-
   @keyframes sheet-open {
     from {
-      clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%));
+      clip-path: circle(0px at var(--vt-lx, 50%) var(--vt-ly, 50%));
     }
     to {
-      clip-path: circle(var(--vt-r, 120vmax) at var(--vt-x, 50%) var(--vt-y, 50%));
+      clip-path: circle(var(--vt-r, 150%) at var(--vt-lx, 50%) var(--vt-ly, 50%));
     }
   }
 
   @keyframes sheet-close {
     from {
-      clip-path: circle(var(--vt-r, 120vmax) at var(--vt-x, 50%) var(--vt-y, 50%));
+      clip-path: circle(var(--vt-r, 150%) at var(--vt-lx, 50%) var(--vt-ly, 50%));
     }
     to {
-      clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%));
+      clip-path: circle(0px at var(--vt-lx, 50%) var(--vt-ly, 50%));
     }
   }
 
@@ -275,15 +186,26 @@
     }
   }
 
-  @keyframes sheet-dim {
-    to {
+  /* 没有 View Transitions 的浏览器（老 Firefox）：弹框就地淡入一下就好 */
+  html:not(.vt-ok) .detail-sheet {
+    animation: sheet-pop 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+
+  html.vt-ok .detail-sheet {
+    animation: none;
+  }
+
+  @keyframes sheet-pop {
+    from {
       opacity: 0;
+      transform: scale(0.96);
     }
   }
 
-  html.vt-ok .drawer__dialog--right,
-  html.vt-ok .drawer__dialog--bottom {
-    animation: none;
+  @media (prefers-reduced-motion: reduce) {
+    .detail-sheet {
+      animation: none;
+    }
   }
 
   /* 详情按钮常驻可见的补充：整张海报都是点击区（触屏上尤其重要 ——

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "@heroui/react";
 import { api } from "../api";
+import { boot } from "../boot";
 import { markPassed } from "../auth";
 import type { Challenge } from "../types";
 
@@ -218,8 +219,12 @@ export function Slip({ onok }: { onok: () => void }) {
   );
 }
 
-/** 首屏就被门禁挡住：整页只有这一张卡，其余内容一个字段都没下发 */
+/** 首屏就被门禁挡住：主界面让位给这张卡。服务端在 /s/<词> 的门禁页里带上了
+ *  **缓存里已有**的那份快照（seo.cached_snapshot，只读盘、不敲上游）——
+ *  缓存里有的词把结果亮在滑块下面，分享与收录出去的链接不能只有一块滑块；
+ *  没有的词 boot.snapshot 自然是空的。搜新词、看详情与播放地址仍然要先验证。 */
 export function LockedView({ hours, back, description }: { hours: number; back: string; description: string }) {
+  const cached = boot.locked ? boot.snapshot.items || [] : [];
   const onok = () => {
     // 回到被挡之前那一页；本来就是当前页时交给 App 重新取数，不用整页刷
     if (back && back !== window.location.pathname + window.location.search) {
@@ -263,6 +268,27 @@ export function LockedView({ hours, back, description }: { hours: number; back: 
           <p className="mt-3 text-xs text-danger">这块滑块需要 JavaScript。请在允许 JavaScript 的浏览器里打开。</p>
         </noscript>
       </section>
+      {cached.length ? (
+        <section className="mt-4 rounded-3xl bg-surface p-6 text-surface-foreground shadow-surface ring-1 ring-border sm:p-8">
+          <h2 className="text-sm font-semibold">《{boot.snapshot.kw || boot.kw}》已有人搜过，先看缓存里的结果</h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted">
+            这一份是服务端存的快照。要看详情、播放地址，或搜别的片名，先拖上面的滑块。
+          </p>
+          <ul className="mt-3 space-y-1.5">
+            {cached.map((it, i) => (
+              <li key={`${it.title}-${i}`} className="text-xs leading-snug">
+                <a className="text-foreground hover:text-accent" href={it.url}>
+                  {it.title}
+                </a>
+                <span className="num block text-[11px] text-muted">
+                  {[it.year, it.type, it.remarks].filter(Boolean).join(" · ")}
+                  {it.n_sources ? ` · ${it.n_sources} 个源` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </main>
   );
 }

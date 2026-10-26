@@ -269,11 +269,16 @@ neth = [s["api"].split("//", 1)[-1].split("/", 1)[0].lower() for s in srcs]
 check("同一个域名不重复收录（换源列表里会出现两条一模一样的线路）",
       len(set(neth)) == len(neth), sorted(h for h in neth if neth.count(h) > 1))
 off = [s for s in srcs if not s["searchable"]]
-check("关掉搜索的只有实测被站点拒的那两个",
-      {s["id"] for s in off} == {"suoni", "sdzy"},
-      [(s["id"], s["name"]) for s in off])
+# 2026-10-26 起 taopian 整个停用（enabled=false，实测已挂）——"停用"与"站点拒搜索"是两回事：
+# 停用的连最新流都不要了；suoni/sdzy 还在用，只是它们的站点把搜索接口关了
+check("关掉搜索的**启用源**只有实测被站点拒的那两个（整个停用的 taopian 不在其列）",
+      {s["id"] for s in off if s["enabled"]} == {"suoni", "sdzy"},
+      [(s["id"], s["name"], s["enabled"]) for s in off])
+check("整个停用的只有 taopian",
+      {s["id"] for s in srcs if not s["enabled"]} == {"taopian"},
+      [(s["id"], s["enabled"]) for s in srcs if not s["enabled"]])
 check("它们仍然 enabled：搜索不通但最新流与 ac=detail 都好，猜你想搜要用",
-      all(s["enabled"] for s in off), [(s["id"], s["enabled"]) for s in off])
+      all(s["enabled"] for s in off if s["enabled"]), [(s["id"], s["enabled"]) for s in off])
 
 print("8b) searchable=False 的源只喂猜你想搜，不进并发检索")
 S_OK = Source(id="s_ok", name="能搜的", kind="maccms", api="http://a/api.php/provide/vod/")

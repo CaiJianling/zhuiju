@@ -82,10 +82,15 @@ stats_mod._ready = False
 admin_mod.load()
 gate_off.off(TMP / "gate")          # 默认把门禁关掉：下面按节各自开关
 
-_real_hot, _real_snap = hot_mod.get, seo_mod.snapshot
+_real_hot, _real_snap, _real_cached = hot_mod.get, seo_mod.snapshot, seo_mod.cached_snapshot
 _real_enabled = human_mod.enabled
 hot_mod.get = lambda *a, **k: dict(HOT)
-seo_mod.snapshot = lambda kw, force=False: dict(SNAP, keyword=kw)
+# snapshot 套上记录器：门禁页一次构建都不许有（构建 = 敲上游）
+_builds: list = []
+seo_mod.snapshot = lambda kw, force=False: (_builds.append(kw), dict(SNAP, keyword=kw, kw=kw))[1]
+# 门禁页读的是 cached_snapshot（只读盘）；"庆余年"当作缓存里已有，其余词当作没有
+seo_mod.cached_snapshot = lambda kw: dict(SNAP, keyword=kw, kw=kw) if kw == "庆余年" else {}
+seo_mod.CACHE = TMP / "cache"
 
 APP = app_mod.create_app()
 GATE = [False]                                   # 当前这一发请求让不让门禁开着
@@ -163,23 +168,24 @@ try:
           'name="robots" content="index,follow"' in kwpage and 'name="robots" content="index,follow"' in home,
           None)
 
-    print("\n3) 「没验过就拿不到内容」的新形态：同一个壳，boot.locked=true")
+    print("\n3) 门禁页的口径：锁住的是接口，不是「别人搜过的词」")
+    _builds.clear()
     for path, label in (("/", "未验证的首页"), ("/s/" + "庆余年", "未验证的落地页")):
         r = html_of(path, gate=True)
         h = r.get_data(as_text=True)
         check(f"{label}：照样是 200 的壳（不是 403、不是另渲染一张验证页）",
               r.status_code == 200 and 'id="app"' in h, r.status_code)
         check(f"{label}：boot.locked 为 true", boot_of(h)["locked"] is True, boot_of(h)["locked"])
-        check(f"{label}：响应里没有 #nojs 这一整块（服务端一个字的内容都没渲染）",
-              'id="nojs"' not in h, None)
         b = boot_of(h)
-        check(f"{label}：三个数据字段一律是空的（快照、榜单、更新状态都不下发）",
-              b["snapshot"] == {} and b["hot"] == {} and b["refresh"] is None,
-              {k: bool(b[k]) for k in ("snapshot", "hot", "refresh")})
+        check(f"{label}：榜单与更新状态一个字段不下发",
+              b["hot"] == {} and b["refresh"] is None,
+              {k: bool(b[k]) for k in ("hot", "refresh")})
         if path == "/":
             check("未验证的首页：站级门面照旧（站点标题 / canonical 指根 / SearchAction）",
                   "<title>追剧资源搜索" in h and 'rel="canonical" href="http://localhost/"' in h
                   and "SearchAction" in h, None)
+            check("未验证的首页：没有 #nojs，boot.snapshot 是空的（首页没有当前词可言）",
+                  'id="nojs"' not in h and b["snapshot"] == {}, None)
         else:
             # 门禁页也带 SEO，而且跟着地址里那一条词走：同一条 URL 不能因为门禁开着
             # 就换一套标题与 canonical（那等于给搜索引擎两条互相打架的门面）
@@ -187,10 +193,19 @@ try:
                   "<title>《庆余年》影视资源怎么找" in h
                   and 'rel="canonical" href="http://localhost/s/%E5%BA%86%E4%BD%99%E5%B9%B4"' in h
                   and 'property="og:type" content="video.movie"' in h, None)
-            check("验证页只借词、不借结果：结构化数据里没有 ItemList，页面上也没有结果",
-                  '"@type":"ItemList"' not in h and 'id="nojs"' not in h, None)
+            # 缓存里已有的结果跟着出去：分享与收录出去的链接不能只有一块滑块
+            check("未验证的落地页：缓存里已有的结果照样下发（boot.snapshot 带条目，kw 对得上）",
+                  b["snapshot"].get("items") and b["snapshot"]["kw"] == "庆余年", b["snapshot"])
+            check("未验证的落地页：#nojs 与 ItemList 也跟着回来（禁 JS 与没匹配上豁免的爬虫都看得到）",
+                  'id="nojs"' in h and '"@type":"ItemList"' in h, None)
         check(f"{label}：back 记的是用户本来要点开的那一页（验完回得来）",
               b["back"] == (path if path != "/" else "/"), b["back"])
+    check("缓存里没有的词仍然只有门面（没有 #nojs、没有 ItemList，boot.snapshot 是空的）",
+          (lambda h2: 'id="nojs"' not in h2 and '"@type":"ItemList"' not in h2
+           and boot_of(h2)["snapshot"] == {})(body_of("/s/无此缓存", gate=True)),
+          None)
+    check("整段门禁页的请求一次快照构建都没触发（seo_mod.snapshot 一次都没被调用）",
+          _builds == [], _builds)
     check("未验证时的接口那条路仍然是 423 + human 标记（壳给 200，数据给 423）",
           html_of("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4", gate=True).status_code == 423
           and html_of("/api/search?kw=%E5%BA%86%E4%BD%99%E5%B9%B4", gate=True).get_json().get("human") == 1,
@@ -407,31 +422,48 @@ try:
     check("字体也明确不引外网：--font-sans 全是系统族",
           "--font-sans:" in st and "url(" not in st[st.index("@theme"):st.index("@layer")], None)
 
-    print("\n13) 详情弹框的圆开圆缩：弹框与暗幕常驻名字，圆心由 JS 现算")
-    check("弹框本体常驻 detail-sheet、暗幕常驻 detail-dim（关着的抽屉整个不挂载，平时不占名字）",
-          re.search(r"\.drawer__dialog\s*\{[^}]*view-transition-name: detail-sheet", st) is not None
-          and re.search(r"\.drawer__backdrop\s*\{[^}]*view-transition-name: detail-dim", st) is not None,
+    print("\n13) 详情弹框的环形揭示：以点击处为圆心荡开，海报不参与过渡")
+    check("弹框本体常驻 detail-sheet（关着的弹框整个不挂载，平时不占名字）",
+          re.search(r"\.detail-sheet\s*\{[^}]*view-transition-name: detail-sheet", st) is not None,
           None)
-    check("圆开与圆缩是同一对关键帧的正反放：圆心与半径都来自 root 上的 --vt-x/--vt-y/--vt-r",
-          "clip-path: circle(0px at var(--vt-x, 50%) var(--vt-y, 50%))" in st
-          and "clip-path: circle(var(--vt-r, 120vmax)" in st
-          and "@keyframes sheet-open" in st and "@keyframes sheet-close" in st, None)
+    check("海报不再参与过渡：cover-active 这个名字与 .vt-hero 挂点都已删干净",
+          "cover-active" not in st and "vt-hero" not in st
+          and "cover-active" not in appjs and "vt-hero" not in read("components", "DetailDrawer.tsx"),
+          re.findall(r"cover-active|vt-hero", st + appjs))
+    check("开与缩是同一对关键帧的正反放：clip-path 的圆以点击点为圆心（弹框本地坐标"
+          "--vt-lx/--vt-ly/--vt-r），没有位移与缩放，也没有暗幕层（detail-dim/dim-open 全删）",
+          "clip-path: circle(0px at var(--vt-lx, 50%) var(--vt-ly, 50%))" in st
+          and "circle(var(--vt-r, 150%) at var(--vt-lx, 50%) var(--vt-ly, 50%))" in st
+          and "@keyframes sheet-open" in st and "@keyframes sheet-close" in st
+          and "detail-dim" not in st and "dim-open" not in st and "dim-close" not in st
+          and "transform: translate(var(--vt-dx" not in st, None)
+    check("遮罩走透明档：不暗、不糊（variant=transparent），页面原样露着",
+          'variant="transparent"' in read("components", "DetailDrawer.tsx")
+          and 'variant="blur"' not in read("components", "DetailDrawer.tsx"), None)
     check("水纹是圆缘扫过弹框轮廓时荡出去的那圈 box-shadow，色取 accent",
           "@keyframes sheet-ripple" in st
           and "color-mix(in oklab, var(--accent)" in st.split("@keyframes sheet-ripple")[1]
           .split("@keyframes")[0], None)
-    check("三层快照的堆叠次序写死：暗幕 1、弹框 2、飞行中的海报 3（海报不能被弹框层压住）",
-          re.search(r"::view-transition-group\(detail-dim\)\s*\{[^}]*z-index: 1", st) is not None
-          and re.search(r"::view-transition-group\(detail-sheet\)\s*\{[^}]*z-index: 2", st) is not None
-          and re.search(r"::view-transition-group\(cover-active\)\s*\{[^}]*z-index: 3", st) is not None,
+    check("弹框层盖在 root 快照之上（z-index），没有暗幕层、没有第三层海报",
+          re.search(r"::view-transition-group\(detail-sheet\)\s*\{[^}]*z-index: 2", st) is not None
+          and "::view-transition-group(detail-dim)" not in st
+          and "::view-transition-group(cover-active)" not in st, None)
+    check("没有 VT 的浏览器给弹框一个就地淡入，有 VT 的关掉它（两个动画叠着就是抖）",
+          "html:not(.vt-ok) .detail-sheet" in st and "html.vt-ok .detail-sheet {\n    animation: none;\n  }" in st,
           None)
     appjs = read("App.tsx")
-    check("圆心与半径在点开/缩回那一刻现算（海报在哪圆心就在哪，不写死像素）",
-          "function setVtOrigin" in appjs and appjs.count("setVtOrigin(") >= 3
-          and 'root.setProperty("--vt-r"' in appjs, None)
-    check("开与缩都在 startViewTransition 之前先摆好圆心（旧快照拿到的才是对的圆心）",
-          appjs.index("setVtOrigin(hero);") < appjs.index('hero.style.viewTransitionName = "cover-active";')
-          and appjs.count("setVtOrigin(hero);") == 2, None)
+    check("圆心与半径在被点的海报上现算（不写死像素），只写弹框本地这三组变量",
+          "function setVtOrigin" in appjs
+          and 'root.setProperty("--vt-lx"' in appjs
+          and 'root.setProperty("--vt-r"' in appjs
+          and 'root.setProperty("--vt-dr"' not in appjs, None)
+    check("开：先同步挂上弹框再写圆心（捕获在回调返回后那一帧，量完才赶得上）",
+          appjs.index("flushSync(() => setSpec(s));") < appjs.index("setVtOrigin(cx, cy,"), None)
+    check("缩：在 startViewTransition 之前先写圆心（弹框还挂着，矩形是准的）",
+          (lambda c: c.index("setVtOrigin(hr.left") < c.index("document.startViewTransition"))(
+              appjs[appjs.index("const closeDetail = useCallback"):]), None)
+    check("关闭时把透明遮罩整块从绘制里拿掉（钩子换到 .detail-backdrop）",
+          '.detail-backdrop' in appjs and '.detail-dim' not in appjs, None)
 
     print("\n14) 窄屏的排序：结果之后依次是接口状态、《xxx》的检索结果")
     check("接口状态不再用 order-first 顶到结果上面（手机上它把结果顶出半屏）",
@@ -440,7 +472,7 @@ try:
           appjs.index("<SourcesPanel") < appjs.index("<SnapshotCard"), None)
 
 finally:
-    hot_mod.get, seo_mod.snapshot = _real_hot, _real_snap
+    hot_mod.get, seo_mod.snapshot, seo_mod.cached_snapshot = _real_hot, _real_snap, _real_cached
     human_mod.enabled = _real_enabled
 
 print("\n结果:", "全部通过" if not FAILS else f"{len(FAILS)} 项失败 -> {FAILS}")

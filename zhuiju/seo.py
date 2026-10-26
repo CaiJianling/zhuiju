@@ -87,27 +87,33 @@ def _kw_lock(kw: str) -> threading.Lock:
         return _locks.setdefault(_key(kw), threading.Lock())
 
 
+def _read_fresh(path: Path) -> dict | None:
+    """缓存文件还在 TTL 内就读出来；没有、过期或坏了都算没有。"""
+    if path.exists() and (time.time() - path.stat().st_mtime) < SNAP_TTL:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
 def snapshot(kw: str, force: bool = False) -> dict:
     """某关键词的服务端结果快照：标题列表 + 命中源数，供 SSR 与 sitemap 用。"""
     kw = clean_kw(kw)
     path = CACHE / f"seo-{_key(kw)}.json"
-    if not force and path.exists() and (time.time() - path.stat().st_mtime) < SNAP_TTL:
-        try:
-            d = json.loads(path.read_text(encoding="utf-8"))
+    if not force:
+        d = _read_fresh(path)
+        if d is not None:
             d["from_cache"] = True
             return d
-        except Exception:  # noqa: BLE001
-            pass
     with _kw_lock(kw):
         # 拿锁后先看一眼，避免同一关键词被并发重复构建；但 force 必须真的重build，
         # 否则会一直返回崩溃时留下的空快照
-        if not force and path.exists() and (time.time() - path.stat().st_mtime) < SNAP_TTL:
-            try:
-                d = json.loads(path.read_text(encoding="utf-8"))
+        if not force:
+            d = _read_fresh(path)
+            if d is not None:
                 d["from_cache"] = True
                 return d
-            except Exception:  # noqa: BLE001
-                pass
         err = None
         try:
             res = agg_search(kw, budget=SNAP_BUDGET)
@@ -117,6 +123,20 @@ def snapshot(kw: str, force: bool = False) -> dict:
         data = _pack(kw, res, err)
         _save(path, data)
         return data
+
+
+def cached_snapshot(kw: str) -> dict:
+    """只读缓存里已有的那一份快照：没有或过期就给空，**绝不为此敲上游**。
+
+    门禁页用（app.py 的 _human_gate）：未验证的 /s/<词> 也要能把结果带出去 ——
+    分享与收录出去的链接不能只有一块滑块。但"建快照"要并发打一轮上游，
+    不能让没验过的人白使唤，否则门禁就只剩个样子：脚本拿一张 /s/ 词表
+    就能把这台机器当免费爬虫使。缓存里没有的词退回只带词的门面。
+    """
+    kw = clean_kw(kw)
+    if len(kw) < 2:
+        return {}
+    return _read_fresh(CACHE / f"seo-{_key(kw)}.json") or {}
 
 
 def _pack(kw: str, res: dict, err: str | None = None) -> dict:

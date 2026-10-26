@@ -58,7 +58,9 @@ React 19 + React Aria（HeroUI v3 的可访问性是它给的）。局域网/本
 `canonical` 不会分叉。
 
 **门禁优先于这一切**：`_human_gate` 判定未验证时，同一个壳以 `boot.locked=true` 下发，
-`#nojs` 那一块**整个不渲染**，快照与榜单一个字段都不给，界面上只剩一块滑块。
+榜单与更新状态一个字段都不给，界面上只剩一块滑块；但 `/s/<词>` 会带上**缓存里已有**的
+结果快照 —— `#nojs` 那一块、ItemList 结构化数据与滑块下面的缓存列表都从它来
+（`seo.cached_snapshot` 只读盘，绝不为没验证的访问敲上游；缓存里没有的词就只有门面）。
 爬虫豁免（UA + 反查 DNS 落到官方域名后缀）走的是 unlocked 那条路，
 所以它拿到的仍是服务端渲染的真内容 —— 见 [human.md](human.md)。
 
@@ -155,8 +157,11 @@ MDUI 已经完全退出。被替换掉但还在盘上的死文件（Flask 不再
 3. **`Button` 没有 `title` 属性**（它不是原生 button 的透传），想要悬浮说明就包 `Tooltip`。
 4. **`useTheme` 只写 `<html>`**，画布背景得自己接上：`body { background: var(--background) }`。
    只在根 div 上写 `bg-background`，橡皮筋滚动和 React 挂载前那一瞬间都会露白。
-5. **详情是 `Drawer`，不是常驻面板**。旧的「点面板外面收起」「点换源不该关」这两条行为
-   在 React 里天然成立（换源只改 state、不重挂 DOM），但 `isDismissable` 要保持默认 true。
+5. **详情是居中的 `Modal`，不是常驻面板**（2026-10 起从 Drawer 换过来：出场是**从点击处
+   环形揭示**，贴边的抽屉没法做到）。旧的「点面板外面收起」「点换源不该关」这两条行为
+   在 React 里天然成立（换源只改 state、不重挂 DOM），`isDismissable` 保持默认 true；
+   遮罩走 `variant="transparent"`（不暗不糊，只留交互）。弹框本体上的 `.detail-sheet` 是
+   View Transition 的挂名点，别删。
 6. **滑块几何必须现量**：轨道宽度用 `ResizeObserver` 测，缺口按像素算；写死一个数，
    窄屏就会「明明对准了却说不匹配」。提交时长要在清 `down` 之前算好，晚一步就永远上报 0ms。
 7. **海报必须过 `/img`**（`posterOf()`）：上游图床有防盗链，直接贴外链一定是裂的；

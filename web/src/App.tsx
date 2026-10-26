@@ -21,30 +21,32 @@ import { ThemeToggle } from "./components/ThemeToggle";
 type Tab = "vod" | "cloud" | "deep" | "dir";
 
 /** 展开详情要不要用 View Transitions：
- *  没有 startViewTransition 的浏览器（老 Firefox）就没有缩放动画，抽屉照常滑进来；
- *  偏好减少动效的人也不给他放大缩小 —— 这两条都在这里一次判掉，别散在各点击点。 */
+ *  没有 startViewTransition 的浏览器（老 Firefox）就没有揭示动画，弹框就地淡入；
+ *  偏好减少动效的人也不给他揭示 —— 这两条都在这里一次判掉，别散在各点击点。 */
 const vtOn =
   typeof document !== "undefined" &&
   "startViewTransition" in document &&
   !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
-/** 把海报圆心写进 root 的 CSS 变量：弹框的圆开/圆缩（styles.css 的 sheet-open/sheet-close）
- *  都以它为圆心。半径取「圆心到视口四角最远的那条」—— 弹框不管停在屏幕哪一侧，
- *  圆撑到这个半径就一定整个盖住它，撑开与收拢的速度曲线也因此两端都是真的。 */
-function setVtOrigin(el: HTMLElement | null) {
-  if (!el || !el.isConnected) return;
-  const r = el.getBoundingClientRect();
-  const x = r.left + r.width / 2;
-  const y = r.top + r.height / 2;
-  const far = Math.max(
-    Math.hypot(x, y),
-    Math.hypot(window.innerWidth - x, y),
-    Math.hypot(x, window.innerHeight - y),
-    Math.hypot(window.innerWidth - x, window.innerHeight - y),
-  );
+/** 把点击点写进 root 的 CSS 变量：弹框的环形揭示（styles.css 的 sheet-open/close）以它为
+ *  圆心。弹框层的 clip-path 坐标是元素自己的盒子，所以取点击点在弹框本地的坐标
+ *  （--vt-lx/--vt-ly）与「盖住弹框最远一角」的半径（--vt-r），圆撑到那一刻正好盖住弹框，
+ *  速度曲线两端都是真的。 */
+function setVtOrigin(cx: number, cy: number, sheet: HTMLElement | null) {
+  if (!sheet) return;
+  const r = sheet.getBoundingClientRect();
+  if (!r.width) return;
   const root = document.documentElement.style;
-  root.setProperty("--vt-x", `${Math.round(x)}px`);
-  root.setProperty("--vt-y", `${Math.round(y)}px`);
+  const lx = cx - r.left;
+  const ly = cy - r.top;
+  const far = Math.max(
+    Math.hypot(lx, ly),
+    Math.hypot(r.width - lx, ly),
+    Math.hypot(lx, r.height - ly),
+    Math.hypot(r.width - lx, r.height - ly),
+  );
+  root.setProperty("--vt-lx", `${Math.round(lx)}px`);
+  root.setProperty("--vt-ly", `${Math.round(ly)}px`);
   root.setProperty("--vt-r", `${Math.ceil(far)}px`);
 }
 
@@ -140,6 +142,8 @@ export default function App() {
   const cloudDone = useRef<string | null>(null);
   const [spec, setSpec] = useState<DetailSpec | null>(null);
   // 展开时那个共享元素（海报方框本体）与"该把焦点还给谁"，只在一次开合之间有效
+  // 揭示的圆心 = 被点的海报（存元素本体，缩回时现量它的矩形）；vtBack 记「该把焦点还给谁」，
+  // 都只在一次开合之间有效
   const vtHero = useRef<HTMLElement | null>(null);
   const vtBack = useRef<HTMLElement | null>(null);
   const rf = useRefresh(boot.refresh);
@@ -307,14 +311,12 @@ export default function App() {
     return () => ac.abort();
   }, [tab, category, kw, tick]);
 
-  /* 详情不是从右边滑进来的一块面板，而是**从那张海报的圆心里圆着开出来**：
-     点开时给海报方框挂一个 view-transition-name，同一拍里把面板挂上（面板里那张海报
-     在 CSS 上带着同一个名字），浏览器就把旧的那张矩形缩放到新的那个位置 —— 海报自己
-     长进详情；与此同时弹框本体（styles.css 里的 detail-sheet）以海报圆心为圆心做
-     clip-path 圆展开，圆缘扫过弹框轮廓时荡出一圈水纹。名字只在这两拍之间挂着：
-     平时同屏有两个元素挂着同一个名字，浏览器判定重名、整个过渡直接不做
-     （现象就是"点了没动画"）。
-     不支持 startViewTransition 的浏览器（老 Firefox）走原来那条路：抽屉照常滑进来。 */
+  /* 详情是居中弹框，但它的出场是**从被点的海报那里环形揭示**的（安卓 material ripple
+     那种）：弹框在原位不动（背后的遮罩是透明的，页面原样露着），一个以点击点为圆心的圆
+     把弹框"荡"开，圆缘扫过弹框轮廓时荡出一圈水纹；缩回时同一个圆反向收拢回海报。
+     圆心与半径在被点的海报矩形上现算（styles.css 的 sheet-open/close 以 --vt-* 为圆心），
+     海报自己不再参与过渡 —— 弹框里那张就是同一张图，没有必要再让它飞一遍。
+     不支持 startViewTransition 的浏览器（老 Firefox）走原来那条路：弹框就地淡入。 */
   const openDetail = useCallback(
     (s: DetailSpec, from?: HTMLElement | null) => {
       sendClick({
@@ -325,7 +327,6 @@ export default function App() {
         vid: String(s.vid ?? ""),
         place: s.from,
       });
-      if (vtHero.current && vtHero.current !== from) vtHero.current.style.viewTransitionName = "";
       vtBack.current = document.activeElement as HTMLElement | null;
       const hero = vtOn && from?.isConnected ? from : null;
       if (!hero) {
@@ -333,21 +334,22 @@ export default function App() {
         return;
       }
       vtHero.current = hero;
-      setVtOrigin(hero);
-      hero.style.viewTransitionName = "cover-active";
+      const hr = hero.getBoundingClientRect();
+      const cx = hr.left + hr.width / 2;
+      const cy = hr.top + hr.height / 2;
       document.startViewTransition!(() => {
         // flushSync 是这里的关键：新状态的快照在回调返回后下一帧就拍，React 异步提交
-        // 会赶不上那一拍 —— 捕获拿到的就是一块没有弹框的画面，detail-sheet 的圆开
-        // 和海报的落点全都不存在。同步提交完弹框才真的在快照里。
+        // 会赶不上那一拍 —— 捕获拿到的就是一块没有弹框的画面，揭示就无从谈起。
+        // 同步提交完弹框才真的在快照里，然后量它的矩形、把两套圆心坐标写进变量
+        // —— 捕获就在回调返回后那一帧，量完才赶得上。
         flushSync(() => setSpec(s));
-        // 新状态里这个名字只能由面板里那张海报持有，海报卡片要立刻摘掉，否则重名
-        hero.style.viewTransitionName = "";
+        setVtOrigin(cx, cy, document.querySelector(".detail-sheet"));
       });
     },
     [kw],
   );
 
-  /** 缩回原海报：弹框本体以海报圆心圆着收拢（sheet-close），暗幕淡掉，海报缩回原位。
+  /** 收回海报：同一个圆反向收拢（遮罩是透明的，页面原样露着），圆心仍是被点的那张海报。
    *  焦点也一起还回去：键盘/读屏的人点开的是哪颗按钮，回来就该停在那儿。 */
   const closeDetail = useCallback(() => {
     const hero = vtHero.current;
@@ -366,18 +368,16 @@ export default function App() {
       focusBack();
       return;
     }
-    setVtOrigin(hero);
+    const hr = hero.getBoundingClientRect();
+    // 弹框还挂着，先量：本地坐标与半径此刻就能量准
+    setVtOrigin(hr.left + hr.width / 2, hr.top + hr.height / 2, document.querySelector(".detail-sheet"));
     document.startViewTransition!(() => {
       // 浮层必须先从绘制里整块拿掉：RAC 关闭时会把退出中的浮层多挂一小段，
-      // 那时它身上的 vt-hero 还带着 cover-active，和下面要挂回卡片的名字重名，
-      // 浏览器判冲突、整场过渡直接跳掉 —— 现象就是"返回时什么动画都没有"。
-      const overlay = document.querySelector(".drawer__backdrop");
+      // 不拿掉的话新状态里仍有一个 detail-sheet 的影子，收拢动画对不上位置。
+      const overlay = document.querySelector(".detail-backdrop");
       if (overlay instanceof HTMLElement) overlay.style.display = "none";
       flushSync(() => setSpec(null));
-      hero.style.viewTransitionName = "cover-active";
     }).finished.finally(() => {
-      // 等 finished 而不是立刻摘：新状态的快照还没拿完，摘了就变成"面板淡出"而不是缩回去
-      hero.style.viewTransitionName = "";
       focusBack();
     });
   }, []);

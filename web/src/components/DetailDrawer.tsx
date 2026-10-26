@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Drawer, Skeleton, useMediaQuery } from "@heroui/react";
+import { Button, CloseButton, Modal, Skeleton } from "@heroui/react";
 import { api, sendClick } from "../api";
 import type { DetailResult } from "../types";
 import { PosterImage, type DetailSpec } from "./Poster";
@@ -18,7 +18,6 @@ const cut = (v: string | undefined, n: number) => {
 };
 
 export function DetailDrawer({ spec, onClose }: { spec: DetailSpec | null; onClose: () => void }) {
-  const wide = useMediaQuery("(min-width: 1024px)");
   // vid 从接口来是数字、从 data-* 读回来是字符串，比的时候两边都当字符串，否则选中态永远点不亮
   const [pick, setPick] = useState<{ src: string; vid: string }>({ src: "", vid: "" });
   const [data, setData] = useState<DetailResult | null>(null);
@@ -85,13 +84,14 @@ export function DetailDrawer({ spec, onClose }: { spec: DetailSpec | null; onClo
     : [];
 
   return (
-    <Drawer>
-      <Drawer.Backdrop variant="blur" isOpen={open} onOpenChange={(v) => !v && onClose()}>
-        <Drawer.Content placement={wide ? "right" : "bottom"}>
-          <Drawer.Dialog>
-            <Drawer.Header className="flex-row items-center gap-2">
-              {/* 返回在原海报那一侧：点开是从那儿长出来的，缩回去也按同一条路，
-                  右上角那颗 CloseTrigger 留着（键盘 ESC 与鼠标习惯的人都找得到它） */}
+    <Modal>
+      {/* 遮罩走 transparent 档：不暗、不糊，页面原样露着，只留交互（点外关闭、锁滚动） */}
+      <Modal.Backdrop variant="transparent" className="detail-backdrop" isOpen={open} onOpenChange={(v) => !v && onClose()}>
+        <Modal.Container size="md">
+          <Modal.Dialog className="detail-sheet">
+            <Modal.Header className="flex-row items-center gap-2">
+              {/* 返回在左上角：点开是从海报长出来的，缩回去也按同一条路，
+                  右边那颗 × 留着（键盘 ESC 与鼠标习惯的人都找得到它） */}
               <button
                 type="button"
                 onClick={onClose}
@@ -103,16 +103,14 @@ export function DetailDrawer({ spec, onClose }: { spec: DetailSpec | null; onClo
                 </svg>
                 返回
               </button>
-              <Drawer.Heading className="min-w-0 truncate">{spec?.title || "详情"}</Drawer.Heading>
-              <Drawer.CloseTrigger aria-label="关闭详情" />
-            </Drawer.Header>
-            <Drawer.Body className="space-y-4">
+              <Modal.Heading className="min-w-0 flex-1 truncate">{spec?.title || "详情"}</Modal.Heading>
+              <CloseButton aria-label="关闭详情" onPress={onClose} className="shrink-0" />
+            </Modal.Header>
+            <Modal.Body className="space-y-4">
               {spec ? (
                 <>
                   <div className="flex gap-3">
-                  {/* vt-hero：这一格带着 view-transition-name: cover-active（见 styles.css），
-                      它就是海报"长过来"要落到的那个矩形 */}
-                  <div className="vt-hero relative aspect-2/3 w-24 shrink-0 self-start overflow-hidden rounded-xl bg-default ring-1 ring-border">
+                  <div className="relative aspect-2/3 w-24 shrink-0 self-start overflow-hidden rounded-xl bg-default ring-1 ring-border">
                     <PosterImage pic={spec.pic} title={spec.title} />
                   </div>
                     <div className="min-w-0 space-y-1.5 text-xs">
@@ -219,11 +217,11 @@ export function DetailDrawer({ spec, onClose }: { spec: DetailSpec | null; onClo
                   ) : null}
                 </>
               ) : null}
-            </Drawer.Body>
-          </Drawer.Dialog>
-        </Drawer.Content>
-      </Drawer.Backdrop>
-    </Drawer>
+            </Modal.Body>
+          </Modal.Dialog>
+        </Modal.Container>
+      </Modal.Backdrop>
+    </Modal>
   );
 }
 

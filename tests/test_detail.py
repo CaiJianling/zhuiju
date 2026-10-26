@@ -431,18 +431,26 @@ check("卡片上那颗「详情」不算外面：开着抽屉点另一张是换�
 check("外面那一下不抢焦点：前端没有一处手写 focus（焦点归还由组件处理）",
       ".focus()" not in drawer_ts and "dpBack" not in all_src, re.findall(r"\.focus\(\)", all_src))
 check("关闭那颗 × 由组件提供，前端不写监听器（不用包一层箭头函数去挡 event）",
-      '<Drawer.CloseTrigger aria-label="关闭详情" />' in drawer_ts
+      '<CloseButton aria-label="关闭详情" onPress={onClose}' in drawer_ts
       and "addEventListener" not in drawer_ts, None)
-check("宽屏从右边滑进来、窄屏从下面推上来：方向交给 placement，不在 CSS 里写两份位移",
-      'placement={wide ? "right" : "bottom"}' in drawer_ts
-      and 'useMediaQuery("(min-width: 1024px)")' in drawer_ts, None)
+check("详情是居中弹框：不再有 right/bottom 两套 placement，宽窄屏同一个形状"
+      "（展开起点是海报，交给 View Transitions 的位移+缩放，见 App.tsx）",
+      '<Modal.Container size="md">' in drawer_ts and "placement" not in drawer_ts
+      and "useMediaQuery" not in drawer_ts, None)
+# 宽高只跟窗口走：内容（骨架屏 → 详情 → 展开线路）变来变去，弹框不许跟着长/缩，
+# 否则每换一次源背后的页面都被挤得跳一下。
+sheet_css = re.search(r"\.detail-sheet\s*\{([^}]*)\}", stcss).group(1)
+check("详情弹框按窗口固定宽高，内容超出在框里滚（不跟内容撑高）",
+      "width: min(560px, calc(100vw - 2rem))" in sheet_css
+      and "height: min(760px, 84dvh)" in sheet_css
+      and "max-width: 100%" in sheet_css, sheet_css)
 check("盖满与锁页面滚动是 Drawer 组件的职责，前端不再往 body 上挂一个类",
       "dp-open" not in all_src and not re.search(r"(html|body)\s*\{[^}]*overflow", stcss), None)
 check("详情按钮常驻可见（不靠 hover 才发现），触屏上给满不透明度",
       ".dbtn {" in stcss and "@media (hover: none) {\n    .dbtn {\n      opacity: 1;" in stcss, None)
 # (c) 旧那条比的是 .dbtn { z-index: 2 } 压在 .cover img { z-index: 1 } 之上。
 # 现在按钮是 absolute 定位、排在图片之后，画在上层靠的是定位与文档顺序，不需要再写 z-index。
-# styles.css 里唯一那个 z-index 属于 View Transition 的 cover-active 快照层（另一件事），
+# styles.css 里那两个 z-index 属于 View Transition 的暗幕/弹框快照层（另一件事），
 # 按钮与封面这两条规则里仍然一个都不许有。
 check("按钮压在封面之上：靠 absolute 定位 + 文档顺序，封面与按钮自己不再手写 z-index",
       "absolute right-1.5 bottom-1.5" in poster_ts
