@@ -143,11 +143,10 @@
   }
 
   /* 开：一个以点击点为圆心的圆把弹框"荡"开 —— 弹框不动、不缩，只是随着圆缘扫过
-     一格格显现，背后页面原样露着；扫过弹框轮廓的那一拍，box-shadow 那圈水纹荡出去再散掉。 */
+     一格格显现，背后页面原样露着。不再往外甩一圈 accent 色的光晕：那是贴在弹框外缘的
+     装饰，和"从海报长出来"这件事没关系，反而像选中态。 */
   ::view-transition-new(detail-sheet) {
-    animation:
-      sheet-open 0.42s cubic-bezier(0.32, 0.72, 0, 1) both,
-      sheet-ripple 0.66s ease-out 0.16s both;
+    animation: sheet-open 0.42s cubic-bezier(0.32, 0.72, 0, 1) both;
   }
 
   /* 缩：同一个圆反向收拢回点击点。 */
@@ -170,19 +169,6 @@
     }
     to {
       clip-path: circle(0px at var(--vt-lx, 50%) var(--vt-ly, 50%));
-    }
-  }
-
-  @keyframes sheet-ripple {
-    from {
-      box-shadow:
-        0 0 0 0 color-mix(in oklab, var(--accent) 42%, transparent),
-        0 0 0 0 color-mix(in oklab, var(--accent) 20%, transparent);
-    }
-    to {
-      box-shadow:
-        0 0 0 18px transparent,
-        0 0 0 44px transparent;
     }
   }
 

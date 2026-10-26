@@ -440,10 +440,10 @@ try:
     check("遮罩走透明档：不暗、不糊（variant=transparent），页面原样露着",
           'variant="transparent"' in read("components", "DetailDrawer.tsx")
           and 'variant="blur"' not in read("components", "DetailDrawer.tsx"), None)
-    check("水纹是圆缘扫过弹框轮廓时荡出去的那圈 box-shadow，色取 accent",
-          "@keyframes sheet-ripple" in st
-          and "color-mix(in oklab, var(--accent)" in st.split("@keyframes sheet-ripple")[1]
-          .split("@keyframes")[0], None)
+    check("弹框外缘不再甩 accent 色高光：sheet-ripple 与水纹那两圈 box-shadow 已删",
+          "sheet-ripple" not in st
+          and "::view-transition-new(detail-sheet)" in st
+          and "sheet-open 0.42s" in st, None)
     check("弹框层盖在 root 快照之上（z-index），没有暗幕层、没有第三层海报",
           re.search(r"::view-transition-group\(detail-sheet\)\s*\{[^}]*z-index: 2", st) is not None
           and "::view-transition-group(detail-dim)" not in st
